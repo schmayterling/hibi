@@ -3,6 +3,73 @@ import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
 import { isViewDead } from './view-death.ts'
 
+// DIAG NEVER MERGE: metadata only; the test owns and bounds this sink.
+type ReadingTrace = {
+  add: (event: string, view: EditorView | null, fields: object) => void
+  id: (value: object | null | undefined) => number | null
+  node: (value: Node | null | undefined) => object | null
+  faults: number
+}
+const diagnostic = () =>
+  (globalThis as { __hugeReadingTrace?: ReadingTrace }).__hugeReadingTrace
+function trace(event: string, view: EditorView | null, fields: object = {}) {
+  const sink = diagnostic()
+  if (!sink) return
+  try {
+    const held = view && anchors.get(view)
+    const keep = view && kept.get(view)
+    sink.add(event, view, {
+      ...fields,
+      readingState: view
+        ? {
+            epoch: scrollRequests.get(view) ?? 0,
+            waiting: scrollsWaiting.has(view),
+            held: traced(view, held?.position),
+            heldScroll: held?.scroll,
+            keep: traced(view, keep),
+            keepScroll: keep?.scroll,
+            left: keep?.left,
+            revealing: traced(view, revealing.get(view)),
+          }
+        : null,
+    })
+  } catch {
+    sink.faults++
+  }
+}
+function traceNode(node: Node | null | undefined) {
+  const sink = diagnostic()
+  try {
+    return sink?.node(node)
+  } catch {
+    if (sink) sink.faults++
+  }
+}
+function traced(view: EditorView, place: Reading | null | undefined) {
+  if (!place) return null
+  const sink = diagnostic()
+  if (!sink) return null
+  try {
+    return {
+      pos: place.pos,
+      top: place.top,
+      offset: place.offset,
+      text: place.text,
+      line: place.line,
+      isTop: !!place.isTop,
+      moved: place.moved,
+      doc: sink?.id(place.doc),
+      pane: sink?.id(place.pane),
+      sameDoc: place.doc === view.state.doc,
+      sameSelection: place.selection === view.state.selection,
+      request: place.scrollRequest,
+    }
+  } catch {
+    if (sink) sink.faults++
+    return null
+  }
+}
+
 /**
  * Whether the view placed the selection itself, as a note opens with its
  * caret at the end, so it is not where the reader is.
@@ -97,6 +164,7 @@ function paneTop(pane: Element) {
  * below the top of the scrolled pane, or the block the pane's top is in.
  */
 function readingPosition(view: EditorView): Reading | null {
+  trace('reading-enter', view)
   const pane = scrollingPane(view)
   const scroller = pane ?? document.scrollingElement
   const { top, bottom } = pane?.getBoundingClientRect() ?? {
@@ -116,6 +184,9 @@ function readingPosition(view: EditorView): Reading | null {
       // Reading the layout runs a pending measure first, which moves the pane,
       // as every fresh read does, and can hold another place.
       view.coordsAtPos(before.position.pos, 1)
+      trace('reading-held-measured', view, {
+        before: traced(view, before.position),
+      })
       const held = anchors.get(view)
       if (
         held?.position.doc === view.state.doc &&
@@ -135,6 +206,15 @@ function readingPosition(view: EditorView): Reading | null {
     // the screen while the editor lays the block out again.
     const text = block.top + documentTop < top ? textAt(view, top + 1) : null
     const box = text === null ? null : view.coordsAtPos(text, 1)
+    trace('reading-text-measured', view, {
+      text,
+      boxTop: box?.top,
+      blockFrom: block.from,
+      blockTo: block.to,
+      blockTop: block.top,
+      documentTop,
+      paneTop: top,
+    })
     if (text !== null && box) return reader(view, scroller, text, box.top)
     if (block.top + documentTop < top && block.to < view.state.doc.length)
       block = view.lineBlockAt(block.to + 1)
@@ -166,6 +246,7 @@ function reader(
   const text = drawnText(view, pos)
   // As restoring reads it: the two differ at a row that starts at a join.
   const shown = (text ? drawnTop(view, pos) : null) ?? top
+  trace('reader', view, { pos, text, givenTop: top, shown })
   return {
     pane,
     pos,
@@ -196,13 +277,22 @@ function textAt(view: EditorView, y: number) {
       : y
   const caret = ownerDocument.caretPositionFromPoint(x, below)
   const read = caret && readDOMPosition(view, caret.offsetNode, caret.offset)
+  trace('text-at', view, {
+    x,
+    y,
+    below,
+    over: traceNode(over),
+    node: traceNode(caret?.offsetNode),
+    offset: caret?.offset,
+    at: read?.at,
+    mapped: read?.mapped,
+  })
   if (!read || read.mapped) return null
   // A joined newline belongs to the row above when revealed. Hold the next
   // character, whose own box is the text the reader sees here.
-  return (
-    read.at +
-    (view.state.doc.sliceString(read.at, read.at + 1) === '\n' ? 1 : 0)
-  )
+  const lf = view.state.doc.sliceString(read.at, read.at + 1) === '\n'
+  trace('text-at-lf', view, { at: read.at, lf, result: read.at + (lf ? 1 : 0) })
+  return read.at + (lf ? 1 : 0)
 }
 
 /** Just inside where the content's lines start. */
@@ -235,6 +325,7 @@ function blockAt(view: EditorView, y: number) {
  * delta once per slice. Later edits, selections and scrolling still stand.
  */
 export function keepReading(view: EditorView, at = 0) {
+  trace('keep-enter', view, { at })
   if (isViewDead(view)) return
   // Changes below what is on screen never move it, nor do hidden editors. A
   // screen inside one block, as a long table, has no visible ranges.
@@ -247,6 +338,7 @@ export function keepReading(view: EditorView, at = 0) {
     queueMicrotask(() => {
       if (reading.get(view) !== position) return
       reading.delete(view)
+      trace('keep-microtask', view, { place: traced(view, position) })
       if (
         isViewDead(view) ||
         !position?.moved ||
@@ -265,6 +357,7 @@ export function keepReading(view: EditorView, at = 0) {
     })
   }
   if (position && at <= position.line) position.moved = true
+  trace('keep', view, { at, place: traced(view, position) })
 }
 
 /** Whether the editor draws `pos` as text: not in a widget, nor in the undrawn part of a long line. */
@@ -278,6 +371,12 @@ function drawnText(view: EditorView, pos: number) {
  */
 function drawnTop(view: EditorView, pos: number) {
   let { node, offset } = view.domAtPos(pos, 1)
+  trace('drawn-dom', view, {
+    pos,
+    node: traceNode(node),
+    offset,
+    next: traceNode(node.childNodes?.[offset]),
+  })
   // Between elements, as before a widget's buffer at a row that starts at a
   // join of lines: the line's next text.
   if (node.nodeType !== Node.TEXT_NODE) {
@@ -294,6 +393,7 @@ function drawnTop(view: EditorView, pos: number) {
     node = text
     offset = 0
   }
+  trace('drawn-selected', view, { pos, node: traceNode(node), offset })
   const range = view.dom.ownerDocument.createRange()
   range.setStart(node, offset)
   // The character after the position, in the row it starts.
@@ -303,6 +403,13 @@ function drawnTop(view: EditorView, pos: number) {
   )
     range.setEnd(node, offset + 1)
   const box = range.getClientRects()[0]
+  trace('drawn-box', view, {
+    pos,
+    node: traceNode(node),
+    offset,
+    top: box?.top,
+    bottom: box?.bottom,
+  })
   return box ? box.top : null
 }
 
@@ -334,6 +441,7 @@ function asksScroll(transaction: Transaction) {
  * neither can line it up.
  */
 function reveal(view: EditorView, position: Reading) {
+  trace('reveal-queued', view, { place: traced(view, position) })
   if (revealing.get(view) === position) return
   revealing.set(view, position)
   queueMicrotask(() => {
@@ -346,6 +454,7 @@ function reveal(view: EditorView, position: Reading) {
       return
     }
     // Where the editor scrolls it when the page can't place it either.
+    trace('reveal-dispatch', view, { place: traced(view, position) })
     view.dispatch({
       effects: EditorView.scrollIntoView(position.pos, {
         y: 'start',
@@ -355,6 +464,7 @@ function reveal(view: EditorView, position: Reading) {
     })
     // Reading the layout runs the command.
     view.lineBlockAtHeight(0)
+    trace('reveal-measured', view, { place: traced(view, position) })
   })
 }
 
@@ -367,6 +477,7 @@ function screenTop(view: EditorView, position: Reading) {
   const drawn =
     (position.text ? drawnTop(view, position.pos) : null) ??
     view.coordsAtPos(position.pos, 1)?.top
+  trace('screen-top', view, { place: traced(view, position), drawn })
   if (drawn !== undefined) return drawn
   return view.documentTop + view.lineBlockAt(position.pos).top + position.offset
 }
@@ -375,6 +486,10 @@ function screenTop(view: EditorView, position: Reading) {
 const anchors = new WeakMap<EditorView, { position: Reading; scroll: number }>()
 function hold(view: EditorView, position: Reading) {
   anchors.set(view, { position, scroll: position.pane.scrollTop })
+  trace('hold', view, {
+    place: traced(view, position),
+    scroll: anchors.get(view)?.scroll,
+  })
 }
 
 /**
@@ -387,6 +502,7 @@ function hold(view: EditorView, position: Reading) {
  * read.
  */
 function holdTop(view: EditorView) {
+  trace('scroll-event', view)
   if (isViewDead(view)) return
   const pane = scrollingPane(view)
   if (!pane) return
@@ -395,13 +511,23 @@ function holdTop(view: EditorView) {
     held?.position.pane === pane &&
     current(view, held.position) &&
     clamped(held.position, held.scroll)
-  )
+  ) {
+    trace('scroll-clamp-kept', view, {
+      place: traced(view, held.position),
+      scroll: held.scroll,
+    })
     return
+  }
   // The reader's scroll, which no update reports when nothing else changed.
   if (held && !stayed(view, held.position, held.scroll))
     held.scroll = Number.POSITIVE_INFINITY
   const keep = kept.get(view)
   if (keep && !stayed(view, keep, keep.scroll)) kept.delete(view)
+  trace('scroll-invalidation', view, {
+    held: traced(view, held?.position),
+    heldScroll: held?.scroll,
+    keep: traced(view, kept.get(view)),
+  })
   if (held?.position.isTop) {
     if (held.position.pane === pane && stayed(view, held.position, held.scroll))
       return
@@ -411,6 +537,7 @@ function holdTop(view: EditorView) {
   if (text === null || view.lineBlockAt(text).height <= pane.clientHeight)
     return
   const top = drawnTop(view, text)
+  trace('scroll-top-read', view, { text, top })
   const position = top === null ? null : reader(view, pane, text, top)
   // Not at a line gap's edge, where nothing is drawn to hold.
   if (position?.text) {
@@ -421,11 +548,17 @@ function holdTop(view: EditorView) {
 
 /** Scrolls the reading position back to where it was on screen. */
 function restore(view: EditorView, position: Reading) {
+  trace('restore-enter', view, {
+    place: traced(view, position),
+    request: scrollRequests.get(view) ?? 0,
+    waiting: scrollsWaiting.has(view),
+  })
   // Asking runs a pending measure first: its own correction for new heights
   // above would come on top of this one, and it can move the line gaps.
   // Its draw can kill the view before the coordinate read returns.
   try {
     view.coordsAtPos(position.pos, 1)
+    trace('restore-measured', view, { place: traced(view, position) })
   } catch (error) {
     if (!isViewDead(view)) throw error
   }
@@ -440,13 +573,27 @@ function restore(view: EditorView, position: Reading) {
       return false
     }
     reveal(view, position)
+    trace('restore-reveal', view, { place: traced(view, position) })
     return true
   }
   const now = screenTop(view, position) - paneTop(position.pane)
+  trace('restore-now', view, {
+    place: traced(view, position),
+    now,
+    delta: now - position.top,
+    request: scrollRequests.get(view) ?? 0,
+  })
   // Measuring can execute a pending scroll command; its destination takes precedence.
   if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
-  if (Math.abs(now - position.top) >= 0.5)
-    position.pane.scrollTop += now - position.top
+  if (Math.abs(now - position.top) >= 0.5) {
+    const before = position.pane.scrollTop
+    trace('restore-write', view, {
+      before,
+      delta: now - position.top,
+      place: traced(view, position),
+    })
+    position.pane.scrollTop = before + (now - position.top)
+  }
   hold(view, position)
   return true
 }
@@ -465,6 +612,10 @@ const paneSizes = new WeakMap<EditorView, ResizeObserver>()
 
 /** Puts the text held at the pane's top back, after its layout changed. */
 function holdHeld(view: EditorView) {
+  trace('hold-held-enter', view, {
+    held: traced(view, anchors.get(view)?.position),
+    scroll: anchors.get(view)?.scroll,
+  })
   if (isViewDead(view)) return
   const held = anchors.get(view)
   if (
@@ -494,13 +645,24 @@ export const keepRead = [
   ViewPlugin.define((view) => {
     scrollsWaiting.delete(view)
     // Before the page paints a new size: the editor measures it later.
-    const resize = new ResizeObserver(() => holdHeld(view))
+    const resize = new ResizeObserver(() => {
+      trace('pane-resize', view)
+      holdHeld(view)
+    })
     paneSizes.set(view, resize)
     return { destroy: () => resize.disconnect() }
   }),
   EditorView.domEventObservers({ scroll: (_, view) => holdTop(view) }),
   EditorView.updateListener.of((update) => {
     const asked = update.transactions.some(asksScroll)
+    trace('update', update.view, {
+      asked,
+      docChanged: update.docChanged,
+      selectionSet: update.selectionSet,
+      geometry: update.geometryChanged,
+      height: update.heightChanged,
+      viewport: update.viewportChanged,
+    })
     // A scroll command takes precedence from when it is sent: the view keeps
     // only the last one, which a reading position's would replace.
     if (asked) {
@@ -547,17 +709,35 @@ export const keepRead = [
       return
     }
     if (--keep.left <= 0) kept.delete(update.view)
+    trace('keep-geometry', update.view, {
+      place: traced(update.view, keep),
+      scroll: keep.scroll,
+      left: keep.left,
+    })
     restore(update.view, keep)
     keep.scroll = keep.pane.scrollTop
   }),
   EditorView.scrollHandler.of((view, range) => {
     // The editor drew a reading position it was asked to: line it up.
     const position = revealing.get(view)
+    trace('scroll-handler', view, {
+      head: range.head,
+      place: traced(view, position),
+    })
     revealing.delete(view)
     if (position && range.head === position.pos) {
       const now = drawnTop(view, position.pos)
       if (now === null) return false
-      position.pane.scrollTop += now - paneTop(position.pane) - position.top
+      const before = position.pane.scrollTop
+      const top = paneTop(position.pane)
+      trace('reveal-write', view, {
+        before,
+        now,
+        paneTop: top,
+        delta: now - top - position.top,
+        place: traced(view, position),
+      })
+      position.pane.scrollTop = before + (now - top - position.top)
       const keep = kept.get(view)
       if (keep) keep.scroll = keep.pane.scrollTop
       hold(view, position)

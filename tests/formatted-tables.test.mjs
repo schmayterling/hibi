@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -24,6 +26,161 @@ import {
   withHeldClock,
 } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+
+// DIAG NEVER MERGE. The remote action keeps its original TAP stream; the
+// post-completion collector must fetch that stream, not certify its stub.
+const readingTracePath = process.env.HIBI_READING_TRACE
+const cmTraceHash =
+  '602f8203c6f39d8ba8a9b8a6a10c6e28f93537c07244b2d6d28aefb88fe8db91'
+const sha256 = (text) => createHash('sha256').update(text).digest('hex')
+let cmTraceReceipt, fixtureBundle
+const pinFixture = (phase) => {
+  if (!readingTracePath) return
+  execFileSync(
+    'python3',
+    [
+      join(resolve(readingTracePath, '..'), 'pins.py'),
+      phase,
+      fixtureBundle,
+      'tables',
+    ],
+    {
+      stdio: 'inherit',
+    },
+  )
+}
+
+// Every replacement is an INSERTION. Removing the marked insertions must
+// reconstruct the exact installed dependency, byte for byte.
+function tracedCodeMirror(code) {
+  assert.equal(sha256(code), cmTraceHash, 'unexpected codemirror source')
+  const insertions = [
+    [
+      'measure(flush = true) {',
+      "hrTrace('cm-measure-enter', this, { flush });",
+    ],
+    [
+      'let { scrollAnchorPos, scrollAnchorHeight, scaleY: scrollScale } = this.viewState;',
+      "hrTrace('cm-anchor-before', this, { scrollOffset, scrollAnchorPos, scrollAnchorHeight, scrollScale, pane: scroll });",
+    ],
+    [
+      'let changed = this.viewState.measure();',
+      "hrTrace('cm-measure-read', this, { changed, iteration: i });",
+    ],
+    [
+      'let measured = measuring.map(m => {',
+      "hrTrace('cm-request-read', this, { request: m });",
+    ],
+    [
+      'let m = measuring[i];',
+      "hrTrace('cm-request-write', this, { request: m, willWrite: !!m.write });",
+    ],
+    [
+      'let update = ViewUpdate.create(this, this.state, []), redrawn = false;',
+      "hrTrace('cm-measure-write-enter', this, { changed, requests: measuring.length });",
+    ],
+    [
+      'this.docView.scrollIntoView(this.viewState.scrollTarget);',
+      "hrTrace('cm-target-executed', this, { head: this.viewState.scrollTarget?.range.head });",
+    ],
+    [
+      'scrollOffset = scrollOffset + diff;',
+      "hrTrace('cm-anchor-write', this, { diff, scrollOffset, scrollAnchorPos, scrollAnchorHeight, scrollScale, newAnchorHeight, scaleY: this.viewState.scaleY, pane: scroll });",
+      true,
+    ],
+    [
+      'this.measureScheduled = -1;\n        }\n        if (updated && !updated.empty)',
+      null,
+    ],
+    [
+      'let start = cur.scrollTop;',
+      "hrTrace('cm-rect-write', null, { pane: cur, start, moveY, scaleY });",
+    ],
+    [
+      'movedY = (cur.scrollTop - start) * scaleY;',
+      "hrTrace('cm-rect-written', null, { pane: cur, start, movedY, scaleY });",
+    ],
+    [
+      'win.scrollBy(moveX, moveY);',
+      "hrTrace('cm-window-written', null, { moveX, moveY });",
+    ],
+    [
+      'let ref = this.view.viewState.lineBlockAt(target.range.head);',
+      "hrTrace('cm-snapshot-write', this.view, { head: target.range.head, top: ref.top, yMargin: target.yMargin });",
+    ],
+    [
+      'domAtPos(pos, side) {\n        let { tile, offset } = this.tile.resolveBlock(pos, side);',
+      "hrTrace('cm-dom-at', this.view, { pos, side, offset, tile, dom: tile.dom, gap: tile.widget instanceof LineGapWidget ? 'line' : tile.widget instanceof BlockGapWidget ? 'block' : null });",
+    ],
+    [
+      'let start = tile.posAtStart;',
+      "hrTrace('cm-pos-from-dom', this.view, { start, node, offset, tile, gap: tile.widget instanceof LineGapWidget ? 'line' : tile.widget instanceof BlockGapWidget ? 'block' : null });",
+    ],
+  ]
+  const start = '/*HIBI_READING_TRACE_BEGIN*/'
+  const end = '/*HIBI_READING_TRACE_END*/'
+  const marked = (text) => start + text + end
+  let transformed = code
+  const counts = []
+  for (const [anchor, statement, before] of insertions) {
+    const count = transformed.split(anchor).length - 1
+    assert.equal(count, 1, 'codemirror trace anchor: ' + anchor)
+    counts.push(count)
+    // Insert before the original if, outside the existing finally.
+    const replacement =
+      statement === null
+        ? anchor.replace(
+            '        if (updated',
+            marked(
+              "hrTrace('cm-measure-exit', this, { updated: !!updated });",
+            ) + '        if (updated',
+          )
+        : before
+          ? marked(statement) + anchor
+          : anchor + marked(statement)
+    transformed = transformed.replace(anchor, replacement)
+  }
+  transformed =
+    marked(`function hrTrace(event, view, fields) {
+    const sink = globalThis.__hugeReadingTrace;
+    if (!sink) return;
+    try { sink.add(event, view, fields); } catch { sink.faults++; }
+  }`) + transformed
+  const stripped = transformed.replace(
+    /\/\*HIBI_READING_TRACE_BEGIN\*\/[\s\S]*?\/\*HIBI_READING_TRACE_END\*\//g,
+    '',
+  )
+  assert.equal(stripped, code, 'logging insertions changed codemirror source')
+  return {
+    code: transformed,
+    receipt: {
+      original: sha256(code),
+      stripped: sha256(stripped),
+      instrumented: sha256(transformed),
+      insertions: counts.length + 1,
+      counts,
+    },
+  }
+}
+
+function readingTracePlugin() {
+  let matched = 0
+  return {
+    name: 'never-merge-reading-trace',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.replaceAll('\\', '/').endsWith('/@codemirror/view/dist/index.js'))
+        return
+      assert.equal(++matched, 1, 'duplicate codemirror module')
+      const result = tracedCodeMirror(code)
+      cmTraceReceipt = result.receipt
+      return { code: result.code, map: null }
+    },
+    buildEnd(error) {
+      if (!error) assert.equal(matched, 1, 'missing codemirror module')
+    },
+  }
+}
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
 const note = `# Formatted tables
@@ -100,6 +257,7 @@ before(
       configFile: false,
       logLevel: 'silent',
       define: { 'process.env.NODE_ENV': '"production"' },
+      plugins: [readingTracePlugin()],
       build: {
         outDir: bundle,
         assetsInlineLimit: 0,
@@ -112,11 +270,18 @@ before(
         },
       },
     })
+    fixtureBundle = bundle
     const html = join(bundle, 'index.html')
     await writeFile(
       html,
       '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
+    pinFixture('fixture-before')
+    if (readingTracePath)
+      await writeFile(
+        join(resolve(readingTracePath, '..'), 'cm-transform.json'),
+        JSON.stringify(cmTraceReceipt, null, 2),
+      )
     await mkdir(join(folder, 'notes'))
     const file = join(folder, 'notes', 'tables.md')
     await writeFile(file, note)
@@ -186,8 +351,15 @@ afterEach(async (t) => {
 
 after(
   async () => {
-    await app?.close()
-    if (folder) await rm(folder, { recursive: true, force: true })
+    try {
+      pinFixture('fixture-after')
+    } finally {
+      try {
+        await app?.close()
+      } finally {
+        if (folder) await rm(folder, { recursive: true, force: true })
+      }
+    }
   },
   { timeout: 30000 },
 )
@@ -1211,225 +1383,541 @@ for (const [layout, doc, target] of [
 ])
   test(`the text at the pane's top in a huge ${layout} holds through wheel steps and new widths`, {
     timeout: 120000,
-  }, async () => {
-    await harness.evaluate(
-      async ({ doc, target }) => {
-        await window.tables.mount(
-          doc,
-          { width: 1400, height: 800 },
-          { editable: true },
-        )
-        const view = window.tables.view()
-        const pane = document.querySelector('.rich-pane')
-        const frame = () => new Promise(requestAnimationFrame)
-        const at = doc.indexOf(target)
-        // The row the page draws the text in: at a row that starts at a join
-        // of lines, coordsAtPos gives the row above.
-        const where = (pos) => {
-          if (
-            !view.visibleRanges.some(
+  }, async (t) => {
+    let originalError,
+      diagnosticError,
+      originalPassed = false
+    try {
+      await harness.evaluate(
+        async ({ doc, target, diagnostic }) => {
+          // DIAG: reset only here, inside the original paragraph setup RPC.
+          if (diagnostic) {
+            const ids = new WeakMap()
+            let serial = 0
+            const identity = (value) => {
+              if (
+                !value ||
+                (typeof value !== 'object' && typeof value !== 'function')
+              )
+                return null
+              if (!ids.has(value)) ids.set(value, ++serial)
+              return ids.get(value)
+            }
+            const nodeInfo = (node) => {
+              if (!node) return null
+              const tile = node.cmTile
+              return {
+                id: identity(node),
+                type: node.nodeType,
+                name: node.nodeName,
+                length:
+                  node.nodeType === Node.TEXT_NODE
+                    ? node.length
+                    : node.childNodes.length,
+                connected: node.isConnected,
+                parent: identity(node.parentNode),
+                className:
+                  typeof node.className === 'string' ? node.className : null,
+                tile: identity(tile),
+                tileType: tile?.constructor.name,
+                tileLength: tile?.length,
+                flags: tile?.flags,
+                widget: identity(tile?.widget),
+                widgetType: tile?.widget?.constructor.name,
+              }
+            }
+            const sink = {
+              rows: [],
+              cap: 50000,
+              dropped: 0,
+              faults: 0,
+              resets: 1,
+              timeOrigin: performance.timeOrigin,
+              palette: { ...document.documentElement.dataset },
+              fonts: [...document.fonts].map((font) => ({
+                family: font.family,
+                status: font.status,
+                style: font.style,
+                weight: font.weight,
+              })),
+              fontStatus: document.fonts.status,
+              phase: 'mount',
+              width: 1400,
+              stage: null,
+              active: true,
+              id: identity,
+              node: nodeInfo,
+              add(event, view, fields = {}) {
+                try {
+                  if (!this.active) return
+                  if (this.rows.length >= this.cap) {
+                    this.dropped++
+                    return
+                  }
+                  const safe = Object.fromEntries(
+                    Object.entries(fields).map(([key, value]) => [
+                      key,
+                      value instanceof Node
+                        ? nodeInfo(value)
+                        : key === 'tile'
+                          ? {
+                              id: identity(value),
+                              type: value?.constructor.name,
+                              length: value?.length,
+                              flags: value?.flags,
+                              widget: identity(value?.widget),
+                              widgetType: value?.widget?.constructor.name,
+                            }
+                          : key === 'request' && typeof value === 'object'
+                            ? identity(value)
+                            : value,
+                    ]),
+                  )
+                  this.rows.push({
+                    ...safe,
+                    phase: this.phase,
+                    width: this.width,
+                    stage: this.stage,
+                    event,
+                    view: identity(view),
+                    doc: identity(view?.state.doc),
+                    pendingMeasure: view?.measureScheduled,
+                    updateState: view?.updateState,
+                    measureRequests: view?.measureRequests?.length,
+                    scrollTarget: view?.viewState?.scrollTarget?.range.head,
+                    stampMs: performance.now(),
+                  })
+                } catch {
+                  this.faults++
+                }
+              },
+            }
+            globalThis.__hugeReadingTrace = sink
+            sink.add('armed', null)
+          }
+          await window.tables.mount(
+            doc,
+            { width: 1400, height: 800 },
+            { editable: true },
+          )
+          const view = window.tables.view()
+          const pane = document.querySelector('.rich-pane')
+          const sink = globalThis.__hugeReadingTrace
+          const note = (event, fields) => sink?.add(event, view, fields)
+          const frame = () => new Promise(requestAnimationFrame)
+          const at = doc.indexOf(target)
+          // The row the page draws the text in: at a row that starts at a join
+          // of lines, coordsAtPos gives the row above.
+          const where = (pos) => {
+            const visible = view.visibleRanges.some(
               (range) => range.from <= pos && pos < range.to,
             )
-          )
-            return null
-          for (const at of [pos, pos + 1]) {
-            const { node, offset } = view.domAtPos(at, 1)
-            if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
-              const range = document.createRange()
-              range.setStart(node, offset)
-              range.setEnd(node, offset + 1)
-              return range.getClientRects()[0].top
+            if (!visible) {
+              note('oracle-where', { pos, path: 'not-visible', top: null })
+              return null
             }
+            for (const at of [pos, pos + 1]) {
+              const { node, offset } = view.domAtPos(at, 1)
+              if (sink)
+                note('oracle-dom', {
+                  pos,
+                  at,
+                  node,
+                  offset,
+                  lf: view.state.doc.sliceString(at, at + 1) === '\n',
+                })
+              if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
+                const range = document.createRange()
+                range.setStart(node, offset)
+                range.setEnd(node, offset + 1)
+                const box = range.getClientRects()[0]
+                const top = box.top
+                note('oracle-where', {
+                  pos,
+                  at,
+                  path: 'range',
+                  node,
+                  offset,
+                  top,
+                  bottom: box.bottom,
+                  left: box.left,
+                  right: box.right,
+                })
+                return top
+              }
+            }
+            const top = view.coordsAtPos(pos, 1).top
+            note('oracle-where', { pos, path: 'coords', top })
+            return top
           }
-          return view.coordsAtPos(pos, 1).top
-        }
-        for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
-          view.dispatch({
-            effects: view.constructor.scrollIntoView(at, {
-              y: 'start',
-              yMargin: 0,
-            }),
+          for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(at, {
+                y: 'start',
+                yMargin: 0,
+              }),
+            })
+            for (let frames = 0; frames < 4; frames++) await frame()
+          }
+          for (let frames = 0; frames < 30; frames++) await frame()
+          window.reading = {
+            where,
+            frame,
+            panes: document.querySelector('.editor-panes'),
+            rowAtTop: (y = 1) => {
+              const caret = document.caretPositionFromPoint(
+                view.contentDOM.getBoundingClientRect().left +
+                  Number.parseFloat(
+                    getComputedStyle(view.contentDOM).paddingLeft,
+                  ) +
+                  1,
+                pane.getBoundingClientRect().top + y,
+              )
+              const pos = view.posAtDOM(caret.offsetNode, caret.offset)
+              if (sink)
+                note('oracle-row', {
+                  y,
+                  node: caret.offsetNode,
+                  offset: caret.offset,
+                  pos,
+                  lf: view.state.doc.sliceString(pos, pos + 1) === '\n',
+                })
+              return pos
+            },
+          }
+        },
+        { doc, target, diagnostic: layout === 'paragraph' },
+      )
+      await harness.mouse.move(500, 400)
+      // A wheel step moves the text by the step: when the editor moves its line
+      // gaps, the same scroll shows other text.
+      const steps = []
+      for (const delta of [100, -100])
+        for (let step = 0; step < 16; step++) {
+          const before = await harness.evaluate(() => {
+            const sink = globalThis.__hugeReadingTrace
+            if (sink) {
+              sink.phase = 'wheel-before'
+              sink.stage = null
+            }
+            const { rowAtTop, where } = window.reading
+            const pos = rowAtTop()
+            return { pos, top: where(pos) }
           })
-          for (let frames = 0; frames < 4; frames++) await frame()
+          await harness.mouse.wheel(0, delta)
+          const after = await harness.evaluate(async (pos) => {
+            const sink = globalThis.__hugeReadingTrace
+            if (sink) sink.phase = 'wheel-after'
+            const { where, frame } = window.reading
+            for (let frames = 0; frames < 3; frames++) await frame()
+            return where(pos)
+          }, before.pos)
+          steps.push(after === null ? null : after - before.top + delta)
         }
+      // A new width wraps the text at once, the editor's estimates follow later.
+      const widths = await harness.evaluate(async () => {
+        const sink = globalThis.__hugeReadingTrace
+        if (sink) sink.phase = 'widths-setup'
+        const { rowAtTop, where, frame, panes } = window.reading
         for (let frames = 0; frames < 30; frames++) await frame()
-        window.reading = {
-          where,
-          frame,
-          panes: document.querySelector('.editor-panes'),
-          rowAtTop: (y = 1) => {
-            const caret = document.caretPositionFromPoint(
-              view.contentDOM.getBoundingClientRect().left +
-                Number.parseFloat(
-                  getComputedStyle(view.contentDOM).paddingLeft,
-                ) +
-                1,
-              pane.getBoundingClientRect().top + y,
-            )
-            return view.posAtDOM(caret.offsetNode, caret.offset)
-          },
-        }
-      },
-      { doc, target },
-    )
-    await harness.mouse.move(500, 400)
-    // A wheel step moves the text by the step: when the editor moves its line
-    // gaps, the same scroll shows other text.
-    const steps = []
-    for (const delta of [100, -100])
-      for (let step = 0; step < 16; step++) {
-        const before = await harness.evaluate(() => {
-          const { rowAtTop, where } = window.reading
-          const pos = rowAtTop()
-          return { pos, top: where(pos) }
+        // A command already inside the pane moves nothing and keeps the place.
+        const view = window.tables.view()
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(rowAtTop(300)),
         })
-        await harness.mouse.wheel(0, delta)
-        const after = await harness.evaluate(async (pos) => {
-          const { where, frame } = window.reading
-          for (let frames = 0; frames < 3; frames++) await frame()
-          return where(pos)
-        }, before.pos)
-        steps.push(after === null ? null : after - before.top + delta)
-      }
-    // A new width wraps the text at once, the editor's estimates follow later.
-    const widths = await harness.evaluate(async () => {
-      const { rowAtTop, where, frame, panes } = window.reading
-      for (let frames = 0; frames < 30; frames++) await frame()
-      // A command already inside the pane moves nothing and keeps the place.
-      const view = window.tables.view()
-      view.dispatch({
-        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+        for (let frames = 0; frames < 3; frames++) await frame()
+        const pos = rowAtTop()
+        const start = where(pos)
+        sink?.add('widths-baseline', view, { pos, start })
+        const offs = []
+        for (const width of [1100, 900, 1400]) {
+          if (sink) {
+            sink.phase = 'width'
+            sink.width = width
+            sink.stage = 'assign'
+            sink.add('width-assignment', view, { pos, start })
+          }
+          panes.style.width = `${width}px`
+          // What the frame paints: this task runs after it.
+          await frame()
+          await new Promise((done) => setTimeout(done))
+          if (sink) sink.stage = 'first'
+          const painted = where(pos)
+          sink?.add('width-oracle', view, {
+            pos,
+            start,
+            top: painted,
+            off: painted === null ? null : painted - start,
+          })
+          if (sink) sink.stage = 'settling'
+          for (let frames = 0; frames < 30; frames++) await frame()
+          if (sink) sink.stage = 'settled'
+          const settled = where(pos)
+          sink?.add('width-oracle', view, {
+            pos,
+            start,
+            top: settled,
+            off: settled === null ? null : settled - start,
+          })
+          for (const top of [painted, settled])
+            offs.push(top === null ? null : top - start)
+        }
+        return offs
       })
-      for (let frames = 0; frames < 3; frames++) await frame()
-      const pos = rowAtTop()
-      const start = where(pos)
-      const offs = []
-      for (const width of [1100, 900, 1400]) {
-        panes.style.width = `${width}px`
-        // What the frame paints: this task runs after it.
-        await frame()
-        await new Promise((done) => setTimeout(done))
-        const painted = where(pos)
-        for (let frames = 0; frames < 30; frames++) await frame()
-        const settled = where(pos)
-        for (const top of [painted, settled])
-          offs.push(top === null ? null : top - start)
-      }
-      return offs
-    })
-    // A row's start is the test's mark, not the text held, which can be further
-    // along the row: rows half as long break it up to two rows away.
-    const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
-    assert.ok(
-      steps.every((off) => off !== null && Math.abs(off) <= 30) &&
-        widths.every(rowsHeld),
-      JSON.stringify({ steps, widths }),
-    )
-    // What happened since doesn't take the place back to where it was, or
-    // the place from where it is now.
-    const since = await harness.evaluate(async () => {
-      const { rowAtTop, where, frame, panes } = window.reading
-      const view = window.tables.view()
-      const pane = document.querySelector('.rich-pane')
-      const settle = async () => {
-        for (let frames = 0; frames < 30; frames++) await frame()
-      }
-      const off = (pos, from) => {
-        const top = where(pos)
-        return top === null ? null : top - from
-      }
-      const pos = rowAtTop()
-      const start = where(pos)
-      view.dispatch({ changes: { from: 0, insert: 'x' } })
-      await settle()
-      panes.style.width = '1200px'
-      await settle()
-      const edited = off(pos + 1, start)
-      pane.style.marginTop = '80px'
-      await settle()
-      panes.style.width = '1000px'
-      await settle()
-      const moved = off(pos + 1, start + 80)
-      pane.style.marginTop = ''
-      await settle()
-      // A cut above moves the text held.
-      const here = rowAtTop()
-      const hereTop = where(here)
-      view.dispatch({ changes: { from: 0, to: 3000 } })
-      await settle()
-      const cutAbove = off(here - 3000, hereTop)
-      // Typing asks for a scroll that moves nothing: the place stays.
-      const typed = rowAtTop()
-      const typedTop = where(typed)
-      view.dispatch({
-        changes: { from: typed + 200, insert: 'z' },
-        selection: { anchor: typed + 201 },
-        scrollIntoView: true,
+      // A row's start is the test's mark, not the text held, which can be further
+      // along the row: rows half as long break it up to two rows away.
+      const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
+      assert.ok(
+        steps.every((off) => off !== null && Math.abs(off) <= 30) &&
+          widths.every(rowsHeld),
+        JSON.stringify({ steps, widths }),
+      )
+      // What happened since doesn't take the place back to where it was, or
+      // the place from where it is now.
+      const since = await harness.evaluate(async () => {
+        const sink = globalThis.__hugeReadingTrace
+        if (sink) {
+          sink.phase = 'since'
+          sink.stage = null
+          sink.width = null
+        }
+        const { rowAtTop, where, frame, panes } = window.reading
+        const view = window.tables.view()
+        const pane = document.querySelector('.rich-pane')
+        const settle = async () => {
+          for (let frames = 0; frames < 30; frames++) await frame()
+        }
+        const off = (pos, from) => {
+          const top = where(pos)
+          return top === null ? null : top - from
+        }
+        const pos = rowAtTop()
+        const start = where(pos)
+        view.dispatch({ changes: { from: 0, insert: 'x' } })
+        await settle()
+        panes.style.width = '1200px'
+        await settle()
+        const edited = off(pos + 1, start)
+        pane.style.marginTop = '80px'
+        await settle()
+        panes.style.width = '1000px'
+        await settle()
+        const moved = off(pos + 1, start + 80)
+        pane.style.marginTop = ''
+        await settle()
+        // A cut above moves the text held.
+        const here = rowAtTop()
+        const hereTop = where(here)
+        view.dispatch({ changes: { from: 0, to: 3000 } })
+        await settle()
+        const cutAbove = off(here - 3000, hereTop)
+        // Typing asks for a scroll that moves nothing: the place stays.
+        const typed = rowAtTop()
+        const typedTop = where(typed)
+        view.dispatch({
+          changes: { from: typed + 200, insert: 'z' },
+          selection: { anchor: typed + 201 },
+          scrollIntoView: true,
+        })
+        await settle()
+        panes.style.width = '1100px'
+        await settle()
+        const typing = off(typed, typedTop)
+        // A cut of the text held: the text after it is the place.
+        const gone = rowAtTop()
+        const goneTop = where(gone)
+        view.dispatch({ changes: { from: gone - 20, to: gone + 20 } })
+        await settle()
+        panes.style.width = '1000px'
+        await settle()
+        const nextPlace = off(gone - 20, goneTop)
+        // Under a bar over the pane's top, the text below the bar holds.
+        const bar = document.createElement('div')
+        bar.style.cssText =
+          'position:fixed;inset:0 0 auto;height:48px;z-index:10'
+        document.body.append(bar)
+        for (let step = 0; step < 5; step++) {
+          pane.scrollTop += 100
+          await frame()
+        }
+        await settle()
+        const under = rowAtTop(50)
+        const underTop = where(under)
+        panes.style.width = '800px'
+        await settle()
+        const covered = off(under, underTop)
+        bar.remove()
+        panes.style.width = '1000px'
+        await settle()
+        // A jump past what the editor draws, as the scrollbar's, stands: a line
+        // gap's edge is no place to hold.
+        const jumpTo = pane.scrollTop + 8000
+        pane.scrollTop = jumpTo
+        await settle()
+        const jumped = pane.scrollTop - jumpTo
+        // A cut of the text held, and all after it: the place is past the note's
+        // end now.
+        pane.scrollTop += 10
+        await settle()
+        view.dispatch({
+          changes: { from: rowAtTop() - 50, to: view.state.doc.length },
+        })
+        await settle()
+        const asked = view.state.doc.toString().indexOf('Paragraph 250 ')
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(asked, {
+            y: 'start',
+            yMargin: 0,
+          }),
+        })
+        await settle()
+        delete window.reading
+        return {
+          edited,
+          moved,
+          cutAbove,
+          typing,
+          nextPlace,
+          covered,
+          jumped,
+          asked: off(asked, pane.getBoundingClientRect().top),
+        }
       })
-      await settle()
-      panes.style.width = '1100px'
-      await settle()
-      const typing = off(typed, typedTop)
-      // A cut of the text held: the text after it is the place.
-      const gone = rowAtTop()
-      const goneTop = where(gone)
-      view.dispatch({ changes: { from: gone - 20, to: gone + 20 } })
-      await settle()
-      panes.style.width = '1000px'
-      await settle()
-      const nextPlace = off(gone - 20, goneTop)
-      // Under a bar over the pane's top, the text below the bar holds.
-      const bar = document.createElement('div')
-      bar.style.cssText = 'position:fixed;inset:0 0 auto;height:48px;z-index:10'
-      document.body.append(bar)
-      for (let step = 0; step < 5; step++) {
-        pane.scrollTop += 100
-        await frame()
+      assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
+      originalPassed = true
+    } catch (error) {
+      originalError = error
+      throw error
+    } finally {
+      if (layout === 'paragraph') {
+        try {
+          // First extra RPC follows all original assertions, or their failure.
+          const captured = await harness.evaluate(() => {
+            const sink = globalThis.__hugeReadingTrace
+            if (!sink) return { missing: true }
+            sink.active = false
+            // Later cases in this file build nothing for a finished trace.
+            delete globalThis.__hugeReadingTrace
+            const {
+              rows,
+              cap,
+              dropped,
+              faults,
+              resets,
+              timeOrigin,
+              phase,
+              width,
+              stage,
+              palette,
+              fonts,
+              fontStatus,
+            } = sink
+            return {
+              rows,
+              cap,
+              dropped,
+              faults,
+              resets,
+              timeOrigin,
+              phase,
+              width,
+              stage,
+              palette,
+              fonts,
+              fontStatus,
+            }
+          })
+          const oracles =
+            captured.rows?.filter((row) => row.event === 'width-oracle') ?? []
+          const baselines =
+            captured.rows?.filter((row) => row.event === 'widths-baseline') ??
+            []
+          const baseline = baselines[0]
+          const samePlace =
+            baselines.length === 1 &&
+            oracles.every(
+              (row) =>
+                row.view === baseline.view &&
+                row.doc === baseline.doc &&
+                row.pos === baseline.pos &&
+                row.start === baseline.start,
+            )
+          const first900 = oracles.find(
+            (row) => row.width === 900 && row.stage === 'first',
+          )
+          const complete = [1100, 900, 1400].every((width) =>
+            ['first', 'settled'].every(
+              (stage) =>
+                oracles.filter(
+                  (row) => row.width === width && row.stage === stage,
+                ).length === 1,
+            ),
+          )
+          const quality =
+            !captured.missing &&
+            captured.resets === 1 &&
+            captured.dropped === 0 &&
+            captured.faults === 0 &&
+            ['armed', 'cm-measure-enter', 'cm-dom-at', 'widths-baseline'].every(
+              (event) => captured.rows.some((row) => row.event === event),
+            ) &&
+            complete &&
+            samePlace
+          const receipt = {
+            ...captured,
+            oracles,
+            baseline,
+            samePlace,
+            complete,
+            quality,
+            originalPassed,
+            originalError: originalError && {
+              name: originalError.name,
+              message: originalError.message,
+              stack: originalError.stack,
+            },
+            condition900: !samePlace
+              ? 'identity-mismatch'
+              : !first900 || !Number.isFinite(first900.off)
+                ? 'missing-finite-sample'
+                : Math.abs(first900.off) > 60
+                  ? 'finite-breach'
+                  : 'within-original-bound',
+            cm: cmTraceReceipt,
+            note: 'first is the original post-frame task sample, not compositor proof; writer operands are intent, not net drift',
+          }
+          await writeFile(
+            readingTracePath ?? join(folder, 'widths.json'),
+            JSON.stringify(
+              receipt,
+              (_, value) =>
+                typeof value === 'number' && !Number.isFinite(value)
+                  ? String(value)
+                  : value,
+              2,
+            ),
+          )
+          t.diagnostic(
+            JSON.stringify({
+              rows: captured.rows?.length,
+              dropped: captured.dropped,
+              faults: captured.faults,
+              quality,
+              condition900: receipt.condition900,
+              originalPassed,
+            }),
+          )
+          if (originalPassed && !quality)
+            diagnosticError = new Error(
+              'width diagnostic incomplete after original pass',
+            )
+        } catch (error) {
+          diagnosticError = error
+          t.diagnostic('diagnostic dump/quality failed: ' + error.message)
+        }
       }
-      await settle()
-      const under = rowAtTop(50)
-      const underTop = where(under)
-      panes.style.width = '800px'
-      await settle()
-      const covered = off(under, underTop)
-      bar.remove()
-      panes.style.width = '1000px'
-      await settle()
-      // A jump past what the editor draws, as the scrollbar's, stands: a line
-      // gap's edge is no place to hold.
-      const jumpTo = pane.scrollTop + 8000
-      pane.scrollTop = jumpTo
-      await settle()
-      const jumped = pane.scrollTop - jumpTo
-      // A cut of the text held, and all after it: the place is past the note's
-      // end now.
-      pane.scrollTop += 10
-      await settle()
-      view.dispatch({
-        changes: { from: rowAtTop() - 50, to: view.state.doc.length },
-      })
-      await settle()
-      const asked = view.state.doc.toString().indexOf('Paragraph 250 ')
-      view.dispatch({
-        effects: view.constructor.scrollIntoView(asked, {
-          y: 'start',
-          yMargin: 0,
-        }),
-      })
-      await settle()
-      delete window.reading
-      return {
-        edited,
-        moved,
-        cutAbove,
-        typing,
-        nextPlace,
-        covered,
-        jumped,
-        asked: off(asked, pane.getBoundingClientRect().top),
-      }
-    })
-    assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
+    }
+    if (diagnosticError && !originalError) throw diagnosticError
   })
 
 /** Mount `doc` in the editable harness. */

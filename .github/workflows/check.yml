@@ -1,50 +1,164 @@
-name: check
+name: intel shard diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
-  # A pull request's newest push replaces its run. Main's runs verify what pull
-  # requests skip, so each finishes, and only the newest waiting push runs next.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: release-intel-shard-diag-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
-    runs-on: ${{ matrix.os }}
+  intel-shard-2:
+    runs-on: macos-15-intel
+    timeout-minutes: 85
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      CI_FILE_LIMIT_MS: '1200000'
+      HIBI_READING_TRACE: ${{ github.workspace }}/.cache/intel-shard-diag/widths.json
+      HIBI_RELEASE_TRACE_DIR: ${{ github.workspace }}/.cache/intel-shard-diag
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
-        id: ci
-        with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || '' }}
-          full: ${{ github.event_name != 'pull_request' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
+      - name: prepare explicit missing stubs and source pins
         shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
+        run: |
+          mkdir -p .cache/intel-shard-diag
+          for target in widths initial-h1; do
+            echo '{"missing":true,"status":"target trace not completed; not proof"}' > ".cache/intel-shard-diag/$target.json"
+          done
+          cat > .cache/intel-shard-diag/full-shard.tap <<'TAP'
+          # pending: this is a stub, NOT actual TAP or proof.
+          # the sole post-completion collector must fetch the complete raw job log,
+          # extract actual TAP and record both full sha256 hashes.
+          # missing raw log/TAP or BlobNotFound means INCOMPLETE; never rerun automatically.
+          TAP
+          cat > .cache/intel-shard-diag/pins.py <<'PY'
+          import base64, hashlib, json, os, pathlib, platform, re, stat, subprocess, sys
+          root = pathlib.Path.cwd()
+          phase = sys.argv[1]
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          def sha(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          def manifest(base, names=None):
+              base = pathlib.Path(base)
+              result = {'files': [], 'links': [], 'other': [], 'missing': []}
+              def add(path, name):
+                  if not path.exists() and not path.is_symlink():
+                      result['missing'].append(name)
+                      return
+                  mode = path.lstat().st_mode
+                  if stat.S_ISLNK(mode):
+                      result['links'].append({'path': name, 'target': os.readlink(path)})
+                  elif stat.S_ISREG(mode):
+                      result['files'].append({'path': name, 'bytes': path.stat().st_size, 'sha256': sha(path)})
+                  elif stat.S_ISDIR(mode):
+                      for child in sorted(path.iterdir()):
+                          add(child, str(pathlib.PurePosixPath(name) / child.name))
+                  else:
+                      result['other'].append(name)
+              if names is not None:
+                  for name in names: add(base / name, name)
+              elif base.exists():
+                  for child in sorted(base.iterdir()): add(child, child.name)
+              else:
+                  result['missing'].append(str(base))
+              result['fontFiles'] = [entry for entry in result['files'] if pathlib.Path(entry['path']).suffix.lower() in ('.woff', '.woff2', '.ttf', '.otf')]
+              result['inlineFonts'] = []
+              for entry in result['files']:
+                  if not entry['path'].endswith('.css'): continue
+                  css = (base / entry['path']).read_text()
+                  for match in re.finditer(r'data:((?:font/|application/(?:font-|x-font-|vnd.ms-fontobject))[^;,]*);base64,([A-Za-z0-9+/=]+)', css):
+                      payload = base64.b64decode(match.group(2), validate=True)
+                      result['inlineFonts'].append({'css': entry['path'], 'mime': match.group(1), 'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()})
+              result['fileCount'] = len(result['files'])
+              result['symlinkCount'] = len(result['links'])
+              result['complete'] = not (result['links'] or result['other'] or result['missing'])
+              return result
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          tracked = sorted(name for name in tracked if name)
+          deps = [
+              'node_modules/@codemirror/view/dist/index.js',
+              'node_modules/@codemirror/state/dist/index.js',
+              'node_modules/@codemirror/language/dist/index.js',
+              'node_modules/@lezer/common/dist/index.js',
+              'node_modules/@lezer/markdown/dist/index.js',
+              'node_modules/electron/package.json',
+              'node_modules/playwright-core/package.json',
+              'node_modules/vite/package.json',
+          ]
+          snapshot = {
+              'phase': phase, 'head': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'),
+              'failedBase': '45faffd85a2e58b0437be61fd5303e00cde02611',
+              'platform': platform.platform(), 'machine': platform.machine(),
+              'node': subprocess.check_output(['node', '-p', 'JSON.stringify({version:process.version,platform:process.platform,arch:process.arch})'], text=True).strip(),
+              'image': os.environ.get('ImageVersion'), 'run': os.environ.get('GITHUB_RUN_ID'),
+              'source': manifest(root, tracked), 'dependencies': manifest(root, deps),
+              'output': manifest(root / 'out'),
+          }
+          if len(sys.argv) > 2:
+              snapshot['fixture'] = manifest(sys.argv[2])
+          label = sys.argv[3] if len(sys.argv) > 3 else None
+          named = phase + '-' + label if label else phase
+          pathlib.Path('.cache/intel-shard-diag').mkdir(exist_ok=True)
+          pathlib.Path('.cache/intel-shard-diag/' + named + '.json').write_text(json.dumps(snapshot, indent=2))
+          note = 'missing/changed evidence is incomplete; it never proves a healthy target'
+          def load(name):
+              p = pathlib.Path('.cache/intel-shard-diag/' + name + '.json')
+              return json.loads(p.read_text()) if p.exists() else None
+          def stability(fixture):
+              prepared, before, after = load('prepare'), load('fixture-before-' + fixture), load('fixture-after-' + fixture)
+              comparisons = {
+                  'source': bool(prepared) and prepared['source'] == snapshot['source'],
+                  'dependencies': bool(before) and before['dependencies'] == snapshot['dependencies'],
+                  'output': bool(before) and before['output'] == snapshot['output'],
+                  'fixture': bool(before and after) and before.get('fixture') == after.get('fixture'),
+              }
+              complete = all(comparisons.values()) and all(
+                  snapshot[key]['complete'] for key in ('source', 'dependencies', 'output')
+              ) and bool(after and after.get('fixture', {}).get('complete'))
+              return {'complete': complete, 'comparisons': comparisons}
+          if phase == 'fixture-after':
+              pathlib.Path('.cache/intel-shard-diag/stability-fixture-after-' + label + '.json').write_text(json.dumps({
+                  **stability(label), 'note': note,
+              }, indent=2))
+          if phase == 'post':
+              fixtures = {fixture: stability(fixture) for fixture in ('tables', 'live-preview')}
+              pathlib.Path('.cache/intel-shard-diag/stability-post.json').write_text(json.dumps({
+                  'complete': all(entry['complete'] for entry in fixtures.values()),
+                  'fixtures': fixtures, 'note': note,
+              }, indent=2))
+          PY
+          python3 .cache/intel-shard-diag/pins.py prepare
+      - name: original clean intel shard once
+        id: ci
+        timeout-minutes: 75
+        uses: ./.github/actions/ci
+        with:
+          clean: true
+          shard: 2/4
+      - name: record post-shard pins and original action outcome
+        if: always()
+        shell: bash
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CI_RESULT: ${{ steps.ci.outcome }}
+        run: |
+          python3 .cache/intel-shard-diag/pins.py post
+          python3 - <<'PY'
+          import json, os, pathlib
+          pathlib.Path('.cache/intel-shard-diag/ci-result.json').write_text(json.dumps({
+              'outcome': os.environ['CI_RESULT'],
+              'tap': 'pending post-completion raw job-log collection; artifact TAP is a stub',
+              'condition': 'a pass closes nothing: widths needs a finite 900 breach, abs(first offset) over 60, on matching view, doc and position; initial-h1 needs a timeout in its first wait with polls and no h1',
+              'base': '45faffd85a2e58b0437be61fd5303e00cde02611',
+          }, indent=2))
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: intel-shard-2-${{ github.run_id }}
+          path: .cache/intel-shard-diag/
+          retention-days: 1
+          if-no-files-found: error

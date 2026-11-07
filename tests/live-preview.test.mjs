@@ -14,6 +14,12 @@ import {
   frozenSnapshot,
   overlayScrollbars,
 } from './frozen-oracle.mjs'
+import {
+  atMountReturn,
+  pinFixture,
+  polled,
+  tracedJourney,
+} from './initial-h1-diagnostic.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const note = `# Formatted view parity
@@ -170,6 +176,7 @@ before(
       html,
       '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
+    pinFixture('fixture-before', bundle)
     // Module workers need an HTTP origin, as in the boundary-worker fixture.
     server = createServer(async (request, response) => {
       try {
@@ -277,6 +284,7 @@ after(
       await app?.close()
     } finally {
       if (server) await new Promise((done) => server.close(done))
+      if (folder) pinFixture('fixture-after', join(folder, 'bundle'))
       if (folder) await rm(folder, { recursive: true, force: true })
     }
   },
@@ -2540,20 +2548,25 @@ test('an edit above keeps a sideways scroll whose event has not fired', async ()
   assert.equal(left, 400)
 })
 
-test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
-  timeout: 180000,
-}, async () => {
+const structuralEdit = async (progress) => {
   const unit = '# heading\n\nparagraph words\n\n- one\n- two\n\n> quote\n\n'
   // One parse step per transaction: each step reads a bounded range.
-  const length = await harness.evaluate(async (unit) => {
-    await window.livePreview.mount(
-      unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
-      undefined,
-      { slice: 0 },
-    )
-    return window.livePreview.view().state.doc.length
-  }, unit)
-  await harness.waitForFunction(() => document.querySelector('.hibi-lp-h1'))
+  const length = await harness.evaluate(
+    atMountReturn(async (unit) => {
+      await window.livePreview.mount(
+        unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
+        undefined,
+        { slice: 0 },
+      )
+      return window.livePreview.view().state.doc.length
+    }),
+    unit,
+  )
+  progress.firstWait = 'pending'
+  await harness.waitForFunction(
+    polled(() => document.querySelector('.hibi-lp-h1')),
+  )
+  progress.firstWait = 'passed'
   /** One transaction's parse work: a step never drains the rest of the note. */
   const step = (spec) =>
     harness.evaluate((spec) => {
@@ -2609,7 +2622,15 @@ test('a structural edit at the top of a 50 MiB note parses a bounded window and 
   const unfenced = await step({ changes: { from: 0, to: 4 } })
   bounded(unfenced, 'unfence')
   console.log(JSON.stringify({ opened, typed: typed[0], closed, unfenced }))
-})
+}
+
+test(
+  'a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices',
+  {
+    timeout: 180000,
+  },
+  (t) => tracedJourney(t, harness, structuralEdit),
+)
 
 test('formatting in a giant list stays drawn while an edit inside its window is reparsed', {
   timeout: 90000,

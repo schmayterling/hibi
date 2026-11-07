@@ -21,7 +21,7 @@ export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
       recentWorkspaces: async () => [],
       knownWorkspaces: async () => [],
     },
-    admitSourceOperation: () => {},
+    admitSourceOperation: () => undefined,
     appendSourceOperation: async (operation) => ({
       tabId: operation.document.tabId,
       revision: operation.document.revision,

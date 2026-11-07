@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
+import {
+  DocumentRuntime,
+  documentRuntime,
+  observeDocumentErrors,
+} from '../src/renderer/src/document-runtime.ts'
 import { acceptSaved } from '../src/renderer/src/document-saved.ts'
 import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
+import { createDocumentJournal } from '../src/shared/document-journal.ts'
 import { keptHistory } from '../src/shared/undo-history.ts'
 
 const document = (text, overrides = {}) => ({
@@ -786,4 +791,88 @@ test('typing joins as before once no save is in flight, whether it landed or fai
   insert(session, 'd', 'two')
   assert.equal(session.historyDepth().undo, 2)
   runtime.dispose()
+})
+
+test('an admitted edit crosses the preload bridge once', async () => {
+  const sent = [],
+    errors = []
+  let crossed = 0
+  const journal = createDocumentJournal(async (operation) => {
+    sent.push(operation)
+    return {
+      tabId: operation.document.tabId,
+      revision: operation.document.revision,
+      contentVersion: operation.contentVersion,
+      operationId: operation.operationId,
+    }
+  })
+  // Same journal wiring as the preload; contextBridge copies every argument.
+  const hibi = {
+    appendSourceOperation: journal.appendOperation,
+    admitSourceOperation: journal.admit,
+    appendAdmittedSourceOperation: journal.appendAdmitted,
+  }
+  globalThis.window = {
+    hibi: Object.fromEntries(
+      Object.entries(hibi).map(([name, method]) => [
+        name,
+        (...args) => {
+          for (const arg of args) crossed += arg?.changes?.length ?? 0
+          return method(...structuredClone(args))
+        },
+      ]),
+    ),
+  }
+  const stop = observeDocumentErrors((error) => errors.push(error))
+  try {
+    const lines = 16384
+    documentRuntime.activate(
+      document('x\n'.repeat(lines), { canAutosave: false }),
+    )
+    const session = documentRuntime.session()
+    const changes = Array.from({ length: lines }, (_, line) => ({
+      from: line * 2,
+      to: line * 2,
+      insert: '\t',
+    }))
+    session.edit(changes, 'source', 'indent')
+    await journal.flush()
+    assert.deepEqual(errors, [])
+    assert.equal(crossed, lines)
+    assert.equal(sent.length, 1)
+    assert.deepEqual(sent[0].changes, changes)
+    // A tab's next admission drops one whose edit never reached its append.
+    const operation = (tabId, contentVersion) => ({
+      document: { tabId, revision: 1 },
+      operationId: `${tabId}${contentVersion}`,
+      baseVersion: contentVersion - 1,
+      contentVersion,
+      origin: 'source',
+      historyGroup: 'typing',
+      changes: [{ from: 0, to: 0, insert: 'a' }],
+    })
+    const failed = journal.admit(operation('one', 2)),
+      other = journal.admit(operation('two', 1)),
+      next = journal.admit(operation('one', 2))
+    await assert.rejects(journal.appendAdmitted(failed), /Unknown admitted/)
+    await journal.appendAdmitted(other)
+    await journal.appendAdmitted(next)
+    await assert.rejects(journal.appendAdmitted(next), /Unknown admitted/)
+    assert.deepEqual(
+      sent.map((operation) => operation.operationId),
+      [sent[0].operationId, 'two1', 'one2'],
+    )
+    const full = createDocumentJournal(async () => {}, {
+      maximumBulkBytes: 300,
+    })
+    assert.throws(
+      () =>
+        full.admit({ ...operation('one', 1), operationId: 'x'.repeat(100) }),
+      /recovery is full/,
+    )
+  } finally {
+    stop()
+    documentRuntime.dispose()
+    delete globalThis.window
+  }
 })

@@ -101,6 +101,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'appendDocumentChange',
         'appendSourceOperation',
         'admitSourceOperation',
+        'appendAdmittedSourceOperation',
         'getDocumentRecoveryState',
         'onDocumentCheckpoint',
         'flushDocumentChanges',

@@ -637,9 +637,13 @@ export type DesktopApi = {
   appendSourceOperation: (
     operation: import('./source-operations').SourceOperation,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
+  /** Returns a token to append the admitted operation without sending it again. */
   admitSourceOperation: (
     operation: import('./source-operations').SourceOperation,
-  ) => void
+  ) => number | undefined
+  appendAdmittedSourceOperation: (
+    token: number,
+  ) => Promise<import('./document-journal').DocumentAcknowledgment>
   onDocumentCheckpoint: (
     callback: (
       tabId: string,

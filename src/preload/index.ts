@@ -358,7 +358,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(ANALYSIS_CHANNELS.cancel, owner),
     appendDocumentChange: journal.append,
     appendSourceOperation: journal.appendOperation,
-    admitSourceOperation: journal.assertCapacity,
+    admitSourceOperation: journal.admit,
+    appendAdmittedSourceOperation: journal.appendAdmitted,
     getDocumentRecoveryState: journal.state,
     onDocumentCheckpoint: (callback, read, close) => {
       checkpoint = callback

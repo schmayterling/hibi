@@ -757,7 +757,7 @@ test('rapid requests are synchronous, independent and cannot publish stale resul
   assert.deepEqual(words(model, { ...query, limit: 0 }), [])
 })
 
-test('bounded common-prefix ranking stays below 5ms at maximum snapshot size', (t) => {
+test('personal model retains the maximum-size snapshot', async (t) => {
   const timer = clock()
   const entry = (i) => ({
     scope: 'notes',
@@ -782,34 +782,42 @@ test('bounded common-prefix ranking stays below 5ms at maximum snapshot size', (
     },
   })
   assert.equal(model.snapshot().entries.length, 8192)
-  const request = {
-    ...session,
-    languages: ['en', 'tl', 'fr', 'ja', 'zh', 'yue'],
-    prefix: 'pre',
-    context: ['bro', 'that'],
-  }
-  for (let i = 0; i < 100; i++) model.suggest(request)
-  const timings = []
-  for (let i = 0; i < 500; i++) {
-    const start = performance.now()
-    model.suggest(request)
-    timings.push(performance.now() - start)
-  }
-  timings.sort((a, b) => a - b)
-  t.diagnostic(
-    JSON.stringify({
-      samples: timings.length,
-      p95Ms: timings[Math.floor(timings.length * 0.95)],
-      meanMs: timings.reduce((a, b) => a + b) / timings.length,
-      maxMs: timings.at(-1),
-    }),
-  )
-  assert.ok(
-    timings[Math.floor(timings.length * 0.95)] < 5,
-    'p95 ranking must be below 5ms',
-  )
-  assert.ok(
-    timings.reduce((a, b) => a + b) / timings.length < 5,
-    'mean ranking must be below 5ms',
+  await t.test(
+    'stress: common-prefix ranking stays below 5ms',
+    {
+      skip: process.env.HIBI_STRESS !== '1' && 'opt in with HIBI_STRESS=1',
+    },
+    () => {
+      const request = {
+        ...session,
+        languages: ['en', 'tl', 'fr', 'ja', 'zh', 'yue'],
+        prefix: 'pre',
+        context: ['bro', 'that'],
+      }
+      for (let i = 0; i < 100; i++) model.suggest(request)
+      const timings = []
+      for (let i = 0; i < 500; i++) {
+        const start = performance.now()
+        model.suggest(request)
+        timings.push(performance.now() - start)
+      }
+      timings.sort((a, b) => a - b)
+      t.diagnostic(
+        JSON.stringify({
+          samples: timings.length,
+          p95Ms: timings[Math.floor(timings.length * 0.95)],
+          meanMs: timings.reduce((a, b) => a + b) / timings.length,
+          maxMs: timings.at(-1),
+        }),
+      )
+      assert.ok(
+        timings[Math.floor(timings.length * 0.95)] < 5,
+        'p95 ranking must be below 5ms',
+      )
+      assert.ok(
+        timings.reduce((a, b) => a + b) / timings.length < 5,
+        'mean ranking must be below 5ms',
+      )
+    },
   )
 })

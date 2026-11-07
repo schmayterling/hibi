@@ -1216,7 +1216,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
       assert.ok(Math.abs(tops.at(-1)) <= 2, report)
   }
 })
-
+/* pwdiag:start */
 for (const extra of ['line 15000 of', 'line 2000 of', 'line 6000 of', 'line 10000 of', 'line 13000 of', 'line 14500 of'])
 test(`probe extra aims ${extra}`, { timeout: 120000 }, async (t) => {
   const out = await harness.evaluate(async ({ doc, target, extra }) => {
@@ -1272,7 +1272,7 @@ test(`probe extra aims ${extra}`, { timeout: 120000 }, async (t) => {
   }, { doc: hugeParagraph, target: 'line 15000 of', extra })
   t.diagnostic('EXTRA ' + JSON.stringify(out))
 })
-
+/* pwdiag:end */
 for (const [layout, doc, target] of [
   ['line', hugeLine, 'word25000 '],
   ['paragraph', hugeParagraph, 'line 15000 of'],

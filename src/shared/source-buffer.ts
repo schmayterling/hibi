@@ -592,6 +592,59 @@ class PieceTree {
       offset = end
     }
   }
+  /**
+   * Slices mostly read in ascending order, each found by walking forward from
+   * the last instead of descending from the root. A slice that starts before
+   * the last piece read starts over from the root.
+   */
+  reader(root: Node) {
+    let stack = [root],
+      leaf: readonly Piece[] = [],
+      index = 0,
+      offset = 0,
+      next = 0
+    return (from: number, to: number) => {
+      if (from === to) return ''
+      if (from < offset) {
+        stack = [root]
+        leaf = []
+        index = offset = next = 0
+      }
+      let text = '',
+        at = from
+      for (;;) {
+        if (index < leaf.length) {
+          const end = offset + leaf[index]!.metrics.rawUnits
+          if (end <= at) {
+            offset = end
+            index++
+            continue
+          }
+          const piece = leaf[index]!,
+            a = at - offset,
+            b = Math.min(to, end) - offset
+          this.counters.sourceUnitsRead += b - a
+          text += piece.chunk.slice(piece.from + a, piece.from + b)
+          at = offset + b
+          if (at === to) return text
+          continue
+        }
+        const node = stack.pop()
+        if (!node) throw new Error('Source range is outside the snapshot.')
+        this.counters.nodeVisits++
+        if (next + node.metrics.rawUnits <= at) next += node.metrics.rawUnits
+        else if (node.kind === 'branch')
+          for (let child = node.entries.length - 1; child >= 0; child--)
+            stack.push(node.entries[child]!)
+        else {
+          leaf = node.entries
+          index = 0
+          offset = next
+          next += node.metrics.rawUnits
+        }
+      }
+    }
+  }
   /** `chunks` without a generator per level, for the many small reads edits make. */
   slice(node: Node, from: number, to: number, parts: string[]) {
     this.counters.nodeVisits++
@@ -772,17 +825,7 @@ export class SourceSnapshot {
   }
   isEditBoundary(position: number) {
     if (!safePosition(position) || position > this.utf16Length) return false
-    // ASCII text without CRLF has no seam to split.
-    if (
-      this.utf8Bytes === this.utf16Length &&
-      this.normalizedLength === this.utf16Length
-    )
-      return true
-    const seam = this.#seam(position)
-    return (
-      seam !== '\r\n' &&
-      !(highSurrogate(seam.charCodeAt(0)) && lowSurrogate(seam.charCodeAt(1)))
-    )
+    return plainSource(this) || !splitsSeam(this.#seam(position))
   }
   rawToEditor(position: number): number | null {
     if (!safePosition(position) || position > this.utf16Length) return null
@@ -870,42 +913,68 @@ export const acceptedStorageChange = (
   typeof value === 'object' &&
   acceptedStorageChanges.has(value as SourceStorageChange)
 
+// ASCII text without CRLF has no seam to split.
+const plainSource = (snapshot: SourceSnapshot) =>
+  snapshot.utf8Bytes === snapshot.utf16Length &&
+  snapshot.normalizedLength === snapshot.utf16Length
+const splitsSeam = (seam: string) =>
+  seam === '\r\n' ||
+  (highSurrogate(seam.charCodeAt(0)) && lowSurrogate(seam.charCodeAt(1)))
+/**
+ * Edit boundary checks for ascending positions, read in one forward walk
+ * instead of a descent each, as when Tab edits every line of CRLF or CJK text.
+ */
+function editBoundaries(
+  snapshot: SourceSnapshot,
+  read = trees.get(snapshot)!.reader(roots.get(snapshot)!),
+) {
+  const plain = plainSource(snapshot)
+  let last = -1,
+    result = true
+  return (position: number) => {
+    if (!safePosition(position) || position > snapshot.utf16Length) return false
+    if (plain || position === 0 || position === snapshot.utf16Length)
+      return true
+    if (position !== last) {
+      last = position
+      result = !splitsSeam(read(position - 1, position + 1))
+    }
+    return result
+  }
+}
+
 // An edit can create a new CRLF/surrogate seam. Its inverse must own that whole
 // boundary, restoring the unchanged neighbor as well as the removed content.
 function safeInverse(
   snapshot: SourceSnapshot,
   edits: readonly RawEdit[],
 ): readonly RawEdit[] {
-  const result: RawEdit[] = []
-  let group: RawEdit[] = [],
-    from = 0,
-    to = 0
-  const flush = () => {
-    if (!group.length) return
-    const parts: string[] = []
-    let end = from
-    for (const edit of group) {
-      parts.push(snapshot.sliceRaw(end, edit.from), edit.insert)
-      end = edit.to
-    }
-    parts.push(snapshot.sliceRaw(end, to))
-    result.push(Object.freeze({ from, to, insert: parts.join('') }))
-  }
+  const tree = trees.get(snapshot)!,
+    root = roots.get(snapshot)!,
+    boundary = editBoundaries(snapshot),
+    read = tree.reader(root)
+  const groups: { from: number; to: number; edits: RawEdit[] }[] = []
   for (const edit of edits) {
-    const start = snapshot.isEditBoundary(edit.from) ? edit.from : edit.from - 1
-    const end = snapshot.isEditBoundary(edit.to) ? edit.to : edit.to + 1
-    if (group.length && start > to) {
-      flush()
-      group = []
-    }
-    if (!group.length) {
-      from = start
-      to = end
-    } else to = Math.max(to, end)
-    group.push(edit)
+    const start = boundary(edit.from) ? edit.from : edit.from - 1
+    const end = boundary(edit.to) ? edit.to : edit.to + 1
+    const group = groups.at(-1)
+    if (group && start <= group.to) {
+      group.to = Math.max(group.to, end)
+      group.edits.push(edit)
+    } else groups.push({ from: start, to: end, edits: [edit] })
   }
-  flush()
-  return Object.freeze(result)
+  // Slices follow the boundary reads, so they walk forward on their own.
+  return Object.freeze(
+    groups.map(({ from, to, edits }) => {
+      let insert = '',
+        end = from
+      for (const edit of edits) {
+        insert += read(end, edit.from) + edit.insert
+        end = edit.to
+      }
+      return Object.freeze({ from, to, insert: insert + read(end, to) })
+    }),
+  )
 }
 
 /** Private preparation capability: a forged, stale or consumed object cannot commit. */
@@ -1123,13 +1192,18 @@ export class SourceStore {
       throw new Error('Source operation is stale.')
     let changed = false,
       shift = 0
-    const inverse: RawEdit[] = []
+    const inverse: RawEdit[] = [],
+      read = this.#tree.reader(roots.get(before)!),
+      boundary = editBoundaries(before, read)
+    const splits = () =>
+      new Error(
+        'Source operation splits a Unicode character or line ending, or is outside the source.',
+      )
     for (const edit of operation.changes) {
-      if (!before.isEditBoundary(edit.from) || !before.isEditBoundary(edit.to))
-        throw new Error(
-          'Source operation splits a Unicode character or line ending, or is outside the source.',
-        )
-      const removed = before.sliceRaw(edit.from, edit.to)
+      // The removed text is read before the end's seam so the reads ascend.
+      if (!boundary(edit.from) || edit.to > before.utf16Length) throw splits()
+      const removed = read(edit.from, edit.to)
+      if (!boundary(edit.to)) throw splits()
       if (removed !== edit.insert) changed = true
       inverse.push(
         Object.freeze({

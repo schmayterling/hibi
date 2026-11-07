@@ -410,6 +410,123 @@ test('an edit at every line of a megabyte rebuilds the tree once, and so does it
   )
 })
 
+test('an edit at every line of CRLF, CJK or emoji text reads its seams in one walk', () => {
+  const lines = 16384
+  for (const [line, end] of [
+    ['x'.repeat(62), '\r\n'],
+    ['中'.repeat(63), '\n'],
+    [`${'😀'.repeat(31)}x`, '\n'],
+  ]) {
+    const source = (line + end).repeat(lines),
+      width = line.length + end.length
+    const store = new SourceStore(source, key)
+    store.counters(true)
+    const indent = apply(
+      store,
+      Array.from({ length: lines }, (_, n) => ({
+        from: n * width,
+        to: n * width,
+        insert: '\t',
+      })),
+    )
+    // A descent per seam visited about 164,000 nodes, its undo 214,000.
+    assert.ok(store.counters(true).nodeVisits < lines, JSON.stringify(end))
+    // A lone edit far into the text skips the subtrees before it.
+    const last = store.snapshot().utf16Length - end.length
+    const lone = apply(store, [{ from: last - 1, to: last, insert: '' }])
+    assert.ok(store.counters(true).nodeVisits < 100, JSON.stringify(end))
+    apply(store, lone.inverse, 'undo')
+    store.counters(true)
+    apply(store, indent.inverse, 'undo')
+    assert.ok(store.counters(true).nodeVisits < lines, JSON.stringify(end))
+    assert.equal(store.snapshot().materialize(), source)
+  }
+})
+
+test('multi-range operations at any position match a string model, undo and redo', () => {
+  const legal = (text, position) =>
+    position >= 0 &&
+    position <= text.length &&
+    !(text[position - 1] === '\r' && text[position] === '\n') &&
+    !(
+      /[\uD800-\uDBFF]/.test(text[position - 1] ?? '') &&
+      /[\uDC00-\uDFFF]/.test(text[position] ?? '')
+    )
+  for (const [fanout, leafCapacity, chunkUnits] of [
+    [4, 4, 4],
+    [4, 8, 8],
+    [16, 32, 4096],
+  ]) {
+    const random = generator(0x5ea3)
+    let source = randomSource(random, 300)
+    const store = new SourceStore(source, key, 0, {
+      fanout,
+      leafCapacity,
+      chunkUnits,
+    })
+    const history = []
+    for (let iteration = 0; iteration < 400; iteration++) {
+      const where = `${fanout}/${leafCapacity}/${chunkUnits}, edit ${iteration}`
+      if (history.length && random(4) === 0) {
+        const { inverse, changes, before, after } = history.pop()
+        apply(store, inverse, 'undo')
+        assert.equal(store.snapshot().materialize(), before, where)
+        apply(store, changes, 'redo')
+        assert.equal(store.snapshot().materialize(), after, where)
+        apply(store, inverse, 'undo')
+        assert.equal(store.snapshot().materialize(), before, where)
+        source = before
+        continue
+      }
+      const ends = [
+        ...new Set(
+          Array.from({ length: 2 + random(40) }, () =>
+            random(source.length + 2),
+          ),
+        ),
+      ].sort((a, b) => a - b)
+      const changes = []
+      for (let index = 0; index + 1 < ends.length; index += 2)
+        changes.push({
+          from: ends[index],
+          to: random(3) ? ends[index + 1] : ends[index],
+          insert: randomSource(random, 4),
+        })
+      const valid = changes.every(
+        ({ from, to }) => legal(source, from) && legal(source, to),
+      )
+      const empty = changes.every(
+        ({ from, to, insert }) => source.slice(from, to) === insert,
+      )
+      const version = store.snapshot().version
+      if (!valid || empty) {
+        assert.throws(
+          () => apply(store, changes),
+          valid ? /empty/ : /splits/,
+          where,
+        )
+        assert.equal(store.snapshot().version, version, where)
+        assert.equal(store.snapshot().materialize(), source, where)
+        continue
+      }
+      const before = source
+      for (const { from, to, insert } of changes.toReversed())
+        source = source.slice(0, from) + insert + source.slice(to)
+      const { inverse } = apply(store, changes)
+      assert.equal(store.snapshot().materialize(), source, where)
+      assert.deepEqual(store.snapshot().metrics, oracle(source), where)
+      for (const edit of inverse)
+        assert.ok(
+          legal(source, edit.from) && legal(source, edit.to),
+          `${where}: inverse splits a seam`,
+        )
+      history.push({ inverse, changes, before, after: source })
+    }
+    assert.deepEqual(store.inspect().problems, [])
+    checkSnapshot(store.snapshot(), source)
+  }
+})
+
 test('multi-range operations match an oracle in every tree shape', () => {
   for (const [fanout, leafCapacity, chunkUnits] of [
     [4, 4, 4],

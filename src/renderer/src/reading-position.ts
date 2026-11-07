@@ -40,6 +40,37 @@ type Reading = {
 }
 const reading = new WeakMap<EditorView, Reading | null>()
 
+/** Whether a place still answers for its text: a scroll command after it takes over. */
+function current(view: EditorView, place: Reading) {
+  return (
+    place.doc === view.state.doc &&
+    place.scrollRequest === (scrollRequests.get(view) ?? 0)
+  )
+}
+
+/**
+ * Whether the pane moved up to its new bottom from `scroll`: a shorter layout
+ * can clamp the pane without reader input. A place given up has no scroll to
+ * return to.
+ */
+function clamped({ pane }: Reading, scroll: number) {
+  return (
+    Number.isFinite(scroll) &&
+    pane.scrollTop < scroll - 1 &&
+    pane.clientHeight > 0 &&
+    pane.scrollTop >= pane.scrollHeight - pane.clientHeight - 1
+  )
+}
+
+/** Whether a place still stands where it left the pane, but for a clamp. */
+function stayed(view: EditorView, place: Reading, scroll: number) {
+  return (
+    place.doc === view.state.doc &&
+    (Math.abs(place.pane.scrollTop - scroll) <= 1 ||
+      (current(view, place) && clamped(place, scroll)))
+  )
+}
+
 /** The element scrolling the editor, if not the page. */
 function scrollingPane(view: EditorView) {
   let pane: Element | null = view.scrollDOM
@@ -88,7 +119,7 @@ function readingPosition(view: EditorView): Reading | null {
       const held = anchors.get(view)
       if (
         held?.position.doc === view.state.doc &&
-        Math.abs(held.position.pane.scrollTop - held.scroll) <= 1
+        stayed(view, held.position, held.scroll)
       )
         return {
           ...held.position,
@@ -360,11 +391,14 @@ function holdTop(view: EditorView) {
   const pane = scrollingPane(view)
   if (!pane) return
   const held = anchors.get(view)
+  if (
+    held?.position.pane === pane &&
+    current(view, held.position) &&
+    clamped(held.position, held.scroll)
+  )
+    return
   if (held?.position.isTop) {
-    if (
-      held.position.doc === view.state.doc &&
-      Math.abs(pane.scrollTop - held.scroll) <= 1
-    )
+    if (held.position.pane === pane && stayed(view, held.position, held.scroll))
       return
     anchors.delete(view)
   }
@@ -432,7 +466,7 @@ function holdHeld(view: EditorView) {
     !held?.position.isTop ||
     held.position.doc !== view.state.doc ||
     // The reader's scroll, whose event comes after this update.
-    Math.abs(held.position.pane.scrollTop - held.scroll) > 1
+    !stayed(view, held.position, held.scroll)
   )
     return
   restore(view, {
@@ -487,14 +521,14 @@ export const keepRead = [
     }
     // Scrolling away ends the place held: back at the same scroll, the
     // heights under it can be new.
-    if (held && Math.abs(held.position.pane.scrollTop - held.scroll) > 1)
+    if (held && !stayed(update.view, held.position, held.scroll))
       held.scroll = Number.POSITIVE_INFINITY
     const keep = kept.get(update.view)
     if (
       keep &&
       (update.docChanged ||
         update.selectionSet ||
-        Math.abs(keep.pane.scrollTop - keep.scroll) > 1)
+        !stayed(update.view, keep, keep.scroll))
     )
       kept.delete(update.view)
     if (

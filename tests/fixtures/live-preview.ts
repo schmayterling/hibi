@@ -146,6 +146,7 @@ Object.assign(window, {
         ),
       )
       view?.destroy()
+      document.querySelector<HTMLElement>('.rich-pane')!.scrollTop = 0
       workerClient?.dispose()
       workerSession?.dispose()
       workerClient = null

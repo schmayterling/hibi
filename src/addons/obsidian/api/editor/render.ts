@@ -225,6 +225,8 @@ export class MarkdownRenderer extends MarkdownRenderChild {
     el.append(
       DOMPurify.sanitize(html, {
         ...renderedHtmlOptions,
+        // Inline styles in a note could cover or restyle the app around it.
+        FORBID_ATTR: [...(renderedHtmlOptions.FORBID_ATTR ?? []), 'style'],
         RETURN_DOM_FRAGMENT: true,
       }),
     )

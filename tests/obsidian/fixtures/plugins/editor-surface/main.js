@@ -1,6 +1,7 @@
 const {
   Plugin,
   MarkdownRenderChild,
+  MarkdownRenderer,
   editorInfoField,
   editorLivePreviewField,
 } = require('obsidian')
@@ -54,6 +55,11 @@ const broken = StateField.define({
 
 module.exports = class EditorSurface extends Plugin {
   onload() {
+    fixture.render = async (markdown) => {
+      const el = document.createElement('div')
+      await MarkdownRenderer.render(this.app, markdown, el, 'note.md', this)
+      return el.innerHTML
+    }
     this.registerEditorExtension([
       changes,
       todos,

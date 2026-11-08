@@ -3515,15 +3515,20 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   const run = async (note, start, keys, stale, drawn) => {
     let cells = null
     await harness.evaluate(
-      (doc) =>
+      ({ doc, stale }) =>
         window.tables.mount(
           doc,
           { width: 1000, height: 800 },
-          // The settled run waits after each key and the other doesn't. Undo
-          // steps follow the same policy in both, whatever a machine's pace.
-          { editable: true, slice: 0, historyGroupDelay: 3600000 },
+          // The settled run parses each edit in its own transaction, so it
+          // never waits on idle slices; the other does. Undo steps follow the
+          // same policy in both, whatever a machine's pace.
+          {
+            editable: true,
+            slice: stale ? 0 : 100000,
+            historyGroupDelay: 3600000,
+          },
         ),
-      note,
+      { doc: note, stale },
     )
     await harness.waitForFunction(() => !window.tables.settling())
     // The last row is virtualized; a source selection brings it into view.

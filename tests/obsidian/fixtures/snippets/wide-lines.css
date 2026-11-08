@@ -1,0 +1,6 @@
+.markdown-source-view.is-readable-line-width .cm-sizer {
+  max-width: 100%;
+}
+body {
+  --file-line-width: 100%;
+}

@@ -11,7 +11,11 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises'
-import { basename, extname, join, relative, sep } from 'node:path'
+import { basename, dirname, extname, join, relative, sep } from 'node:path'
+import {
+  obsidianConfiguration,
+  obsidianDataPath,
+} from '../../main/workspace-obsidian.ts'
 import {
   type DroppedRule,
   MAX_ASSET_BYTES,
@@ -90,7 +94,13 @@ async function readRegular(path: string, max: number) {
   if (info.size > max) throw new Error('too large')
   return readFile(path)
 }
-async function entries(path: string) {
+/** Path inside the vault's Obsidian configuration folder, or null when it has none. */
+export async function configPath(vault: string, ...parts: string[]) {
+  const directory = (await obsidianConfiguration(vault))?.directory
+  return directory ? join(vault, directory, ...parts) : null
+}
+async function entries(path: string | null) {
+  if (!path) return []
   try {
     return await readdir(path, { withFileTypes: true })
   } catch (error) {
@@ -102,10 +112,12 @@ async function entries(path: string) {
 export async function readAppearance(vault: string): Promise<VaultAppearance> {
   let data: Record<string, unknown> = {}
   try {
+    const path = await configPath(vault, 'appearance.json')
+    if (!path) throw new Error('no configuration folder')
     const parsed: unknown = JSON.parse(
-      (
-        await readRegular(join(vault, '.obsidian', 'appearance.json'), 256_000)
-      ).toString('utf8'),
+      (await readRegular(path, 256_000))
+        .toString('utf8')
+        .replace(/^\uFEFF/, ''),
     )
     if (parsed && typeof parsed === 'object') data = parsed as typeof data
   } catch {
@@ -181,12 +193,12 @@ async function readThemeFolder(folder: string) {
 export async function readVault(vault: string): Promise<Vault> {
   const skipped: string[] = []
   const themes: VaultTheme[] = []
-  const themeRoot = join(vault, '.obsidian', 'themes')
+  const themeRoot = await configPath(vault, 'themes')
   for (const entry of await entries(themeRoot)) {
     try {
       if (entry.isDirectory()) {
         const { manifest, css } = await readThemeFolder(
-          join(themeRoot, entry.name),
+          join(themeRoot as string, entry.name),
         )
         themes.push({
           name: entry.name,
@@ -200,12 +212,12 @@ export async function readVault(vault: string): Promise<Vault> {
     }
   }
   const snippets: VaultSnippet[] = []
-  const snippetRoot = join(vault, '.obsidian', 'snippets')
+  const snippetRoot = await configPath(vault, 'snippets')
   for (const entry of await entries(snippetRoot)) {
     if (!entry.name.endsWith('.css')) continue
     try {
       const css = await readRegular(
-        join(snippetRoot, entry.name),
+        join(snippetRoot as string, entry.name),
         MAX_SNIPPET_BYTES,
       )
       snippets.push({
@@ -344,10 +356,9 @@ export async function themeCss(root: string, id: unknown) {
 export async function checkSnippet(vault: string, name: string) {
   if (!/^[^/\\]{1,200}$/.test(name) || name.startsWith('.'))
     throw new Error('Choose a snippet from this vault.')
-  const css = await readRegular(
-    join(vault, '.obsidian', 'snippets', `${name}.css`),
-    MAX_SNIPPET_BYTES,
-  )
+  const path = await configPath(vault, 'snippets', `${name}.css`)
+  if (!path) throw new Error('This vault has no Obsidian settings folder.')
+  const css = await readRegular(path, MAX_SNIPPET_BYTES)
   return {
     css,
     hash: sha256(css),
@@ -384,8 +395,9 @@ export async function snippetCss(root: string, hash: string) {
   return readFile(join(root, 'snippets', hash, 'checked.css'), 'utf8')
 }
 
-export const vaultKey = async (vault: string) =>
-  sha256(await realpath(vault)).slice(0, 32)
+// Choices live in the vault's overlay in Hibi's data, never in the vault.
+const selectionPath = async (data: string, vault: string) =>
+  join(await obsidianDataPath(vault, data), 'themes.json')
 
 export type StoredSelection = Selection & {
   /** Snippet name → content hash of the copy in Hibi's data. */
@@ -393,15 +405,12 @@ export type StoredSelection = Selection & {
 }
 
 export async function readSelection(
-  root: string,
+  data: string,
   vault: string,
 ): Promise<StoredSelection | null> {
   try {
     const value = JSON.parse(
-      await readFile(
-        join(root, 'vaults', `${await vaultKey(vault)}.json`),
-        'utf8',
-      ),
+      await readFile(await selectionPath(data, vault), 'utf8'),
     )
     return {
       theme: typeof value.theme === 'string' ? value.theme : null,
@@ -420,13 +429,12 @@ export async function readSelection(
 }
 
 export async function writeSelection(
-  root: string,
+  data: string,
   vault: string,
   selection: StoredSelection,
 ) {
-  const folder = join(root, 'vaults')
-  await mkdir(folder, { recursive: true })
-  const target = join(folder, `${await vaultKey(vault)}.json`)
+  const target = await selectionPath(data, vault)
+  await mkdir(dirname(target), { recursive: true })
   const temporary = `${target}.${randomUUID()}.tmp`
   await writeFile(temporary, JSON.stringify(selection))
   await rename(temporary, target)

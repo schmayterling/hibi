@@ -1,0 +1,9 @@
+.theme-dark .tag {
+  background-color: #3584e4;
+}
+.theme-light .tag {
+  background-color: #99c1f1;
+}
+body {
+  --text-selection: #ffcc0055;
+}

@@ -1,0 +1,11 @@
+/* Pre-0.16 theme: obsidian.css, no manifest, CodeMirror 5 selectors. */
+.theme-dark {
+  --background-primary: #000000;
+  --text-normal: #f0f0f0;
+}
+.CodeMirror-line {
+  line-height: 1.6;
+}
+.cm-s-obsidian .cm-header {
+  color: #ffcc00;
+}

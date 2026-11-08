@@ -6,6 +6,7 @@ import type { DroppedRule } from './sanitize'
 import {
   checkSnippet,
   checkTheme,
+  configPath,
   installedThemes,
   installSnippet,
   installTheme,
@@ -19,7 +20,8 @@ import {
   writeSelection,
 } from './store'
 
-const root = () => join(app.getPath('userData'), 'obsidian-themes')
+const data = () => app.getPath('userData')
+const root = () => join(data(), 'obsidian-themes')
 /** `--disable-obsidian-themes` starts Hibi without any theme or snippet. */
 const disabled = () =>
   process.argv.includes('--disable-obsidian-themes') ||
@@ -29,8 +31,11 @@ const vaultName = (value: string) => {
     throw new Error('Choose a theme from this vault.')
   return value
 }
-const vaultThemeFolder = (vault: string, name: string) =>
-  join(vault, '.obsidian', 'themes', vaultName(name))
+async function vaultThemeFolder(vault: string, name: string) {
+  const folder = await configPath(vault, 'themes', vaultName(name))
+  if (!folder) throw new Error('This vault has no Obsidian settings folder.')
+  return folder
+}
 const strings = (value: unknown) =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -42,7 +47,7 @@ async function state(context: NativeAddonContext) {
   if (!vault)
     return { disabled: disabled(), vault: null, installed, selection: null }
   const found = await readVault(vault)
-  const stored = await readSelection(root(), vault)
+  const stored = await readSelection(data(), vault)
   let selection: Selection & { preselected: boolean }
   if (stored) selection = { ...stored, preselected: false }
   else {
@@ -78,7 +83,9 @@ async function cssFor(
     }
   const vault = context.workspace.directory()
   if (!vault) throw new Error('Open an Obsidian vault first.')
-  const { result } = await checkTheme(vaultThemeFolder(vault, theme.slice(6)))
+  const { result } = await checkTheme(
+    await vaultThemeFolder(vault, theme.slice(6)),
+  )
   return { css: result.css, dropped: result.dropped }
 }
 
@@ -90,7 +97,7 @@ export default {
     async active(_input, context) {
       const vault = context.workspace.directory()
       if (disabled() || !vault) return { disabled: disabled(), css: null }
-      const stored = await readSelection(root(), vault)
+      const stored = await readSelection(data(), vault)
       if (!stored) return { disabled: false, css: null }
       const parts = [
         stored.theme
@@ -139,7 +146,7 @@ export default {
           ? (
               await installTheme(
                 root(),
-                vaultThemeFolder(vault, request.theme.slice(6)),
+                await vaultThemeFolder(vault, request.theme.slice(6)),
                 'vault',
               )
             ).id
@@ -151,7 +158,7 @@ export default {
       for (const name of snippets)
         snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
       if (!context.isCurrent()) return null
-      await writeSelection(root(), vault, { theme, snippets, snippetHashes })
+      await writeSelection(data(), vault, { theme, snippets, snippetHashes })
       return state(context)
     },
     /** Add a theme from a folder outside the vault. */

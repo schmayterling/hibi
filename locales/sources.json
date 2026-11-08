@@ -65,6 +65,9 @@
   "b107fad60f86": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "0e770ab8e490": [
+    "src/addons/obsidian/api/editor/render.ts"
+  ],
   "0c652f95554c": [
     "src/addons/obsidian/api/core/component.ts"
   ],
@@ -445,6 +448,9 @@
   ],
   "a1e57e3c2176": [
     "src/addons/frontmatter/Properties.tsx"
+  ],
+  "e5fa925de142": [
+    "src/addons/obsidian-themes/native.ts"
   ],
   "2ca103b50a02": [
     "src/addons/review/index.tsx"
@@ -3834,6 +3840,9 @@
   "6cb9762ada13": [
     "src/shared/markdown-source-model.ts"
   ],
+  "0372a59b7f23": [
+    "src/addons/obsidian/api/editor/render.ts"
+  ],
   "07fea37695a6": [
     "src/ui/ColorschemeSettings.tsx"
   ],
@@ -4167,7 +4176,8 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "dc937b598926": [
-    "src/addons/obsidian-themes/Settings.tsx"
+    "src/addons/obsidian-themes/Settings.tsx",
+    "src/addons/obsidian-themes/StyleOptions.tsx"
   ],
   "a7248eeb45eb": [
     "src/renderer/src/Introduction.tsx",
@@ -8197,6 +8207,9 @@
   ],
   "9bf22c3ffed2": [
     "src/addons/word-count/index.ts"
+  ],
+  "1eb4f482ae5c": [
+    "src/addons/obsidian/api/editor/index.ts"
   ],
   "da55d16fc16f": [
     "src/addons/text-extras/flavor-info.ts"

@@ -407,14 +407,27 @@ if (process.isMainFrame) {
         ipcRenderer.removeListener(DOCUMENT_CHANNELS.requestRemote, listener)
       }
     },
-    attachMedia: (files, revision) =>
+    attachMedia: async (files, revision) =>
       ipcRenderer.invoke(
         MEDIA_CHANNELS.attach,
         files === null
           ? null
-          : files.map((file) => webUtils.getPathForFile(file)),
+          : await Promise.all(
+              files.map(async (file) => {
+                const path = webUtils.getPathForFile(file)
+                if (path) return path
+                if (file.size > 16 * 1024 * 1024)
+                  throw new Error('Paste an image smaller than 16 MiB.')
+                return {
+                  name: file.name,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                }
+              }),
+            ),
         revision,
       ),
+    formatDocumentLink: (href, label) =>
+      ipcRenderer.invoke(MEDIA_CHANNELS.formatLink, href, label),
     readDocumentMedia: (source, revision) =>
       ipcRenderer.invoke(MEDIA_CHANNELS.read, source, revision),
     resolveDocumentMedia: (source, revision, request) =>

@@ -7,8 +7,8 @@ import {
   loadDocument,
 } from './document'
 import { isDocumentName } from './document-types'
-import { documentMediaPath } from './images'
-import { resolveWikiDocument } from './workspace'
+import { documentMediaPath, resolveDocumentMediaPath } from './images'
+import { resolveWikiDocument, workspaceRoot } from './workspace'
 
 // Remote downloads still use one bounded HTTP response.
 const MAX_REMOTE_DOCUMENT_BYTES = 2 * 1024 * 1024
@@ -31,6 +31,25 @@ export async function openExternalDocumentLink(href: unknown) {
     throw new Error('Choose a web link or email address.')
   await shell.openExternal(
     /^mailto:/i.test(href) ? new URL(href).href : webUrl(href).href,
+  )
+}
+
+export async function formatDocumentLink(href: unknown, label: unknown) {
+  if (
+    typeof href !== 'string' ||
+    href.length > 8192 ||
+    typeof label !== 'string' ||
+    label.length > 8192
+  )
+    throw new Error('Choose a web link or email address.')
+  const root = workspaceRoot(),
+    note = getDocumentPath()
+  if (!root || !note) return null
+  return (await import('./workspace-obsidian-links')).formatObsidianLink(
+    root,
+    note,
+    href,
+    label,
   )
 }
 
@@ -62,7 +81,21 @@ export async function openDocumentLink(
     // A link to this note checks for outside changes like any other open.
     return loadDocument(window, file)
   }
-  let path = documentMediaPath(href.split('#')[0]!, getDocumentPath())
+  const target = href.split('#')[0]!
+  let decoded = target
+  try {
+    decoded = decodeURIComponent(target)
+  } catch {
+    /* Keep literal percent names. */
+  }
+  let path =
+    (await resolveDocumentMediaPath(
+      target,
+      getDocumentPath(),
+      workspaceRoot(),
+    )) ??
+    (await resolveWikiDocument(getDocumentPath(), decoded)) ??
+    documentMediaPath(target, getDocumentPath())
   if (path && !isDocumentName(path)) path += '.md'
   if (!path || !isDocumentName(path))
     throw new Error('Choose a web link, email address, or supported document.')

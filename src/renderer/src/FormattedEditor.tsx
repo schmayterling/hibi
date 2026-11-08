@@ -641,6 +641,16 @@ export function MarkdownEditor({
         className={`editor-panes mode-${paneMode}`}
         data-editor-view={viewId}
         data-source-ready={ready}
+        onPasteCapture={(event) => {
+          const files = Array.from(event.clipboardData.files)
+          if (!files.length || !files.every(isMediaFile)) return
+          event.preventDefault()
+          event.stopPropagation()
+          const pane = (event.target as HTMLElement).closest('.source-pane')
+            ? 'source'
+            : 'rich'
+          void attachFiles(files, pane)
+        }}
         onDropCapture={(event) => {
           const files = Array.from(event.dataTransfer.files)
           if (!files.length || !files.every(isMediaFile)) return

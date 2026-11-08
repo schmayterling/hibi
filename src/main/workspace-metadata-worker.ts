@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { round, trace } from './index-trace'
-const derived = { parseMs: 0, recordMs: 0, mkdirMs: 0, mkdirCalls: 0, writeMs: 0, writes: 0 }
+const derived = { parseMs: 0, recordMs: 0, mkdirMs: 0, mkdirCalls: 0, writeMs: 0, writes: 0, cleanupMs: 0, cleanupCalls: 0 }
 const sums: Record<string, number> = {}
 const counts: Record<string, number> = {}
 let parseEnds = 0
@@ -454,7 +454,10 @@ async function rememberUntimed(
   } catch {
     // Cache writes are optional; the parsed page remains usable.
   } finally {
+    const cleanupStarted = performance.now()
     await unlink(temporary).catch(() => {})
+    derived.cleanupMs += performance.now() - cleanupStarted
+    derived.cleanupCalls++
   }
   return false
 }

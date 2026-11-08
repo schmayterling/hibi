@@ -70,83 +70,35 @@ const patches = [
     }
     gapSize(line, from, to, structure) {`,
   ],
-  // A wrapped line's gaps were placed by the share of its text above the
-  // screen's top, taken from the line's height over all of its text, and
-  // sized the same way. Most of a very long line is in its gaps, sized from
-  // estimates, so a measured part that wraps differently, as after a new
-  // width, changes the line's height and with it the text the same height
-  // names, more for a screen far into the line. Each pass of a measure then
-  // drew text thousands of characters from the last, and the loop stopped at
-  // its limit with gaps the page had not drawn: the view named text as drawn
-  // that was not, and the text at the screen's top moved by a gap's height.
-  // A measure now reads the line as it was drawn, the text between its gaps
-  // by its measured height and each gap by its own size, both to find the
-  // text at the screen's edges and to size the gaps around it: drawn text
-  // stays where it was drawn, the next pass finds the same gaps, and the loop
-  // ends.
+  // The measure loop gives up after its seventh pass, as when a very long
+  // wrapped line's gaps move with each new height. It stopped right after
+  // measuring, before drawing what that pass found: the view then named text
+  // as drawn, and placed gaps, that the page did not have, and anything
+  // reading positions in that frame, as the reading place does, read the
+  // text a gap's height away. The last pass now draws what it measured
+  // before the loop stops.
   [
-    `        let gaps = [];
-        let addGap = (from, to, line, structure) => {`,
-    `        let gaps = [], drawn = null;
-        let addGap = (from, to, line, structure) => {`,
-  ],
-  [
-    `                let size = this.gapSize(line, from, to, structure);`,
-    `                let size = drawn ? drawn.size(from, to) : this.gapSize(line, from, to, structure);`,
-  ],
-  [
-    `                let marginHeight = (margin / this.heightOracle.lineLength) * this.heightOracle.lineHeight;
-                let top, bot;`,
-    `                let marginHeight = (margin / this.heightOracle.lineLength) * this.heightOracle.lineHeight;
-                let top, bot;
-                drawn = target == null && mayMeasure ? this.drawnLayout(line, current, structure) : null;`,
-  ],
-  [
-    `                else {
-                    top = (this.visibleTop - line.top - marginHeight) / line.height;
-                    bot = (this.visibleBottom - line.top + marginHeight) / line.height;
+    `                if (i > 5) {
+                    console.warn(this.measureRequests.length
+                        ? "Measure loop restarted more than 5 times"
+                        : "Viewport failed to stabilize");
+                    break;
                 }`,
-    `                else if (drawn) {
-                    top = drawn.fraction(this.visibleTop - marginHeight);
-                    bot = drawn.fraction(this.visibleBottom + marginHeight);
-                }
-                else {
-                    top = (this.visibleTop - line.top - marginHeight) / line.height;
-                    bot = (this.visibleBottom - line.top + marginHeight) / line.height;
-                }`,
+    `                let last = i > 5;
+                if (last)
+                    console.warn(this.measureRequests.length
+                        ? "Measure loop restarted more than 5 times"
+                        : "Viewport failed to stabilize");`,
   ],
   [
-    `    updateLineGaps(gaps) {`,
-    `    drawnLayout(line, gaps, structure) {
-        let above = null, below = null;
-        for (let gap of gaps) {
-            if (gap.to <= line.from || gap.from >= line.to)
-                continue;
-            if (gap.from == line.from && !above)
-                above = gap;
-            else if (gap.to == line.to && !below)
-                below = gap;
-            else
-                return null;
-        }
-        let heights = [0, above ? above.size : 0, line.height - (below ? below.size : 0), line.height];
-        let fractions = [0, above ? findFraction(structure, above.to) : 0, below ? findFraction(structure, below.from) : 1, 1];
-        if (!above && !below || heights[2] <= heights[1] || fractions[2] <= fractions[1])
-            return null;
-        let map = (x, from, to) => {
-            if (x <= from[0])
-                return to[0];
-            if (x >= from[3])
-                return to[3];
-            let i = x <= from[1] ? 1 : x <= from[2] ? 2 : 3;
-            return to[i - 1] + (to[i] - to[i - 1]) * (x - from[i - 1]) / (from[i] - from[i - 1]);
-        };
-        return {
-            fraction: y => map(y - line.top, heights, fractions),
-            size: (from, to) => map(findFraction(structure, to), fractions, heights) - map(findFraction(structure, from), fractions, heights)
-        };
-    }
-    updateLineGaps(gaps) {`,
+    `                if (redrawn)
+                    this.docView.updateSelection(true);
+                if (!update.viewportChanged && this.measureRequests.length == 0) {`,
+    `                if (redrawn)
+                    this.docView.updateSelection(true);
+                if (last)
+                    break;
+                if (!update.viewportChanged && this.measureRequests.length == 0) {`,
   ],
   // A widget that throws while it draws, as any addon's can, fails the whole
   // update: the text is ahead of the DOM, and redrawing fails the same way

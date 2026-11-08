@@ -407,6 +407,7 @@ async function remember(
   )
     return false
   const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
+  let renamed = false
   try {
     if (!(await cacheAvailable(true))) return false
     const file = await open(temporary, 'wx', 0o600)
@@ -439,12 +440,13 @@ async function remember(
     }
     if (await cacheAvailable()) {
       await rename(temporary, join(cacheDirectory, `${page.id}.json`))
+      renamed = true
       return true
     }
   } catch {
     // Cache writes are optional; the parsed page remains usable.
   } finally {
-    await unlink(temporary).catch(() => {})
+    if (!renamed) await unlink(temporary).catch(() => {})
   }
   return false
 }

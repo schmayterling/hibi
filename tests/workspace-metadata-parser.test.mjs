@@ -297,6 +297,72 @@ await import(${JSON.stringify(entry.href)})
   assert.deepEqual(await readdir(outside), [])
 })
 
+test('saved records skip unlink after rename and failed renames still clean their temporary file', async (t) => {
+  const { directory, create } = await fixture(t)
+  const flag = join(directory, 'fail-rename')
+  const bundle = join(directory, 'count-temp-unlink.mjs')
+  await writeFile(
+    bundle,
+    `
+import fs from 'node:fs/promises'
+import native from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+import { parentPort, workerData } from 'node:worker_threads'
+let cleanups = 0
+const count = (path) => {
+  if (String(path).startsWith(workerData.cacheDirectory) && String(path).endsWith('.tmp')) cleanups++
+}
+const unlink = fs.unlink
+fs.unlink = (path, ...args) => { count(path); return unlink(path, ...args) }
+const unlinkSync = native.unlinkSync
+native.unlinkSync = (path, ...args) => { count(path); return unlinkSync(path, ...args) }
+const rename = fs.rename
+fs.rename = (from, to, ...args) => {
+  if (String(to).startsWith(workerData.cacheDirectory) && String(to).endsWith('.json') && native.existsSync(${JSON.stringify(flag)}))
+    throw Object.assign(new Error('rename fixture'), { code: 'EIO' })
+  return rename(from, to, ...args)
+}
+syncBuiltinESMExports()
+const post = parentPort.postMessage.bind(parentPort)
+parentPort.postMessage = (message) => post({ ...message, cleanups })
+await import(${JSON.stringify(entry.href)})
+`,
+  )
+  const parser = create({ entry: bundle })
+  await parser.beginBuild(current)
+  let cleanups
+  parser.worker.on('message', (message) => {
+    cleanups = message.cleanups
+  })
+  for (const path of ['a.md', 'b.md', 'c.md']) {
+    const page = await parser.request(parseNote(path), current)
+    assert.deepEqual(await parser.request(descriptor(path), current), page)
+  }
+  assert.equal(cleanups, 0)
+  await writeFile(flag, 'fail')
+  const refused = await parser.request(
+    parseNote('fault.md', '# fault'),
+    current,
+  )
+  assert.equal(await headingFrom(parser, refused), 'fault')
+  assert.equal(await parser.request(descriptor('fault.md'), current), null)
+  assert.equal(cleanups, 1)
+  assert.equal(
+    (await readdir(directory)).some((name) => name.endsWith('.tmp')),
+    false,
+  )
+  await rm(flag)
+  const recovered = await parser.request(
+    parseNote('fault.md', '# fault'),
+    current,
+  )
+  assert.deepEqual(
+    await parser.request(descriptor('fault.md'), current),
+    recovered,
+  )
+  assert.equal(cleanups, 1)
+})
+
 test('cache identity preserves file ids above the safe integer range', async (t) => {
   const { directory, create } = await fixture(t)
   const bundle = join(directory, 'large-file-id.mjs')

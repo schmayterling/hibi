@@ -1,50 +1,66 @@
 name: check
+# Never merge. Full-file arm64 checks of the reviewed test contract correction.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
-  # A pull request's newest push replaces its run. Main's runs verify what pull
-  # requests skip, so each finishes, and only the newest waiting push runs next.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: editor-readiness-native-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
-    runs-on: ${{ matrix.os }}
+  editor-readiness-native:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
-        id: ci
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || '' }}
-          full: ${{ github.event_name != 'pull_request' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
-        shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          node-version-file: .nvmrc
+      - name: Install
+        run: node .github/actions/ci/install.mjs
+      - name: Fresh build
+        run: npm run build:app
+      - name: Record pins before
+        run: |
+          mkdir "$RUNNER_TEMP/editor-readiness-native"
+          test "$(sha256sum tests/split-preview-deferral.test.mjs | cut -c1-64)" = d8485902a587ba44dd82e3bddb5bc6fbad9e484967cdb2f2219ed4521dd0b46b
+          test "$(sha256sum tests/editor-input.test.mjs | cut -c1-64)" = 8c5ab0247ba86f1fa22b42925c5640b569488e19e216642e4dfeafdfe47db576
+          test "$(sha256sum tests/formatted-table-history.test.mjs | cut -c1-64)" = 7988f4442198f34ca7ea98d206bc39840f0f74fe16431d7544cd3d3df84942a2
+          node scripts/editor-readiness-native-pins.mjs "$RUNNER_TEMP/editor-readiness-native/pins-before.json"
+      - name: Full preview file
+        timeout-minutes: 25
+        run: |
+          set +e
+          dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node --import ./tests/file-limit.mjs --test --test-reporter=tap --test-concurrency=1 tests/split-preview-deferral.test.mjs > "$RUNNER_TEMP/editor-readiness-native/preview.tap" 2> "$RUNNER_TEMP/editor-readiness-native/preview.stderr"
+          code=$?
+          printf '%s\n' "$code" > "$RUNNER_TEMP/editor-readiness-native/preview.exit"
+          exit "$code"
+      - name: Full editor-input file
+        timeout-minutes: 25
+        run: |
+          set +e
+          dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node --import ./tests/file-limit.mjs --test --test-reporter=tap --test-concurrency=1 tests/editor-input.test.mjs > "$RUNNER_TEMP/editor-readiness-native/editor-input.tap" 2> "$RUNNER_TEMP/editor-readiness-native/editor-input.stderr"
+          code=$?
+          printf '%s\n' "$code" > "$RUNNER_TEMP/editor-readiness-native/editor-input.exit"
+          exit "$code"
+      - name: Record pins after
+        if: always()
+        run: |
+          node scripts/editor-readiness-native-pins.mjs "$RUNNER_TEMP/editor-readiness-native/pins-after.json"
+          cmp "$RUNNER_TEMP/editor-readiness-native/pins-before.json" "$RUNNER_TEMP/editor-readiness-native/pins-after.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: editor-readiness-native-${{ github.run_id }}
+          path: ${{ runner.temp }}/editor-readiness-native
+          retention-days: 7
+          if-no-files-found: error

@@ -1,19 +1,7 @@
 @\69mport "https://evil.invalid/x.css";
-body {
-  background: \75rl(https://evil.invalid/a.png);
-}
-.cm-line {
-  background-image: image-set("https://evil.invalid/b.png" 1x);
-}
-.nav-file-title {
-  cursor: url("javascript:alert(1)"), auto;
-}
-.status-bar {
-  list-style-image: url("data:text/html,<script>alert(1)</script>");
-}
-.status-bar {
-  border-image: url(../../../../etc/passwd);
-}
-.markdown-preview-view {
-  color: #c01c28;
-}
+body { background: \75rl(https://evil.invalid/a.png); }
+.cm-line { background-image: image-set("https://evil.invalid/b.png" 1x); }
+.nav-file-title { cursor: url("javascript:alert(1)"), auto; }
+.status-bar { list-style-image: url("data:text/html,<script>alert(1)</script>"); }
+.status-bar { border-image: url(../../../../etc/passwd); }
+.markdown-preview-view { color: #c01c28; }

@@ -3,9 +3,5 @@
   --background-primary: #000000;
   --text-normal: #f0f0f0;
 }
-.CodeMirror-line {
-  line-height: 1.6;
-}
-.cm-s-obsidian .cm-header {
-  color: #ffcc00;
-}
+.CodeMirror-line { line-height: 1.6; }
+.cm-s-obsidian .cm-header { color: #ffcc00; }

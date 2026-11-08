@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, type Dir } from 'node:fs'
+import { type BigIntStats, constants, type Dir } from 'node:fs'
 import {
   type FileHandle,
   lstat,
@@ -7,6 +7,7 @@ import {
   open,
   opendir,
   rename,
+  stat,
   unlink,
 } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -74,6 +75,14 @@ type CacheRecord = {
 const idPattern = /^[a-f0-9]{64}$/
 const recordPattern = /^[a-f0-9]{64}\.json$/
 const temporaryPattern = /^\.[a-f0-9]{64}-[a-f0-9-]{36}(?:\.hidx|\.hdat)?\.tmp$/
+// Cache paths reach the checked folder itself, not its name, so a folder
+// renamed and replaced with a link after the check keeps every write. macOS
+// finds it by volume and file id, Linux through the open descriptor. Windows
+// has neither: there a new file must be in the checked folder before it gets
+// a byte, and each removal checks the path again.
+let pinned:
+  | { base: string; dev: bigint; ino: bigint; handle?: FileHandle }
+  | undefined
 let pruning: Dir | undefined
 let parsing:
   | {
@@ -168,29 +177,85 @@ function validInlineHeadings(
   return length <= inlineHeadingLength
 }
 
-async function cacheAvailable(create = false): Promise<boolean> {
-  if (!cacheDirectory || !buildIdentity) return false
+/** The checked cache folder's path for cache files, or undefined. */
+async function cacheAvailable(create = false): Promise<string | undefined> {
+  if (!cacheDirectory || !buildIdentity) return undefined
   try {
-    const info = await lstat(cacheDirectory)
-    return info.isDirectory() && !info.isSymbolicLink()
+    const info = await lstat(cacheDirectory, { bigint: true })
+    if (!info.isDirectory() || info.isSymbolicLink()) return undefined
+    if (!pinned || !sameFileIdentity(pinned, info)) await pin(info)
+    return pinned?.base
   } catch (error) {
     if (create && (error as NodeJS.ErrnoException).code === 'ENOENT') {
       try {
         await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
       } catch {
-        return false
+        return undefined
       }
       return cacheAvailable()
     }
-    return false
+    return undefined
   }
 }
 
-async function readRecord(id: string): Promise<CacheRecord | null> {
-  if (!cacheDirectory || !idPattern.test(id) || !(await cacheAvailable()))
-    return null
+async function pin(info: BigIntStats): Promise<void> {
+  await pinned?.handle?.close().catch(() => {})
+  pinned = undefined
+  const path = cacheDirectory as string
+  if (process.platform === 'win32') {
+    pinned = { base: path, dev: info.dev, ino: info.ino }
+    return
+  }
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  )
   try {
-    const path = join(cacheDirectory, `${id}.json`)
+    const opened = await handle.stat({ bigint: true })
+    const base =
+      process.platform === 'darwin'
+        ? `/.vol/${opened.dev}/${opened.ino}`
+        : `/proc/self/fd/${handle.fd}/`
+    if (
+      sameFileIdentity(opened, info) &&
+      sameFileIdentity(await stat(base, { bigint: true }), opened)
+    ) {
+      pinned = { base, dev: opened.dev, ino: opened.ino, handle }
+      return
+    }
+  } catch {
+    // Without such paths the cache stays off rather than following a name.
+  }
+  await handle.close()
+}
+
+async function created(
+  base: string,
+  path: string,
+  file: FileHandle,
+): Promise<boolean> {
+  const [opened, entry, folder] = await Promise.all([
+    file.stat({ bigint: true }),
+    lstat(path, { bigint: true }),
+    stat(base, { bigint: true }),
+  ])
+  return (
+    sameFileIdentity(opened, entry) &&
+    !!pinned &&
+    sameFileIdentity(folder, pinned)
+  )
+}
+
+async function removeEntry(base: string, name: string): Promise<void> {
+  if ((await cacheAvailable()) === base)
+    await unlink(join(base, name)).catch(() => {})
+}
+
+async function readRecord(id: string): Promise<CacheRecord | null> {
+  const base = idPattern.test(id) ? await cacheAvailable() : undefined
+  if (!base) return null
+  try {
+    const path = join(base, `${id}.json`)
     const info = await lstat(path, { bigint: true })
     if (!info.isFile() || info.isSymbolicLink()) return null
     // O_NOFOLLOW closes the lstat/open race; a fixed read also bounds file growth.
@@ -248,7 +313,7 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
         diskIndexVersion(opened) !== diskIndexVersion(after) ||
         diskIndexVersion(opened) !== diskIndexVersion(pathInfo) ||
         pathInfo.isSymbolicLink() ||
-        !(await cacheAvailable())
+        (await cacheAvailable()) !== base
       )
         return null
       const value = reader.finish() as CacheRecord
@@ -348,13 +413,9 @@ async function readHeadings(
   }
   if (!record.headings)
     return { items: [], nextOffset: offset, hasMore: false, complete }
-  return readHeadingStore(
-    cacheDirectory as string,
-    record.headings,
-    offset,
-    limit,
-    complete,
-  )
+  const base = await cacheAvailable()
+  if (!base) return null
+  return readHeadingStore(base, record.headings, offset, limit, complete)
 }
 
 async function* resultPages(
@@ -398,19 +459,15 @@ async function remember(
   headings?: HeadingStoreRecord,
   inlineHeadings?: NoteHeading[],
 ): Promise<boolean> {
-  if (
-    !cacheDirectory ||
-    !buildIdentity ||
-    !page.id ||
-    !idPattern.test(page.id) ||
-    !page.version.startsWith('disk:')
-  )
+  if (!page.id || !idPattern.test(page.id) || !page.version.startsWith('disk:'))
     return false
-  const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
+  const base = await cacheAvailable(true)
+  if (!base) return false
+  const temporary = join(base, `.${page.id}-${randomUUID()}.tmp`)
   try {
-    if (!(await cacheAvailable(true))) return false
     const file = await open(temporary, 'wx', 0o600)
     try {
+      if (!(await created(base, temporary, file))) return false
       const writer = new RecordWriter()
       const tokens = recordTokens({
         schema,
@@ -437,8 +494,8 @@ async function remember(
     } finally {
       await file.close()
     }
-    if (await cacheAvailable()) {
-      await rename(temporary, join(cacheDirectory, `${page.id}.json`))
+    if ((await cacheAvailable()) === base) {
+      await rename(temporary, join(base, `${page.id}.json`))
       return true
     }
   } catch {
@@ -480,12 +537,12 @@ async function clearPruning(): Promise<void> {
 }
 
 async function cleanupTemporaries(): Promise<void> {
-  if (!cacheDirectory || !(await cacheAvailable())) return
+  const base = await cacheAvailable()
+  if (!base) return
   try {
-    const directory = await opendir(cacheDirectory)
+    const directory = await opendir(base)
     for await (const entry of directory) {
-      if (temporaryPattern.test(entry.name) && (await cacheAvailable()))
-        await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+      if (temporaryPattern.test(entry.name)) await removeEntry(base, entry.name)
     }
   } catch {
     // Cache maintenance must not prevent indexing.
@@ -495,7 +552,8 @@ async function cleanupTemporaries(): Promise<void> {
 async function finishBuild(remove: readonly string[]) {
   if (remove.length > 64 || remove.some((name) => !recordPattern.test(name)))
     throw new RangeError('Invalid metadata cache names')
-  if (!cacheDirectory || !(await cacheAvailable())) {
+  const base = await cacheAvailable()
+  if (!base) {
     await clearPruning()
     return null
   }
@@ -504,13 +562,11 @@ async function finishBuild(remove: readonly string[]) {
       const record = await readRecord(name.slice(0, -5))
       if (record?.headings)
         for (const suffix of ['hidx', 'hdat'])
-          await unlink(
-            join(cacheDirectory, `${record.headings.key}.${suffix}`),
-          ).catch(() => {})
-      await unlink(join(cacheDirectory, name)).catch(() => {})
+          await removeEntry(base, `${record.headings.key}.${suffix}`)
+      await removeEntry(base, name)
       headingLocations.delete(name.slice(0, -5))
     }
-    pruning ??= await opendir(cacheDirectory)
+    pruning ??= await opendir(base)
     const names: string[] = []
     // Bound enumeration itself, including unrelated entries.
     for (let count = 0; count < 64; count++) {
@@ -530,9 +586,9 @@ async function finishBuild(remove: readonly string[]) {
           !record?.headings ||
           !entry.name.startsWith(`${record.headings.key}.`)
         )
-          await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+          await removeEntry(base, entry.name)
       } else if (temporaryPattern.test(entry.name))
-        await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+        await removeEntry(base, entry.name)
     }
     return { names, done: false }
   } catch {
@@ -606,15 +662,11 @@ async function derive(
   fallback = false,
   current: () => Promise<boolean> = async () => true,
 ) {
-  let directory = headingDirectory
-  if (
-    cacheDirectory &&
-    buildIdentity &&
-    idPattern.test(input.id) &&
-    input.version.startsWith('disk:') &&
-    (await cacheAvailable(true))
-  )
-    directory = cacheDirectory
+  let directory =
+    (idPattern.test(input.id) &&
+      input.version.startsWith('disk:') &&
+      (await cacheAvailable(true))) ||
+    headingDirectory
   if (!(await headingDirectoryAvailable(directory))) return null
   let writer: HeadingStoreWriter | undefined
   const store = (into: string) =>
@@ -707,7 +759,7 @@ async function derive(
           join(previous.directory, `${previous.store.key}.${suffix}`),
         ).catch(() => {})
     parentPort?.postMessage({ parsed: true })
-    if (directory === cacheDirectory || !headings) {
+    if (directory !== headingDirectory || !headings) {
       if (
         await remember(
           page,

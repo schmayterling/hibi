@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
+import { watch } from 'node:fs'
 import {
   appendFile,
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   stat,
   symlink,
   truncate,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -297,6 +300,155 @@ await import(${JSON.stringify(entry.href)})
   assert.deepEqual(await readdir(outside), [])
 })
 
+test('cache writes and pruning stay in the checked folder when its path becomes a link mid-operation', async (t) => {
+  const { directory, create } = await fixture(t)
+  const cache = join(directory, 'cache')
+  const outside = await mkdtemp(join(directory, 'outside-'))
+  const moved = join(directory, 'moved')
+  const arm = join(directory, 'replace-at')
+  const log = join(directory, 'outside.jsonl')
+  // Cache-shaped names that a cleanup reading the linked folder would delete.
+  const decoys = [
+    `.${'a'.repeat(64)}-${randomUUID()}.tmp`,
+    `${'b'.repeat(64)}-${randomUUID()}.hidx`,
+    `${'c'.repeat(64)}.json`,
+  ]
+  for (const name of decoys) await writeFile(join(outside, name), 'outside')
+  const bundle = join(directory, 'replace-cache.mjs')
+  await writeFile(
+    bundle,
+    `
+import fs from 'node:fs/promises'
+import sync from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+import { basename, join } from 'node:path'
+import { workerData } from 'node:worker_threads'
+const raw = { ...fs }, rawSync = { ...sync }
+const outside = ${JSON.stringify(outside)}
+const note = (value) => rawSync.appendFileSync(${JSON.stringify(log)}, JSON.stringify(value) + '\\n')
+// Move the checked cache away and link its path to outside, right before the armed call.
+const replace = (call) => {
+  try { if (rawSync.readFileSync(${JSON.stringify(arm)}, 'utf8') !== call) return } catch { return }
+  rawSync.unlinkSync(${JSON.stringify(arm)})
+  rawSync.renameSync(workerData.cacheDirectory, ${JSON.stringify(moved)})
+  rawSync.symlinkSync(outside, workerData.cacheDirectory, process.platform === 'win32' ? 'junction' : 'dir')
+}
+const isOutside = (fd) => {
+  const file = rawSync.fstatSync(fd, { bigint: true })
+  return rawSync.readdirSync(outside).some((name) => {
+    const entry = rawSync.lstatSync(join(outside, name), { bigint: true })
+    return entry.dev === file.dev && entry.ino === file.ino
+  })
+}
+fs.open = async (path, ...args) => {
+  if (basename(String(path)).endsWith('.tmp')) replace('open')
+  const file = await raw.open(path, ...args)
+  if (isOutside(file.fd)) {
+    note({ open: basename(String(path)) })
+    const write = file.write.bind(file)
+    file.write = async (...parts) => {
+      const result = await write(...parts)
+      note({ bytes: result.bytesWritten })
+      return result
+    }
+  }
+  return file
+}
+sync.openSync = (path, ...args) => {
+  if (basename(String(path)).endsWith('.tmp')) replace('openSync')
+  const fd = rawSync.openSync(path, ...args)
+  if (isOutside(fd)) note({ open: basename(String(path)) })
+  return fd
+}
+sync.writeSync = (fd, ...args) => {
+  const bytes = rawSync.writeSync(fd, ...args)
+  if (isOutside(fd)) note({ bytes })
+  return bytes
+}
+fs.opendir = async (path, ...args) => {
+  replace('opendir')
+  return raw.opendir(path, ...args)
+}
+syncBuiltinESMExports()
+await import(${JSON.stringify(entry.href)})
+`,
+  )
+  const events = []
+  const watcher = watch(outside, (_, name) => events.push(String(name)))
+  t.after(() => watcher.close())
+  const markers = []
+  // A marker file proves the watcher has delivered everything before it.
+  const flush = async (marker) => {
+    markers.push(marker)
+    await writeFile(join(outside, marker), '')
+    for (let turn = 0; !events.includes(marker); turn++) {
+      assert.ok(turn < 500, `the watcher never reported ${marker}`)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+  const untouched = async (marker) => {
+    await assert.rejects(stat(arm), { code: 'ENOENT' })
+    await flush(marker)
+    const seen = (await readFile(log, 'utf8').catch(() => ''))
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+    if (process.platform === 'win32')
+      // Windows paths cannot go through an open folder, so a replaced path can
+      // still receive an empty new file; it is removed before any byte lands.
+      assert.deepEqual(
+        seen.filter((value) => value.bytes),
+        [],
+      )
+    else {
+      assert.deepEqual(seen, [])
+      assert.deepEqual(
+        events.filter((name) => !markers.includes(name)),
+        [],
+      )
+    }
+    assert.deepEqual(
+      (await readdir(outside)).sort(),
+      [...decoys, ...markers].sort(),
+    )
+    for (const name of decoys)
+      assert.equal(await readFile(join(outside, name), 'utf8'), 'outside')
+    await unlink(cache)
+    await rename(moved, cache)
+  }
+  const parser = create({ entry: bundle, cacheDirectory: cache })
+  await parser.request(parseNote('warm.md'), current)
+  await flush('ready')
+  events.length = 0
+
+  await writeFile(arm, 'open')
+  const record = await parser.request(parseNote('record.md'), current)
+  await untouched('record')
+  assert.deepEqual(record?.metadata.tags, ['work'])
+
+  await writeFile(arm, 'openSync')
+  const headings = Array.from(
+    { length: 80 },
+    (_, index) => `# heading ${index}`,
+  )
+  const sidecar = await parser.request(
+    parseNote('sidecar.md', `${headings.join('\n\n')}\n\n#work`),
+    current,
+  )
+  await untouched('sidecar')
+  assert.equal(sidecar?.metadata.headings.count, 80)
+  assert.deepEqual(
+    (await parser.readHeadings(descriptor('sidecar.md'), 0, 1000, current))
+      .items,
+    headings.map((text) => ({ depth: 1, text: text.slice(2) })),
+  )
+
+  await parser.beginBuild(current)
+  await writeFile(arm, 'opendir')
+  await parser.finishBuild(current)
+  await untouched('prune')
+})
+
 test('cache identity preserves file ids above the safe integer range', async (t) => {
   const { directory, create } = await fixture(t)
   const bundle = join(directory, 'large-file-id.mjs')
@@ -460,10 +612,15 @@ test('cached batch file reads keep one record and handle at a time', async (t) =
     `
 import fs from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
-import { parentPort } from 'node:worker_threads'
-let active = 0, peak = 0, opened = 0
+import { parentPort, workerData } from 'node:worker_threads'
+let active = 0, peak = 0, opened = 0, folders = 0
 const open = fs.open
 fs.open = async (...args) => {
+  // The checked cache folder stays open for the worker; count it apart.
+  if (String(args[0]) === workerData.cacheDirectory) {
+    folders++
+    return open(...args)
+  }
   const file = await open(...args)
   opened++
   peak = Math.max(peak, ++active)
@@ -473,7 +630,7 @@ fs.open = async (...args) => {
 }
 syncBuiltinESMExports()
 const post = parentPort.postMessage.bind(parentPort)
-parentPort.postMessage = (message) => post({ ...message, stats: { active, peak, opened } })
+parentPort.postMessage = (message) => post({ ...message, stats: { active, peak, opened, folders } })
 await import(${JSON.stringify(entry.href)})
 `,
   )
@@ -489,6 +646,7 @@ await import(${JSON.stringify(entry.href)})
   assert.equal(stats.opened, 65)
   assert.equal(stats.active, 0)
   assert.equal(stats.peak, 1)
+  assert.equal(stats.folders, process.platform === 'win32' ? 0 : 1)
 })
 
 test('cache batches stream every large record and oversized string without size misses', async (t) => {

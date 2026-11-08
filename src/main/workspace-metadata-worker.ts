@@ -640,7 +640,15 @@ async function derive(
       return
     }
     if (!writer) {
-      writer = store(directory)
+      try {
+        writer = store(directory)
+      } catch (error) {
+        // A cache that refuses heading files is not a note read failure:
+        // like an unsaved record's, the headings wait in a temporary file.
+        if (directory === headingDirectory) throw error
+        directory = headingDirectory
+        writer = store(directory)
+      }
       for (const earlier of inline.splice(0)) writer.add(earlier)
     }
     writer.add(heading)

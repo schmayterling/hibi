@@ -1,6 +1,7 @@
 import { syntaxTree } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
+import { formattedSyntaxTree } from '../../../../renderer/src/formatted-contributions.ts'
 import { formattedRegistry } from '../../../../renderer/src/formatted-registry.ts'
 import type { FencedRenderer } from '../../../_shared/formatted-fence'
 import { Component } from '../core/component.ts'
@@ -84,13 +85,12 @@ export function fenceSection(
   } catch {
     return null
   }
+  // The formatted view parses near the viewport into its own tree.
+  const tree = formattedSyntaxTree(view.state) ?? syntaxTree(view.state)
   // A replaced fence starts at the block; a revealed one ends there.
   for (const side of [1, -1] as const) {
     for (
-      let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(
-        at,
-        side,
-      );
+      let node: SyntaxNode | null = tree.resolveInner(at, side);
       node;
       node = node.parent
     ) {

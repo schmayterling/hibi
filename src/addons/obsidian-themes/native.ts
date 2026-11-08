@@ -52,9 +52,11 @@ async function state(context: NativeAddonContext) {
   if (stored) selection = { ...stored, preselected: false }
   else {
     // Start from what the vault uses in Obsidian.
-    const theme = found.themes.find(
-      (item) => item.name === found.appearance.cssTheme,
-    )
+    // Obsidian names the theme's folder; themes added by hand may differ.
+    const wanted = found.appearance.cssTheme
+    const theme =
+      found.themes.find((item) => item.name === wanted) ??
+      found.themes.find((item) => item.manifest.name === wanted)
     const copy = theme && installed.find((item) => item.hash === theme.hash)?.id
     selection = {
       theme: copy ?? (theme ? `vault:${theme.name}` : null),

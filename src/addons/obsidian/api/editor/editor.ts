@@ -22,6 +22,7 @@ import type {
   DocumentTarget,
   ViewTarget,
 } from '../../../../shared/foundation-contracts'
+import { runSourceHistory } from '../../../../shared/source-history.ts'
 import type { AddonContext } from '../../../api'
 import { type EditorPosition, SourceText } from './text.ts'
 
@@ -351,11 +352,25 @@ export class Editor {
     }
   }
 
+  /** The pane's own history, not the focused pane's. */
+  #history(direction: 'undo' | 'redo') {
+    const cm = this.cm
+    if (cm) {
+      runSourceHistory(cm, direction)
+      return
+    }
+    const active = this.host.hibi.editorViews.getActive()
+    if (
+      active?.viewId === this.target.viewId &&
+      active.viewGeneration === this.target.viewGeneration
+    )
+      void this.host.hibi.editor.runCommand(direction)
+  }
   undo() {
-    void this.host.hibi.editor.runCommand('undo')
+    this.#history('undo')
   }
   redo() {
-    void this.host.hibi.editor.runCommand('redo')
+    this.#history('redo')
   }
   exec(command: string) {
     if (command === 'undo') return this.undo()

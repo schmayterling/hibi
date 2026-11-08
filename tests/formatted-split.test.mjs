@@ -33,6 +33,7 @@ async function open(t, text, beforeSplit) {
   })
   await page.reload()
   await waitForDocumentEditor(app, page)
+  if (beforeSplit) await page.evaluate(beforeSplit)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await app.evaluate(({ dialog }, path) => {
@@ -44,7 +45,16 @@ async function open(t, text, beforeSplit) {
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     text,
   )
-  if (beforeSplit) await page.evaluate(beforeSplit)
+  await waitForDocumentEditor(app, page)
+  // The mode button must not take focus before the opening caret is placed.
+  if (beforeSplit)
+    await waitForAsync(
+      page,
+      (end) =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .selection.main.head === end,
+      text.trimEnd().length,
+    )
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()

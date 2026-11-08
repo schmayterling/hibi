@@ -469,7 +469,8 @@ test('in the formatted view a right-click offers the dictionary for the pressed 
   await define.waitFor()
   // The menu stays open after the page has moved its caret.
   await new Promise((resolve) => setTimeout(resolve, 300))
-  await define.click({ timeout: 1000 })
+  assert.equal(await define.isVisible(), true)
+  await define.click()
   await page
     .getByRole('dialog', { name: 'Define “Happy”' })
     .getByText('Music makes me feel happy.')

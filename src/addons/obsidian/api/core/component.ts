@@ -1,4 +1,4 @@
-import { type EventRef, reportError } from './events'
+import { type EventRef, reportError } from './events.ts'
 
 export class Component {
   private state: 'new' | 'loaded' | 'unloaded' = 'new'

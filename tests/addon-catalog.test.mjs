@@ -40,7 +40,7 @@ const stable = (value) =>
         )
       : value
 
-test('all 41 compiled manifests retain their frozen normalized metadata', async () => {
+test('all 42 compiled manifests retain their frozen normalized metadata', async () => {
   const expected = JSON.parse(
     await readFile(
       fileURLToPath(
@@ -49,7 +49,7 @@ test('all 41 compiled manifests retain their frozen normalized metadata', async 
       'utf8',
     ),
   )
-  assert.equal(builtins.length, 41)
+  assert.equal(builtins.length, 42)
   for (const { manifest, directory } of builtins) {
     assert.equal(basename(directory), manifest.id)
     assert.equal(
@@ -179,6 +179,7 @@ test('all builtins declare bounded json and preserve the renderer and native ent
     'mdx',
     'mediawiki',
     'mermaid',
+    'obsidian-themes',
     'org',
     'quarto',
     'quick-note',
@@ -228,6 +229,7 @@ test('settings, flavors, and analysis retain their existing discovery rules', ()
       'keybeats',
       'mcp-server',
       'mermaid',
+      'obsidian-themes',
       'quick-note',
       'typst',
       'vim',

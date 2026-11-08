@@ -51,6 +51,19 @@ export const OBSIDIAN_DEFAULTS: Readonly<Record<string, string>> = {
   '--font-monospace': 'var(--hibi-o-font-mono)',
   '--font-text': 'var(--hibi-o-font-ui)',
   '--font-text-size': 'var(--hibi-o-text-editor)',
+  // Sizes themes refer to without defining them.
+  '--size-4-1': 'var(--hibi-o-space-1)',
+  '--size-4-2': 'var(--hibi-o-space-2)',
+  '--size-4-3': 'var(--hibi-o-space-3)',
+  '--size-4-4': 'var(--hibi-o-space-4)',
+  '--size-4-6': 'var(--hibi-o-space-5)',
+  '--size-4-8': 'var(--hibi-o-space-6)',
+  '--radius-s': 'var(--hibi-o-radius-control)',
+  '--radius-m': 'var(--hibi-o-radius-panel)',
+  '--font-ui-smaller': 'var(--hibi-o-text-sm)',
+  '--font-ui-small': 'var(--hibi-o-text-ui)',
+  '--text-on-accent': 'var(--hibi-o-background)',
+  '--interactive-accent-hover': 'var(--interactive-accent)',
   ...Object.fromEntries(
     [1, 2, 3, 4, 5, 6].map((level) => [
       `--h${level}-color`,

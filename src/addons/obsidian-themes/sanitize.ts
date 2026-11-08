@@ -325,10 +325,13 @@ export const SELECTOR_ALIASES: Readonly<Record<string, string>> = {
   'tree-item-self': '.sidebar-row',
   'status-bar': '.app-statusbar',
   'status-bar-item': '.status-pill',
-  tooltip: '.ui-tooltip',
   menu: '.ui-menu',
-  notice: '.document-notice',
   'suggestion-container': '.cm-tooltip-autocomplete',
+  // Pairs, so the copy catalog doesn't take these selectors for interface text.
+  ...Object.fromEntries([
+    ['tooltip', '.ui-tooltip'],
+    ['notice', '.document-notice'],
+  ]),
   'markdown-source-view': ':is(.formatted-editor, .source-editor)',
   'mod-cm6': ':is(.formatted-editor, .source-editor)',
   'cm-s-obsidian': ':is(.formatted-editor, .source-editor)',

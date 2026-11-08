@@ -1,50 +1,71 @@
 name: check
+# Diagnostic only, never merge: the huge paragraph width tests with and without the line gap patch.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
     inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
-        type: boolean
-        default: false
+      pattern:
+        description: Test name pattern
+        type: string
+        default: "huge paragraph|a new width lays out"
+      copies:
+        description: Copies as a JSON array
+        type: string
+        default: '[1, 2, 3]'
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
-  # A pull request's newest push replaces its run. Main's runs verify what pull
-  # requests skip, so each finishes, and only the newest waiting push runs next.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: wpwgd-diag2-${{ github.run_id }}
+  cancel-in-progress: false
 jobs:
   desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
+    name: ${{ matrix.os }}-${{ matrix.variant }}-${{ matrix.copy }}
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
+        variant: [base, fix]
+        copy: ${{ fromJSON(inputs.copies) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      PATTERN: ${{ inputs.pattern }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
-        id: ci
-        with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || '' }}
-          full: ${{ github.event_name != 'pull_request' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
+      - name: Base keeps main's codemirror patches
+        if: matrix.variant == 'base'
         shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
+        run: git checkout ef1cd13ca -- scripts/patch-codemirror-view.mjs
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install
+        shell: bash
+        run: node .github/actions/ci/install.mjs
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - name: Build
+        shell: bash
+        run: npm run build
+      - name: Tests
+        shell: bash
+        run: |
+          mkdir -p .cache/wpw
+          git diff --stat ef1cd13ca -- scripts/patch-codemirror-view.mjs > .cache/wpw/patch.txt
+          if [ "$RUNNER_OS" = Linux ]; then
+            dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node --test --test-reporter=tap --test-concurrency=1 "--test-name-pattern=$PATTERN" tests/formatted-tables.test.mjs > .cache/wpw/tables.tap 2>&1 || true
+          else
+            node --test --test-reporter=tap --test-concurrency=1 "--test-name-pattern=$PATTERN" tests/formatted-tables.test.mjs > .cache/wpw/tables.tap 2>&1 || true
+          fi
+          grep -E "^(not )?ok |widths" .cache/wpw/tables.tap | head -20 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: wpw2-${{ github.run_id }}-${{ matrix.os }}-${{ matrix.variant }}-${{ matrix.copy }}
+          path: .cache/wpw/
+          if-no-files-found: error
+          retention-days: 3

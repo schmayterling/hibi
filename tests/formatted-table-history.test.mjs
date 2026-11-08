@@ -223,3 +223,38 @@ test('genuine table pick redo collapses past a later group that took its typing 
     EditorSelection.single(selected.main.to).toJSON(),
   )
 })
+
+// A cell sends each typed glyph as its own input. Typing joins within 500 ms
+// of the last edit, so a space and the next word are one step unless a pause
+// over 500 ms comes between them.
+for (const pause of [10, 501])
+  test(`a typed cell space and the next word ${pause > 500 ? 'split after' : 'join within'} 500 ms`, (t) => {
+    const at = source.indexOf('cell') + 'cell'.length
+    const { view, bridge, session } = fixture(t, at, at)
+    const time = Date.now()
+    for (const [index, glyph] of [...' border'].entries())
+      view.dispatch({
+        changes: { from: at + index, insert: glyph },
+        selection: { anchor: at + index + 1 },
+        annotations: [
+          cellInput.of(true),
+          Transaction.time.of(index ? time + pause + (index - 1) * 10 : time),
+        ],
+        userEvent: 'input.type',
+      })
+    const typed = source.replace('cell', 'cell border')
+    assert.equal(view.state.doc.toString(), typed)
+    const steps =
+      pause > 500 ? [source.replace('cell', 'cell '), source] : [source]
+    assert.deepEqual(session.historyDepth(), { undo: steps.length, redo: 0 })
+    for (const text of steps) {
+      assert.equal(bridge.undo(), true)
+      assert.equal(view.state.doc.toString(), text)
+    }
+    assert.deepEqual(session.historyDepth(), { undo: 0, redo: steps.length })
+    for (const text of [...steps.toReversed().slice(1), typed]) {
+      assert.equal(bridge.redo(), true)
+      assert.equal(view.state.doc.toString(), text)
+    }
+    assert.deepEqual(session.historyDepth(), { undo: steps.length, redo: 0 })
+  })

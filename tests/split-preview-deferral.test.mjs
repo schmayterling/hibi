@@ -165,7 +165,17 @@ async function cmSplit(t, original) {
       )
     if (!sourceMode) {
       const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
-      if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
+      if (tail) {
+        await waitForAsync(
+          page,
+          (tail) =>
+            document
+              .querySelector('.rich-pane .cm-content')
+              ?.innerText.includes(tail),
+          tail,
+        )
+        assert.ok((await rich.innerText()).includes(tail), tail)
+      }
       if (
         !released &&
         (await source.evaluate((element) => document.activeElement === element))

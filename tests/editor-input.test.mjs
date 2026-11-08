@@ -2196,6 +2196,7 @@ async function inputWorkProbe(rich) {
       prevented: [],
       beforeinput: [],
       inputs: [],
+      batches: [],
     }
     const mapping = Object.getPrototypeOf(
       Object.getPrototypeOf(view.state.changes([])),
@@ -2209,6 +2210,18 @@ async function inputWorkProbe(rich) {
     }
     const update = view.update.bind(view)
     view.update = (transactions) => {
+      // Each batch as the source session reads it: its last transaction's
+      // public time and user event, and whether it edits or only selects.
+      const last = transactions.at(-1)
+      if (last)
+        window.cmInputWork.batches.push({
+          time: last.annotation(last.constructor.time),
+          typing: /^(input\.type|delete\.(backward|forward))(\.|$)/.test(
+            last.annotation(last.constructor.userEvent) ?? '',
+          ),
+          changed: transactions.some((transaction) => transaction.docChanged),
+          selection: transactions.some((transaction) => transaction.selection),
+        })
       for (const transaction of transactions)
         if (transaction.docChanged) {
           window.cmInputWork.changes++
@@ -3367,6 +3380,7 @@ test('a separately typed cell space retains its caret and next word', {
       const { app, page, rich, file } = await launchInputFixture(t, source)
       const before = await acceptedInput(page)
       assert.equal(before.markdown, source)
+      await settledInputToolbar(page, 'undo', { disabled: true })
       const end = source.indexOf('south') + 5
       await rich.evaluate((element, anchor) => {
         element.cmTile.root.view.focus()
@@ -3430,14 +3444,43 @@ test('a separately typed cell space retains its caret and next word', {
           .count(),
         0,
       )
+      // The session starts a history step after a selection-only update or a
+      // non-typing edit, or more than 500 ms after the last edit: the space
+      // and the word are one step unless the checks between them took longer.
+      const glyphs = ' border'
+      const starts = []
+      let glyph = 0,
+        cut = true,
+        last = null
+      for (const batch of work.batches) {
+        if (!batch.changed) {
+          cut ||= batch.selection
+          continue
+        }
+        if (cut || batch.time - last.time > 500 || !last.typing)
+          starts.push(glyph)
+        glyph++
+        cut = false
+        last = batch
+      }
+      assert.equal(glyph, glyphs.length)
+      t.diagnostic(`history steps start at ${starts.join(',')}`)
+      const typedTo = (count) =>
+        source.replace('south', `south${glyphs.slice(0, count)}`)
       const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-      await pressShortcut(app, mod + '+z')
-      await waitForInputSource(page, source)
-      await pressShortcut(
-        app,
-        process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
-      )
-      await waitForInputSource(page, typed.markdown)
+      for (const count of starts.toReversed()) {
+        await pressShortcut(app, mod + '+z')
+        await waitForInputSource(page, typedTo(count))
+      }
+      await settledInputToolbar(page, 'undo', { disabled: true })
+      for (const count of [...starts.slice(1), glyphs.length]) {
+        await pressShortcut(
+          app,
+          process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
+        )
+        await waitForInputSource(page, typedTo(count))
+      }
+      await settledInputToolbar(page, 'redo', { disabled: true })
       const redone = await acceptedInput(page)
       await checkCaret(end + ' border'.length)
       const receipt = await page.evaluate(() => window.hibi.saveDocument(false))

@@ -2,6 +2,7 @@ import { ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import { Button, DocumentNotice, Select, SettingRow, Toggle } from '../ui'
+import { Gallery } from './Gallery'
 import { StyleOptions } from './StyleOptions'
 import type { DroppedRule } from './sanitize'
 import type { InstalledTheme, Selection, Vault } from './store'
@@ -276,6 +277,13 @@ export function Settings() {
         />
       )}
       {error && <DocumentNotice title="Could not apply" message={error} />}
+      <Gallery
+        vault={vault}
+        installed={state.installed}
+        chosen={theme}
+        disabled={busy}
+        onChoose={setTheme}
+      />
       {dropped && (
         <details className="ui-disclosure">
           <summary>

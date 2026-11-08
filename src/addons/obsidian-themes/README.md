@@ -45,12 +45,12 @@ Measured against the 47 themes that parsed in the 50 most downloaded community t
 
 | Measure | Covered |
 | --- | --- |
-| Top 30 classes, by number of themes | 21 of 30; 80.0% of their uses |
-| Top 50 classes | 32 of 50; 78.4% of their uses |
-| Top 100 classes | 55 of 100; 68.6% of their uses |
-| Every class use in the survey | 30.3% |
+| Top 30 classes, by number of themes | 24 of 30; 85.8% of their uses |
+| Top 50 classes | 40 of 50; 85.8% of their uses |
+| Top 100 classes | 66 of 100; 76.3% of their uses |
+| Every class use in the survey | 33.4% |
 | Top 30 variables themes define | 27 of 30 |
 | Top 30 variables themes refer to | 26 of 30 |
 | Theme references to documented variables that resolve | 912 of 2,476 (36.8%) |
 
-Covered classes include `.cm-line` and `.modal`, which Hibi already has. The most common classes left out are Obsidian state classes (`is-active`, `is-collapsed`, `is-selected`, `mod-active`), the ribbon and side docks (`workspace-ribbon`, `mod-left`, `mod-right`), settings controls, popovers, embeds and `.cm-formatting`. Variables left out are `--text-highlight-bg`, `--background-modifier-error`, `--tag-background`, `--header-height`, `--accent-h` and the cyan and orange palette colours. Selector coverage shows which rules can match; it does not measure how close a theme looks to Obsidian.
+Covered classes include `.cm-line` and `.modal`, which Hibi already has, and Obsidian's state classes (`is-active`, `is-selected`, `mod-active`, `is-collapsed`), which match Hibi's ARIA and data attributes. While a theme is on, source editors also carry Obsidian's token classes (`.cm-header-N`, `.cm-strong`, `.cm-em`, `.cm-link`, `.cm-url`, `.cm-quote`, `.cm-hr`, `.cm-inline-code`, `.cm-formatting`). The most common classes left out have no Hibi equivalent: the ribbon and side docks (`workspace-ribbon`, `mod-left`, `mod-right`), task list lines, popovers and folder rows. Settings controls (`checkbox-container`, `dropdown`, `vertical-tab-*`) are left out on purpose, and `is-mobile` never matches. Variables left out are `--text-highlight-bg`, `--background-modifier-error`, `--tag-background`, `--header-height`, `--accent-h` and the cyan and orange palette colours. Selector coverage shows which rules can match; it does not measure how close a theme looks to Obsidian.

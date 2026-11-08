@@ -179,6 +179,13 @@ test('Obsidian selectors also match the Hibi elements that play their part', () 
     ':is(.markdown-source-view, :is(.formatted-editor, .source-editor)):is(.mod-cm6, :is(.formatted-editor, .source-editor)) :is(.HyperMD-header-1, .hibi-lp-h1), :not(:is(.cm-strong, .hibi-lp-strong)) .unknown-class, a:is(.tag, .hibi-tag) { color: red ;}',
   )
   assert.equal(result.aliased, 5)
+  // State classes read Hibi's ARIA and data attributes.
+  assert.equal(
+    sanitizeCss(
+      '.workspace-tab-header.is-active, .nav-file-title.is-selected .cm-formatting { color: red }',
+    ).css,
+    ':is(.workspace-tab-header, .document-tab):is(.is-active, [aria-selected="true"], [aria-pressed="true"], [aria-current="page"], [data-selected]), :is(.nav-file-title, .workspace-sidebar .sidebar-row):is(.is-selected, [aria-selected="true"], [data-selected]) :is(.cm-formatting, .hibi-lp-marker) { color: red ;}',
+  )
   // Keyframe selectors and declaration values are not selectors.
   const frames = sanitizeCss('@keyframes tag { from { content: ".tag" } }')
   assert.equal(frames.aliased, 0)

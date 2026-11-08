@@ -101,8 +101,14 @@ export class EditorRuntime {
   markdownViewOf(viewId: string) {
     return this.markdownViews.get(viewId) ?? null
   }
+  /** The pane's note, from its Markdown view or else the workspace's open notes. */
   fileOf(viewId: string) {
-    return this.markdownViews.get(viewId)?.file ?? null
+    const view = this.markdownViews.get(viewId)
+    if (view) return view.file
+    const workspace = this.context.app.workspace as {
+      fileFor?: (target: ViewTarget | null) => unknown
+    }
+    return workspace.fileFor?.(this.targetOf(viewId)) ?? null
   }
 
   targetOf(viewId: string): ViewTarget | null {

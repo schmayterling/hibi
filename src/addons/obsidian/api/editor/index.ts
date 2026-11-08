@@ -55,10 +55,6 @@ type Workspace = {
 export function createEditorApi(context: ApiContext) {
   const { app, hibi } = context
   const runtime = new EditorRuntime(context)
-  const activeFile = () => {
-    const active = hibi.editorViews.getActive()
-    return active ? runtime.fileOf(active.viewId) : null
-  }
   const processors = new Processors(
     app,
     (markdown) =>
@@ -66,7 +62,6 @@ export function createEditorApi(context: ApiContext) {
         markdown,
         hibi.editorViews.getActive()?.documentId,
       ).html,
-    () => (activeFile() as { path?: string } | null)?.path ?? '',
   )
   context.register(() => processors.dispose())
   const reported = new Set<string>()

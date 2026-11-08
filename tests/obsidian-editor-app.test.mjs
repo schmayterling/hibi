@@ -244,6 +244,31 @@ test('obsidian editor extensions, commands and code blocks run in every pane and
   ])
   assert.ok(split.every(({ other, todo }) => other === 'yes' && todo === 1))
 
+  // A block renders with its own pane's note while the other pane has focus.
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'other.md',
+  )
+  const renders = await page.evaluate(
+    () => window.__hibiEditorFixture.paths.length,
+  )
+  await page.evaluate(() => {
+    const editor = document.querySelector(
+      '.editor-page[data-side="left"] .rich-pane .cm-content',
+    ).cmTile.root.view
+    const at = editor.state.doc.toString().indexOf('b\n```')
+    editor.dispatch({ changes: { from: at, to: at + 1, insert: 'c' } })
+  })
+  await waitForAsync(
+    page,
+    (renders) => window.__hibiEditorFixture.paths.length > renders,
+    renders,
+  )
+  assert.equal(
+    await page.evaluate(() => window.__hibiEditorFixture.paths.at(-1)),
+    'note.md',
+  )
+
   // MarkdownRenderer output keeps markup but drops inline styles.
   const rendered = await page.evaluate(() =>
     window.__hibiEditorFixture.render(

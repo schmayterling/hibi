@@ -74,6 +74,7 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
     [
       ['heavy-grid', 'Heavy Grid'],
       ['legacy-ink', 'legacy-ink'],
+      ['Old Flat.css', 'Old Flat'],
       ['paper-lantern', 'Paper Lantern'],
       ['settings-garden', 'Settings Garden'],
     ],
@@ -108,6 +109,15 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
     snippetHashes: { 'accent-tags': snippet.hash },
   })
   await removeTheme(store, legacy.id)
+  // A one-file theme from before Obsidian 0.16 installs like a folder.
+  const flat = await installTheme(
+    store,
+    join(vault, '.obsidian', 'themes', 'Old Flat.css'),
+    'vault',
+  )
+  assert.equal(flat.manifest.name, 'Old Flat')
+  assert.match(await themeCss(store, flat.id), /--background-primary: #0d0f12/)
+  await removeTheme(store, flat.id)
   assert.deepEqual(await snapshot(vault), before)
 
   // Hibi's copy keeps the original, its hash, manifest and attribution.

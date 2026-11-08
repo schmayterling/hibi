@@ -66,6 +66,16 @@ const leaks = {
 
 // Theme CSS that tries to hide, cover, move or disable the way out.
 const hostile = {
+  // Theme layers named like Hibi's: a sublayer of the guard would win.
+  'layer-guard-sublayer':
+    '@layer guard.x { :has(> body) { opacity: 0 !important; zoom: 0.05 !important; } }',
+  'layer-compat': '@layer compat { :root { filter: opacity(0) !important; } }',
+  'layer-obsidian-guard':
+    '@layer obsidian-guard.x { html { transform: translateX(-200vw) !important; } }',
+  'universal-root':
+    '* { opacity: 0 !important; } :not(body) { transform: translateX(-200vw) !important; }',
+  'nth-child-root':
+    ':nth-child(1 of html, body) { content-visibility: hidden !important; }',
   'html-opacity': 'html { opacity: 0 !important; }',
   'html-filter': 'html { filter: opacity(0) !important; }',
   'html-blur': 'html { filter: blur(30px) !important; }',
@@ -273,6 +283,20 @@ test('a theme cannot hide, cover, move or disable the way out', {
     const host = page.locator('[data-obsidian-themes-safe]')
     await host.waitFor({ state: 'attached' })
     await page.waitForTimeout(200)
+    // The page root itself stays as Hibi draws it.
+    const root = await page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement)
+      return [
+        style.opacity,
+        style.filter,
+        style.transform,
+        style.zoom,
+        style.contentVisibility,
+        style.display,
+        style.visibility,
+        style.clipPath,
+      ].join('|')
+    })
     const box = await host.evaluate((element) => {
       const r = element.getBoundingClientRect()
       const x = r.x + r.width / 2
@@ -319,7 +343,7 @@ test('a theme cannot hide, cover, move or disable the way out', {
       )
       await host.waitFor({ state: 'detached' })
     }
-    return { box, inViewport, pixels, clicked }
+    return { box, inViewport, pixels, clicked, root }
   }
   const baseline = await shot('benign')
   assert.ok(baseline.clicked && baseline.inViewport && baseline.box.top)
@@ -332,6 +356,7 @@ test('a theme cannot hide, cover, move or disable the way out', {
     if (!result.inViewport)
       problems.push(`moved/shrunk ${JSON.stringify(result.box)}`)
     if (result.pixels !== baseline.pixels) problems.push('looks different')
+    if (result.root !== baseline.root) problems.push(`page root ${result.root}`)
     if (problems.length) failures[name] = problems
   }
   assert.deepEqual(failures, {})

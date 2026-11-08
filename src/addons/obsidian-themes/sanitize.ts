@@ -362,7 +362,20 @@ export const SELECTOR_ALIASES: Readonly<Record<string, string>> = {
   'HyperMD-quote': '.hibi-lp-quote',
   'cm-quote': '.hibi-lp-quote',
   'HyperMD-list-line': '.hibi-lp-list-item',
-  'task-list-item': '.hibi-lp-task',
+  'task-list-item-checkbox': '.hibi-lp-task',
+  'cm-formatting': '.hibi-lp-marker',
+  'cm-active': '.cm-activeLine',
+  'markdown-embed': '.obsidian-embed',
+  'suggestion-item': '.cm-tooltip-autocomplete li',
+  'clickable-icon': '.icon-button',
+  'view-header-title-container': '.document-title',
+  'workspace-tab-header-inner': '.document-name',
+  // State classes: Hibi keeps state in ARIA and data attributes.
+  'is-active':
+    '[aria-selected="true"], [aria-pressed="true"], [aria-current="page"], [data-selected]',
+  'mod-active': '[aria-selected="true"], [aria-current="page"]',
+  'is-selected': '[aria-selected="true"], [data-selected]',
+  'is-collapsed': '[aria-expanded="false"]',
   callout: '.hibi-lp-alert',
   'callout-title': '.hibi-lp-alert-title',
   'callout-title-inner': '.hibi-lp-alert-title-text',
@@ -670,11 +683,17 @@ function rule(
     const name = head.value
     const rest = prelude.slice(start + 1)
     if (name === 'layer') {
-      // Keep theme layers apart from Hibi's own.
+      // Theme layers get names of their own, so `@layer guard.x` or
+      // `@layer compat` can't nest inside Hibi's obsidian-guard or
+      // obsidian-compat (an inner layer's !important would beat the guard).
       for (let i = 0; i < rest.length; i++) {
         const node = rest[i] as Node
-        if (node.type === 'ident')
-          rest[i] = { ...node, raw: `obsidian-${node.raw}` }
+        const before = rest[i - 1]
+        if (
+          node.type === 'ident' &&
+          !(before?.type === 'delim' && before.value === '.')
+        )
+          rest[i] = { ...node, raw: `obsidian-theme-${node.raw}` }
       }
       const kept = serialize([head, ...rest])
       if (!body) return `${kept};`

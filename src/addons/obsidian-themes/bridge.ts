@@ -158,8 +158,10 @@ export function bridgeCss(appearance: VaultAppearance = {}): string {
     vault.push(`--font-text-size: ${Math.round(appearance.baseFontSize)}px;`)
   const declare = (entries: [string, string][]) =>
     entries.map(([name, value]) => `${name}: ${value};`).join(' ')
-  // Layered !important beats a theme's own !important, and the earliest
-  // layer wins among layered ones, so no theme rule can hide the page root.
+  // For !important, any layer beats unlayered rules and the earliest layer
+  // beats later ones. obsidian-guard is declared first and theme layers are
+  // renamed to obsidian-theme-*, so they can't nest inside it: no theme rule,
+  // !important or not, can hide the page root.
   return `@layer obsidian-guard, obsidian-compat;
 @layer obsidian-guard {
 html, :root { ${guard} }

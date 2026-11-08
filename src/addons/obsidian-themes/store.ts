@@ -62,6 +62,8 @@ export type InstalledTheme = {
   id: string
   manifest: ThemeManifest
   source: 'vault' | 'folder'
+  /** The theme's name in the vault's themes folder, for vault themes. */
+  folder?: string
   hash: string
   assets: Record<string, string>
   sanitizerVersion: number
@@ -157,6 +159,12 @@ export async function readAppearance(vault: string): Promise<VaultAppearance> {
 }
 
 async function readThemeFolder(folder: string) {
+  // Obsidian before 0.16 kept each theme as one file in the themes folder.
+  if ((await lstat(folder)).isFile() && folder.endsWith('.css'))
+    return {
+      manifest: { name: basename(folder).slice(0, -4) } as ThemeManifest,
+      css: await readRegular(folder, MAX_THEME_BYTES),
+    }
   let manifest: ThemeManifest = { name: basename(folder) }
   try {
     const raw: unknown = JSON.parse(
@@ -203,7 +211,10 @@ export async function readVault(vault: string): Promise<Vault> {
   const themeRoot = await configPath(vault, 'themes')
   for (const entry of await entries(themeRoot)) {
     try {
-      if (entry.isDirectory()) {
+      if (
+        entry.isDirectory() ||
+        (entry.isFile() && entry.name.endsWith('.css'))
+      ) {
         const { manifest, css } = await readThemeFolder(
           join(themeRoot as string, entry.name),
         )
@@ -306,6 +317,11 @@ export async function checkTheme(folder: string) {
   }
 }
 
+/** Hash of a theme's CSS as it is now, without checking it. Reads only. */
+export async function themeHash(folder: string) {
+  return sha256((await readThemeFolder(folder)).css)
+}
+
 /** Copy a theme folder into Hibi's data with its hash, manifest and checked CSS. */
 export async function installTheme(
   root: string,
@@ -319,6 +335,7 @@ export async function installTheme(
     id,
     manifest,
     source,
+    ...(source === 'vault' ? { folder: basename(folder) } : {}),
     hash,
     assets: assets.hashes,
     sanitizerVersion: SANITIZER_VERSION,

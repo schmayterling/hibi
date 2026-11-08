@@ -74,7 +74,7 @@ export function validatePluginCss(css: string): void {
           : (character ?? ''),
     )
   if (
-    /@import\b|url\s*\(|(?:javascript|https?|file):|expression\s*\(|-moz-binding|behavior\s*:/i.test(
+    /@import\b|(?:url|(?:-webkit-)?image-set)\s*\(|(?:javascript|https?|file):|expression\s*\(|-moz-binding|behavior\s*:/i.test(
       tokens,
     )
   )
@@ -86,9 +86,11 @@ export function wrapObsidianPlugin(source: string, identity: string): string {
   return `(() => {
 const bridge = globalThis.__hibiObsidianHost.take(${JSON.stringify(identity)});
 const module = { exports: {} };
+try {
 (function (module, exports, require) {
 ${source.replace(/^#![^\n]*(?:\n|$)/, '')}
 })(module, module.exports, bridge.require);
 bridge.loaded(module.exports);
+} catch (error) { bridge.failed(error); }
 })();\n`
 }

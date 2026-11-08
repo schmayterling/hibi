@@ -6,6 +6,7 @@ import { fixtureVault } from './obsidian/harness.mjs'
 test('obsidian lane registrations are scoped and reject non-shared imports', async (t) => {
   const server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
   })
@@ -66,6 +67,7 @@ test('obsidian lane registrations are scoped and reject non-shared imports', asy
 test('component unload removes events, children and intervals exactly once even after an error', async (t) => {
   const server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
   })

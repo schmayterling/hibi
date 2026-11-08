@@ -1,0 +1,9 @@
+{
+  "id": "host-surface",
+  "name": "Host surface",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Exercise plugin lifecycle, controls and overlays.",
+  "author": "Hibi tests",
+  "isDesktopOnly": false
+}

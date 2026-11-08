@@ -1,0 +1,9 @@
+{
+  "id": "host-denied",
+  "name": "Host denied",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Refuse Node.js imports.",
+  "author": "Hibi tests",
+  "isDesktopOnly": false
+}

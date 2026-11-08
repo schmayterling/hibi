@@ -8,6 +8,7 @@ import { fixtureVault } from './obsidian/harness.mjs'
 test('obsidian packages and overlays stay outside the source vault', async (t) => {
   const server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
   })
@@ -77,6 +78,7 @@ test('obsidian packages and overlays stay outside the source vault', async (t) =
 test('package reader refuses desktop-only, oversized, invalid utf-8, symlink and remote css assets', async (t) => {
   const server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
   })
@@ -145,6 +147,7 @@ test('package reader refuses desktop-only, oversized, invalid utf-8, symlink and
 test('stored package integrity is checked before enabling or serving', async (t) => {
   const server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
   })

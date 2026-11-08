@@ -6,6 +6,10 @@ export class Component {
   private cleanups: (() => unknown)[] = []
   private generation = 0
 
+  get isUnloaded(): boolean {
+    return this.state === 'unloaded'
+  }
+
   onload(): void | Promise<void> {}
   onunload(): void {}
 

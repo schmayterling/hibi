@@ -62,6 +62,8 @@ export type InstalledTheme = {
   id: string
   manifest: ThemeManifest
   source: 'vault' | 'folder'
+  /** The theme's name in the vault's themes folder, for vault themes. */
+  folder?: string
   hash: string
   assets: Record<string, string>
   sanitizerVersion: number
@@ -315,6 +317,11 @@ export async function checkTheme(folder: string) {
   }
 }
 
+/** Hash of a theme's CSS as it is now, without checking it. Reads only. */
+export async function themeHash(folder: string) {
+  return sha256((await readThemeFolder(folder)).css)
+}
+
 /** Copy a theme folder into Hibi's data with its hash, manifest and checked CSS. */
 export async function installTheme(
   root: string,
@@ -328,6 +335,7 @@ export async function installTheme(
     id,
     manifest,
     source,
+    ...(source === 'vault' ? { folder: basename(folder) } : {}),
     hash,
     assets: assets.hashes,
     sanitizerVersion: SANITIZER_VERSION,

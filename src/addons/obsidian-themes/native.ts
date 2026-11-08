@@ -20,6 +20,7 @@ import {
   snippetCss,
   styleValues,
   themeCss,
+  themeHash,
   writeSelection,
 } from './store'
 import { styleSettingsCss } from './style-settings'
@@ -96,6 +97,49 @@ async function state(context: NativeAddonContext) {
   }
 }
 
+// When Obsidian (or anything else) has changed a kept vault theme or snippet,
+// copy it again. Only the kept files are read; the vault is never written.
+async function recopy(
+  vault: string,
+  stored: StoredSelection,
+  context: NativeAddonContext,
+): Promise<StoredSelection> {
+  let theme = stored.theme
+  const snippetHashes = { ...stored.snippetHashes }
+  let changed = false
+  const record = theme
+    ? (await installedThemes(root())).find((item) => item.id === theme)
+    : undefined
+  if (record?.source === 'vault') {
+    try {
+      const folder = await vaultThemeFolder(
+        vault,
+        record.folder ?? record.manifest.name,
+      )
+      if ((await themeHash(folder)) !== record.hash) {
+        theme = (await installTheme(root(), folder, 'vault')).id
+        changed = true
+      }
+    } catch {
+      /* A theme gone from the vault keeps its last copy. */
+    }
+  }
+  for (const name of stored.snippets)
+    try {
+      const { hash } = await checkSnippet(vault, name)
+      if (hash !== snippetHashes[name]) {
+        snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
+        changed = true
+      }
+    } catch {
+      /* A snippet gone from the vault keeps its last copy. */
+    }
+  if (!changed || !context.isCurrent()) return stored
+  const next = { ...stored, theme, snippetHashes }
+  await writeSelection(data(), vault, next)
+  return next
+}
+
 // Checked CSS for a theme reference: an installed ID or `vault:<name>`.
 async function cssFor(
   context: NativeAddonContext,
@@ -126,8 +170,9 @@ export default {
     async active(_input, context) {
       const vault = context.workspace.directory()
       if (disabled() || !vault) return { disabled: disabled(), css: null }
-      const stored = await readSelection(data(), vault)
-      if (!stored) return { disabled: false, css: null }
+      const kept = await readSelection(data(), vault)
+      if (!kept) return { disabled: false, css: null }
+      const stored = await recopy(vault, kept, context)
       const parts = [
         stored.theme
           ? await themeCss(root(), stored.theme).catch(() => '')

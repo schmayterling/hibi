@@ -349,6 +349,52 @@ test('source editors get Obsidian token classes only while a theme is on', {
   )
 })
 
+test('a kept vault theme or snippet changed in the vault is copied again on open', {
+  timeout: 90000,
+}, async (t) => {
+  const { vault, profile } = await themedVault(t)
+  const { close, page } = await launch(profile)
+  await select(page, {
+    theme: 'vault:paper-lantern',
+    snippets: ['accent-tags'],
+  })
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.body)
+        .getPropertyValue('--background')
+        .trim() === '#fbf3e4',
+  )
+  await close()
+  // Obsidian, or the user, edits the theme and a snippet in the vault.
+  const css = join(vault, '.obsidian', 'themes', 'paper-lantern', 'theme.css')
+  await writeFile(
+    css,
+    (await readFile(css, 'utf8')).replace('#fbf3e4', '#e4f3fb'),
+  )
+  await writeFile(
+    join(vault, '.obsidian', 'snippets', 'accent-tags.css'),
+    'body { --text-selection: #00ff0055; --review-recopied: yes; }\n',
+  )
+  const before = await snapshot(vault)
+  const again = await launch(profile)
+  await again.page.waitForFunction(
+    () =>
+      getComputedStyle(document.body)
+        .getPropertyValue('--background')
+        .trim() === '#e4f3fb',
+  )
+  assert.equal(
+    await again.page.evaluate(() =>
+      getComputedStyle(document.body)
+        .getPropertyValue('--review-recopied')
+        .trim(),
+    ),
+    'yes',
+  )
+  // Copying again only reads the vault.
+  assert.deepEqual(await snapshot(vault), before)
+})
+
 test('--disable-obsidian-themes starts without the chosen theme', {
   timeout: 60000,
 }, async (t) => {

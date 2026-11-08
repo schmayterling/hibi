@@ -2,14 +2,17 @@ import { randomUUID } from 'node:crypto'
 import {
   closeSync,
   constants,
+  fstatSync,
   lstatSync,
   openSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs'
 import { type FileHandle, lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
+import { sameFileIdentity } from '../shared/file-identity.ts'
 import type { NoteHeading } from '../shared/note-metadata.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 
@@ -93,11 +96,18 @@ export class HeadingStoreWriter {
   constructor(directory: string, id: string, identity: string) {
     if (!/^[a-f0-9]{64}$/.test(id) || !/^[a-f0-9]{64}$/.test(identity))
       throw new TypeError('Invalid metadata record')
-    const info = lstatSync(directory)
+    const info = lstatSync(directory, { bigint: true })
     if (!info.isDirectory() || info.isSymbolicLink())
       throw new TypeError('Invalid metadata record')
     this.directory = directory
     this.record = { key: `${id}-${randomUUID()}`, count: 0, identity }
+    const inside = (fd: number, suffix: string) =>
+      sameFileIdentity(
+        fstatSync(fd, { bigint: true }),
+        lstatSync(join(directory, `.${this.record.key}.${suffix}.tmp`), {
+          bigint: true,
+        }),
+      )
     try {
       this.indexFd = openSync(
         join(directory, `.${this.record.key}.hidx.tmp`),
@@ -109,6 +119,13 @@ export class HeadingStoreWriter {
         'wx',
         0o600,
       )
+      // A folder replaced with a link after the check above must get no byte.
+      if (
+        !sameFileIdentity(statSync(directory, { bigint: true }), info) ||
+        !inside(this.indexFd, 'hidx') ||
+        !inside(this.dataFd, 'hdat')
+      )
+        throw new TypeError('Invalid metadata record')
     } catch (error) {
       this.abort()
       throw error

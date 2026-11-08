@@ -143,6 +143,8 @@ export async function workspaceAction(
 ): Promise<WorkspaceActionReply<boolean> | null> {
   const base = workspaceRoot()
   if (!base) throw new Error('Open a workspace first.')
+  const vault = Boolean(getWorkspace(undefined, false)?.obsidian)
+  const supportedName = (name: string) => isDocumentName(name, true) || vault
   if (!input || typeof input !== 'object')
     throw new Error('Hibi could not read this file operation. Try again.')
   const { action, path, destination, target } = input as Record<string, unknown>
@@ -188,8 +190,11 @@ export async function workspaceAction(
     sourcePath = source
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
-    const folder = draft ? false : (await lstat(source)).isDirectory()
-    if (!folder && !isDocumentName(source, true))
+    const info = draft ? null : await lstat(source)
+    const folder = info?.isDirectory() ?? false
+    if (!draft && !folder && !info?.isFile())
+      throw new Error('Choose a regular file or folder.')
+    if (!folder && !supportedName(source))
       throw new Error('Choose a supported document.')
     if (action === 'delete') {
       if (!(await confirmDiscardAll(window, source))) return null
@@ -210,7 +215,7 @@ export async function workspaceAction(
         const name = basename(source, extension)
         resultPath = await unique(dirname(source), `${name} copy${extension}`)
       } else resultPath = await resolveWorkspaceEntry(base, destination, true)
-      if (!folder && !isDocumentName(resultPath, true))
+      if (!folder && !supportedName(resultPath))
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
         return {

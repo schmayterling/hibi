@@ -143,6 +143,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
     operation,
     settings = {},
     configDir = '.obsidian',
+    setup,
   ) {
     await t.test(name, async () => {
       const root = join(folder, `vault-${observations.length}`)
@@ -157,6 +158,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
           '{"attachmentFolderPath":"wrong"}',
         )
       }
+      if (setup) await setup(root)
       const before = await snapshotVault(root)
       const result = {
         name,
@@ -315,6 +317,110 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
         return {}
       },
       {},
+    )
+  }
+
+  await scenario(
+    'rename supported attachment updates wiki and markdown image targets',
+    async ({ before }) => {
+      await page.evaluate(() =>
+        window.hibi.workspaceAction({
+          action: 'rename',
+          path: 'attachments/pixel.svg',
+          destination: 'renamed.svg',
+        }),
+      )
+      const changes = {
+        'attachments/pixel.svg': null,
+        'attachments/renamed.svg': before.get('attachments/pixel.svg'),
+      }
+      for (const note of [
+        ...formats,
+        ...formats.map((path) => 'editable-' + path),
+      ])
+        changes[note] = {
+          kind: 'file',
+          bytes: Buffer.from(
+            before
+              .get(note)
+              .bytes.toString()
+              .replaceAll('attachments/pixel.svg', 'attachments/renamed.svg'),
+          ),
+        }
+      return changes
+    },
+  )
+  await scenario(
+    'trash supported attachment follows local trash policy',
+    async ({ before }) => {
+      await page.evaluate(() =>
+        window.hibi.workspaceAction({
+          action: 'delete',
+          path: 'attachments/pixel.svg',
+        }),
+      )
+      return {
+        'attachments/pixel.svg': null,
+        '.trash': { kind: 'directory' },
+        '.trash/pixel.svg': before.get('attachments/pixel.svg'),
+      }
+    },
+  )
+
+  await scenario(
+    'binary files copy rename and trash without changing their bytes',
+    async ({ before }) => {
+      await page.evaluate(async () => {
+        await window.hibi.workspaceAction({
+          action: 'copy',
+          path: 'attachments/binary.bin',
+          destination: 'moved/binary.bin',
+        })
+        await window.hibi.workspaceAction({
+          action: 'rename',
+          path: 'moved/binary.bin',
+          destination: 'renamed.bin',
+        })
+        await window.hibi.workspaceAction({
+          action: 'delete',
+          path: 'moved/renamed.bin',
+        })
+      })
+      return {
+        '.trash': { kind: 'directory' },
+        '.trash/renamed.bin': before.get('attachments/binary.bin'),
+      }
+    },
+  )
+
+  if (process.platform !== 'win32') {
+    await scenario(
+      'nonregular paths never reach trash',
+      async () => {
+        await app.evaluate(({ shell }) => {
+          shell.trashItem = async () => {
+            throw new Error('nonregular path reached trash')
+          }
+        })
+        const message = await page.evaluate(() =>
+          window.hibi
+            .workspaceAction({
+              action: 'delete',
+              path: 'pipe.md',
+            })
+            .then(
+              () => '',
+              (error) => error.message,
+            ),
+        )
+        assert.match(message, /regular file or folder/)
+        return {}
+      },
+      { trashOption: 'system' },
+      '.obsidian',
+      (root) => {
+        execFileSync('mkfifo', [join(root, 'pipe.md')])
+      },
     )
   }
 

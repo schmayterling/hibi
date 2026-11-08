@@ -56,3 +56,74 @@ test('case rename never overwrites distinct existing destination', async (t) => 
   assert.equal(await readFile(join(root, 'new.md'), 'utf8'), 'keep\r\n')
   assert.deepEqual((await readdir(root)).sort(), ['new.md', 'old.md'])
 })
+
+test('explorer case-only rename preserves bytes on this volume', async (t) => {
+  const { build } = await import('esbuild')
+  const { createRequire } = await import('node:module')
+  const base = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-explorer-case-')),
+  )
+  t.after(() => rm(base, { recursive: true, force: true }))
+  const root = join(base, 'vault')
+  await fixtureVault(root)
+  const context = {
+    root,
+    current: join(root, 'case/Case.md'),
+    profile: join(base, 'profile'),
+  }
+  const stubs = {
+    './document':
+      'export const getDocument=()=>({tabId:"case",name:"Case.md"}), getDocumentPath=()=>__case.current, getOpenDocuments=()=>[], relocateDocument=(_from,to)=>{__case.current=to}, confirmDiscardAll=async()=>true, closeDeletedDocuments=async()=>{}, newPendingDocument=async()=>null, renameDocument=async()=>({}), selectDocumentTab=async()=>({})',
+    './workspace':
+      'export const workspaceRoot=()=>__case.root, getWorkspace=()=>({obsidian:{externalAddons:false}}), isCurrentWorkspaceTarget=()=>true, refreshWorkspace=async()=>getWorkspace(), notifyWorkspaceContent=async()=>getWorkspace()',
+    electron:
+      'export const app={getPath:()=>__case.profile}, shell={}, dialog={}',
+  }
+  const bundle = await build({
+    entryPoints: ['src/main/workspace-actions.ts'],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    packages: 'external',
+    write: false,
+    plugins: [
+      {
+        name: 'host',
+        setup(b) {
+          b.onResolve(
+            { filter: /^(electron|\.\/document|\.\/workspace)$/ },
+            (args) =>
+              Object.hasOwn(stubs, args.path)
+                ? { path: args.path, namespace: 'host' }
+                : null,
+          )
+          b.onLoad({ filter: /.*/, namespace: 'host' }, (args) => ({
+            contents: stubs[args.path],
+          }))
+        },
+      },
+    ],
+  })
+  const module = { exports: {} }
+  new Function(
+    'module',
+    'exports',
+    'require',
+    '__case',
+    bundle.outputFiles[0].text,
+  )(module, module.exports, createRequire(import.meta.url), context)
+  const before = await snapshotVault(root)
+  const reply = await module.exports.workspaceAction(
+    {},
+    { action: 'rename', path: 'case/Case.md', destination: 'CASE.md' },
+  )
+  assert.equal(reply.path, 'case/CASE.md')
+  assert.ok((await readdir(join(root, 'case'))).includes('CASE.md'))
+  assert.deepEqual(
+    diffVault(before, await snapshotVault(root), {
+      'case/Case.md': null,
+      'case/CASE.md': before.get('case/Case.md'),
+    }),
+    [],
+  )
+})

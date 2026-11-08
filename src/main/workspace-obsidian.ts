@@ -31,6 +31,13 @@ export async function obsidianConfiguration(root: string) {
   const standard = await lstat(join(root, '.obsidian')).catch(() => null)
   if (standard?.isDirectory() && !standard.isSymbolicLink())
     return { directory: '.obsidian', folders: ['.obsidian'], notice: '' }
+  if (standard)
+    return {
+      directory: null,
+      folders: ['.obsidian'],
+      notice:
+        'Obsidian configuration is not a regular folder. Hibi uses Obsidian defaults.',
+    }
   const folders: string[] = []
   for (const entry of await readdir(root, { withFileTypes: true })) {
     if (

@@ -201,6 +201,21 @@ test('custom config directory also externalizes metadata and protects config byt
   assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])
 })
 
+test('a symlinked default config keeps vault state external and settings read-only', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const f = await fixture(t)
+  const { rename } = await import('node:fs/promises')
+  const outside = join(f.directory, 'outside-config')
+  await rename(join(f.root, '.obsidian'), outside)
+  await symlink(outside, join(f.root, '.obsidian'))
+  const before = await snapshotVault(f.root)
+  const outsideBefore = await snapshotVault(outside)
+  await f.writeWorkspaceText(f.root, f.WORKSPACE_MANIFEST, manifest('overlay'))
+  assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])
+  assert.deepEqual(diffVault(outsideBefore, await snapshotVault(outside)), [])
+})
+
 test('metadata vault identity uses canonical path and isolates different vaults', {
   skip: process.platform === 'win32',
 }, async (t) => {

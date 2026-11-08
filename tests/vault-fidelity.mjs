@@ -37,7 +37,7 @@ export const syntax = [
   paragraph,
   '',
   '[[nested/Target|alias]] [[nested/Target#Heading|heading]] [[nested/Target#^block-id]]',
-  '![[nested/Target#Heading]] ![[attachments/pixel.svg|48]]',
+  '![[nested/Target#Heading]] ![[attachments/pixel.svg|48]] ![pixel](attachments/pixel.svg "keep title")',
   '',
   'Keep this block. ^keep-id',
   '',

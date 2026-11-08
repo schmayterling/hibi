@@ -33,6 +33,7 @@ test.before(async () => {
     electron: `const host = globalThis.__vaultNativeTest; export const BrowserWindow = { getAllWindows: () => host.windows }; export const app = {getPath: () => host.root}`,
     workspace: `const host = globalThis.__vaultNativeTest; export const currentWorkspaceTarget = () => ({ workspaceId: 'fixture', workspaceGeneration: 1 }); export const isCurrentWorkspaceTarget = target => target?.workspaceId === 'fixture' && target?.workspaceGeneration === 1; export const workspaceChangeCursor = () => ({sequence: 1}); export const refreshWorkspace = async () => {}; export const listWorkspaceEntryPage = request => { if (request.sequence !== 1) return {ok:false,message:'stale sequence'}; return {ok:true,value:{entries:host.entries,sequence:1,nextCursor:null}} }`,
     document: `const host = globalThis.__vaultNativeTest; export const getDocumentPath = () => host.active; export const getOpenDocumentVersions = () => host.documents`,
+    'workspace-files': `export const updateWorkspaceText = async (...args) => { if (args[5]) args[5](); globalThis.__vaultNativeTest.update = args; return {ok:true,value:{persisted:true}} }`,
     'workspace-actions': `export const workspaceAction = async (_window, request) => { globalThis.__vaultNativeTest.actions.push(request); return {path: request.path} }`,
   }
   server = await createServer({
@@ -132,6 +133,22 @@ test('native stat/list/info return relative descriptors and revalidate identity'
   )
   state.current = false
   await assert.rejects(env.queries.vaultInfo(env.input), /changed/)
+  const write = {
+    ...env.input,
+    path: 'untouched.md',
+    expectedVersion: 'version',
+    markdown: 'plugin',
+  }
+  state.current = true
+  assert.equal((await env.methods.vaultUpdateText(write)).ok, true)
+  assert.deepEqual(state.update.slice(0, 5), [
+    target,
+    write.path,
+    write.expectedVersion,
+    write.markdown,
+    { allowMetadataReset: true },
+  ])
+  assert.equal(state.update[6], true)
   await env.assertUnchanged()
 })
 
@@ -145,8 +162,17 @@ test('native mutations use shared actions and refuse config paths, escapes, syml
     'sub/.obsidian/file',
     'sub/../note.md',
     'c:/note.md',
+    'C:x',
   ]) {
     await assert.rejects(env.methods.vaultCreateFolder({ ...env.input, path }))
+    await assert.rejects(
+      env.methods.vaultUpdateText({
+        ...env.input,
+        path,
+        markdown: 'x',
+        expectedVersion: 'version',
+      }),
+    )
     await assert.rejects(
       env.methods.vaultAction({ ...env.input, path, action: 'delete' }),
     )
@@ -281,6 +307,7 @@ test('custom configDir comes from shared detector and remains inaccessible', asy
     join(env.vault, '.custom-vault', 'app.json'),
     '{"newLinkFormat":"relative"}',
   )
+  await writeFile(join(env.vault, '.custom-vault', 'appearance.json'), '{}')
   const info = await env.queries.vaultInfo(env.input)
   assert.equal(info.configDir, '.custom-vault')
   assert.equal(info.settings.newLinkFormat, 'relative')
@@ -292,6 +319,7 @@ test('custom configDir comes from shared detector and remains inaccessible', asy
     env.methods.vaultCreateFolder({ ...env.input, path: '.custom-vault/new' }),
     /configuration/,
   )
+  await rm(join(env.vault, '.custom-vault', 'appearance.json'))
   await rm(join(env.vault, '.custom-vault', 'app.json'))
   await rename(join(env.vault, '.custom-vault'), join(env.vault, '.obsidian'))
   await env.assertUnchanged()

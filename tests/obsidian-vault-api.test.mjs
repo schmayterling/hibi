@@ -70,6 +70,7 @@ async function environment(t) {
       assert.equal(snapshot.version, contentVersion)
       const source = snapshot.materialize()
       calls.saves++
+      if (state.duringSave) return state.duringSave(tabId)
       await writeFile(join(fixture.vault, state.openPath), source)
       return {
         status: 'saved',
@@ -181,6 +182,13 @@ async function environment(t) {
         },
         invoke: async (method, request) => {
           const path = join(fixture.vault, request.path)
+          if (method === 'vaultUpdateText')
+            return context.hibi.workspace.updateText(
+              request.target,
+              request.path,
+              request.expectedVersion,
+              request.markdown,
+            )
           if (method === 'vaultCreateFolder') await mkdir(path)
           else if (request.action === 'rename')
             await rename(path, join(fixture.vault, request.destination))
@@ -288,15 +296,86 @@ test('process serializes against real document session and saves unsaved edits b
     Array.from({ length: 8 }, (_, index) => `${index}\r\n`).join('')
   assert.equal(
     await readFile(join(env.fixture.vault, 'open.md'), 'utf8'),
+    initial,
+  )
+  assert.equal(
+    env.calls.saves,
+    0,
+    'process modifies the open session without saving it',
+  )
+  await env.documents.save(env.documents.listOpen()[0].target)
+  assert.equal(
+    await readFile(join(env.fixture.vault, 'open.md'), 'utf8'),
     expected,
   )
   assert.equal(env.runtime.session('one').snapshot().materialize(), expected)
   assert.equal(env.calls.updates, 0)
-  assert.equal(env.calls.saves, 8)
+  assert.equal(env.calls.saves, 1)
   assert.equal(
     env.calls.lists,
     lists,
     'content changes never reload the vault tree',
+  )
+  await rm(join(env.fixture.vault, 'open.md'))
+  await env.fixture.assertUnchanged()
+})
+
+test('an applied open-note process succeeds independently of later save races', async (t) => {
+  const env = await environment(t)
+  const initial = 'base\r\n'
+  await writeFile(join(env.fixture.vault, 'open.md'), initial)
+  env.state.openPath = 'open.md'
+  env.runtime.activate({
+    tabId: 'one',
+    tabs: [{ id: 'one', name: 'open.md', dirty: false }],
+    tabsEnabled: true,
+    id: 'file',
+    ephemeral: false,
+    markdown: initial,
+    savedMarkdown: initial,
+    name: 'open.md',
+    dirty: false,
+    revision: 1,
+    contentVersion: 0,
+    canAutosave: true,
+  })
+  await env.vault.refresh()
+  env.state.duringSave = () => {
+    const source = env.runtime.session('one').snapshot().materialize()
+    const target = env.documents.listOpen()[0].target
+    env.documents.applyEdits({
+      requestId: 'user-during-save',
+      target,
+      changes: [
+        {
+          from: source.length,
+          to: source.length,
+          insert: 'user',
+          expectedText: '',
+        },
+      ],
+    })
+    return { status: 'stale', document: null }
+  }
+  assert.equal(
+    await env.vault.process(
+      env.vault.getFileByPath('open.md'),
+      (source) => `${source}plugin\r\n`,
+    ),
+    `${initial}plugin\r\n`,
+  )
+  assert.equal(env.calls.saves, 0)
+  assert.equal(
+    (await env.documents.save(env.documents.listOpen()[0].target)).status,
+    'stale',
+  )
+  assert.equal(
+    env.runtime.session('one').snapshot().materialize(),
+    `${initial}plugin\r\nuser`,
+  )
+  assert.equal(
+    await readFile(join(env.fixture.vault, 'open.md'), 'utf8'),
+    initial,
   )
   await rm(join(env.fixture.vault, 'open.md'))
   await env.fixture.assertUnchanged()
@@ -427,6 +506,84 @@ test('content-only events add and remove UI-hidden attachment descriptors', asyn
     ['delete', 'external.png'],
   ])
   await env.fixture.assertUnchanged()
+})
+
+test('frontmatter changes preserve every untouched pair and create block mappings', () => {
+  const long = 'word '.repeat(40).trim()
+  for (const source of [
+    `---\nsummary: ${long}\ntitle: a\n---\nbody\n`,
+    '---\ntags:\n- one\n- two\ntitle: a\n---\nbody\n',
+    "---\nq: 'v'\n# top comment\ntitle: a\n\nother: 1 # c\n---\nbody\n",
+    '---\r\ncreated: 2024-01-01\nother: x\rtitle: a\r\n---\r\nbody  \r\n',
+    '---\ndefaults: &ref\n  value: 1\nalias: *ref\ntitle: a\n---\nbody',
+    '---\n{ tags: [one, two], title: a, keep: "quoted" }\n---\nbody',
+  ])
+    assert.equal(
+      fileManagerApi.editFrontmatter(source, (data) => {
+        data.title = 'b'
+      }),
+      source.replace('title: a', 'title: b'),
+    )
+  assert.equal(
+    fileManagerApi.editFrontmatter('\ufeffbody\r\n', (data) => {
+      data.tags = ['a', 'b']
+      data.title = 'x'
+    }),
+    '\ufeff---\r\ntags:\r\n  - a\r\n  - b\r\ntitle: x\r\n---\r\n\r\nbody\r\n',
+  )
+  assert.equal(
+    fileManagerApi.editFrontmatter('---\n---\nbody', (data) => {
+      data.a = 1
+    }),
+    '---\na: 1\n---\nbody',
+  )
+  assert.equal(
+    fileManagerApi.editFrontmatter('---\r\n# keep\r\n---\r\nbody', (data) => {
+      data.a = 1
+    }),
+    '---\r\n# keep\r\na: 1\r\n---\r\nbody',
+  )
+})
+
+test('frontmatter pair patches support additions and deletions without rewriting survivors', () => {
+  for (const yaml of [
+    "a: 1\nb: 2\nc: 3\nkeep: 'quoted' # raw\n",
+    "  a: 1\n  b: 2\n  c: 3\n  keep: 'quoted' # raw\n",
+    "{ a: 1, b: 2, c: 3, keep: 'quoted' }\n",
+    "{ keep: 'quoted', a: 1, b: 2, c: 3 }\n",
+    "{ a: 1, b: 2, keep: 'quoted', c: 3, }\n",
+  ])
+    for (const removed of [
+      ['a'],
+      ['b'],
+      ['c'],
+      ['a', 'b'],
+      ['b', 'c'],
+      ['a', 'c'],
+    ]) {
+      const source = '---\n' + yaml + '---\nbody  \r\n'
+      let after
+      assert.doesNotThrow(() => {
+        after = fileManagerApi.editFrontmatter(source, (data) => {
+          for (const key of removed) delete data[key]
+          data.added = ['one', 'two']
+        })
+      }, yaml + JSON.stringify(removed))
+      assert.ok(after.includes("keep: 'quoted'"), yaml)
+      assert.ok(after.endsWith('---\nbody  \r\n'), yaml)
+    }
+})
+
+test('adapter existence treats protected paths as unavailable', async (t) => {
+  const { vault } = await environment(t)
+  for (const path of [
+    '.obsidian',
+    '.obsidian/app.json',
+    '../outside.md',
+    'C:x',
+  ])
+    assert.equal(await vault.adapter.exists(path), false)
+  assert.equal(await vault.adapter.exists('untouched.md'), true)
 })
 
 test('source edits expand unicode and crlf seams without touching other units', () => {

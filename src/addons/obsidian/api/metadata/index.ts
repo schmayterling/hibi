@@ -1,5 +1,8 @@
 import { isMarkdownDocument } from '../../../../shared/document-types'
-import type { WorkspaceTarget } from '../../../../shared/foundation-contracts'
+import type {
+  DocumentTarget,
+  WorkspaceTarget,
+} from '../../../../shared/foundation-contracts'
 import { readFrontmatter } from '../../../../shared/frontmatter'
 import {
   localTargetPath,
@@ -9,6 +12,7 @@ import {
   wikiTargetName,
 } from '../../../../shared/note-links'
 import { noteProperties } from '../../../../shared/note-metadata'
+import { shortestObsidianPath } from '../../../../shared/obsidian-links'
 import { Events, reportError } from '../core/events'
 import { registerObsidianApi } from '../registry'
 import type { ApiContext } from '../types'
@@ -28,6 +32,8 @@ export interface CachedMetadata {
 
 type LinkCounts = Record<string, Record<string, number>>
 type CacheEntry = {
+  version: string
+  stale?: boolean
   cache: CachedMetadata
   resolved: Record<string, number>
   unresolved: Record<string, number>
@@ -66,7 +72,7 @@ export class MetadataCache extends Events {
           workspaceId: event.workspaceId,
           workspaceGeneration: event.workspaceGeneration,
         }
-        this.invalidate(same)
+        this.invalidate(same, event.kind === 'content' ? event.paths : null)
       },
     )
     if (this.disposed) {
@@ -76,19 +82,36 @@ export class MetadataCache extends Events {
     this.stops.push(() => stream.dispose())
     this.target ??= stream.snapshot.target
     this.stops.push(
-      this.context.hibi.documents.subscribe(() => this.invalidate(true)),
+      this.context.hibi.documents.subscribe((event) => {
+        const target =
+          event.kind === 'closed' ? event.target : event.metadata?.target
+        const file = target ? this.documentFile(target) : null
+        this.invalidate(true, file ? [file.path] : null)
+      }),
     )
     this.stops.push(
       this.context.hibi.editor.onSyntaxChange(() => this.invalidate(true)),
     )
   }
 
-  private invalidate(refresh: boolean) {
-    this.revision++
-    const paths = [...new Set([...this.entries.keys(), ...this.pending.keys()])]
-    this.entries.clear()
-    this.pending.clear()
-    if (refresh) for (const path of paths) this.request(path)
+  private invalidate(
+    refresh: boolean,
+    affected: readonly string[] | null = null,
+  ) {
+    if (!refresh) {
+      this.revision++
+      this.entries.clear()
+      this.pending.clear()
+      return
+    }
+    const paths = new Set([...this.entries.keys(), ...this.pending.keys()])
+    for (const path of paths) {
+      if (affected && !affected.includes(path)) continue
+      const entry = this.entries.get(path)
+      if (entry && affected) entry.stale = true
+      this.pending.delete(path)
+      this.request(path)
+    }
   }
 
   dispose() {
@@ -113,7 +136,7 @@ export class MetadataCache extends Events {
     )
       return null
     const entry = this.entries.get(path)
-    if (entry) {
+    if (entry && !entry.stale) {
       this.entries.delete(path)
       this.entries.set(path, entry)
       return entry.cache
@@ -160,7 +183,6 @@ export class MetadataCache extends Events {
       (sourcePath !== '' && !validMetadataPath(sourcePath))
     )
       throw new Error('Use vault-relative file paths.')
-    const name = file.path.slice(file.path.lastIndexOf('/') + 1)
     const format = this.context.app.vault.settings?.newLinkFormat
     let link = file.path
     if (format === 'relative') {
@@ -176,14 +198,12 @@ export class MetadataCache extends Events {
     }
     if (format === 'absolute')
       return omitMdExtension ? link.replace(/\.md$/i, '') : link
-    const candidate = omitMdExtension ? name.replace(/\.md$/i, '') : name
-    const matches = noteBasenames(this.paths()).get(name) ?? []
-    if (
-      matches.length === 1 &&
-      this.getFirstLinkpathDest(candidate, sourcePath)?.path === file.path
-    )
-      return candidate
-    return omitMdExtension ? file.path.replace(/\.md$/i, '') : file.path
+    const shortest = shortestObsidianPath(file.path, this.paths())
+    return omitMdExtension ? shortest.replace(/\.md$/i, '') : shortest
+  }
+
+  private documentFile(target: DocumentTarget): TFile | null {
+    return this.context.app.vault.getFileForDocument?.(target) ?? null
   }
 
   private file(path: string): TFile | null {
@@ -226,8 +246,9 @@ export class MetadataCache extends Events {
   }
 
   private linkRow(path: string, field: 'resolved' | 'unresolved') {
-    this.getCache(path)
-    return this.entries.get(path)?.[field]
+    if (!this.getCache(path)) return undefined
+    const entry = this.entries.get(path)
+    return entry?.[field]
   }
 
   private request(path: string) {
@@ -242,20 +263,33 @@ export class MetadataCache extends Events {
       return
     const revision = this.revision
     const target = this.target
-    const current = () => !this.disposed && revision === this.revision
-    const job = this.tail
+    // The pending job is a per-path epoch; unrelated edits cannot cancel it.
+    const current = (): boolean =>
+      !this.disposed &&
+      revision === this.revision &&
+      this.pending.get(path) === job
+    let wasCurrent = false
+    const job: Promise<void> = this.tail
       .then(() => (current() ? this.load(path, target, current) : undefined))
       .finally(() => {
+        wasCurrent = current()
         if (this.pending.get(path) === job) this.pending.delete(path)
       })
     this.pending.set(path, job)
     this.tail = job.then(
       () => {
-        if (current() && !this.pending.size && this.entries.has(path))
+        if (
+          wasCurrent &&
+          !this.disposed &&
+          revision === this.revision &&
+          !this.pending.size &&
+          this.entries.has(path)
+        )
           this.trigger('resolved')
       },
       (error) => {
-        if (current()) reportError(error)
+        if (wasCurrent && !this.disposed && revision === this.revision)
+          reportError(error)
       },
     )
   }
@@ -319,6 +353,7 @@ export class MetadataCache extends Events {
       JSON.stringify(
         hibi.documents
           .listOpen()
+          .filter(({ target }) => this.documentFile(target)?.path === path)
           .map(({ tabId, target }) => [
             tabId,
             target.documentId,
@@ -354,7 +389,7 @@ export class MetadataCache extends Events {
     )
       return
     const properties = noteProperties(data, page.syntax.settings)
-    if (page.syntax.settings.frontmatter && readFrontmatter(data))
+    if (page.syntax.settings.frontmatter && readFrontmatter(data, true))
       cache.frontmatter = { ...properties.values }
     const paths = this.paths()
     const basenames = noteBasenames(paths)
@@ -374,11 +409,28 @@ export class MetadataCache extends Events {
       count(href, resolveWikiTarget(path, href, paths, basenames))
     const file = this.file(path)
     if (!current() || !file) return
+    const previous = this.entries.get(path)
+    if (
+      previous?.version === page.version &&
+      JSON.stringify([
+        previous.cache,
+        previous.resolved,
+        previous.unresolved,
+      ]) === JSON.stringify([cache, resolved, unresolved])
+    ) {
+      previous.stale = false
+      return
+    }
     // ponytail: retain at most 128 requested notes; use host-backed eviction if plugins need larger synchronous caches.
     const oldest = this.entries.keys().next().value
-    if (this.entries.size >= 128 && oldest !== undefined)
+    if (!previous && this.entries.size >= 128 && oldest !== undefined)
       this.entries.delete(oldest)
-    this.entries.set(path, { cache, resolved, unresolved })
+    this.entries.set(path, {
+      version: page.version,
+      cache,
+      resolved,
+      unresolved,
+    })
     this.trigger('changed', file, data, cache)
     if (current()) this.trigger('resolve', file)
   }

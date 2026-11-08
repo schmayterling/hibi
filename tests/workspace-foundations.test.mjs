@@ -473,6 +473,20 @@ test('scoped text service guards reads, creates and closed-file updates', async 
       ).code,
       'conflict',
     )
+    await writeFile(join(root, 'preserve.md'), 'old', { mode: 0o640 })
+    const preserved = await readWorkspaceText(target, 'preserve.md')
+    const preservedUpdate = await updateWorkspaceText(
+      target,
+      'preserve.md',
+      preserved.value.version,
+      'new',
+      { allowMetadataReset: true },
+      undefined,
+      true,
+    )
+    assert.equal(preservedUpdate.ok, true)
+    assert.equal((await stat(join(root, 'preserve.md'))).mode & 0o777, 0o640)
+    assert.equal(await readFile(join(root, 'preserve.md'), 'utf8'), 'new')
     finalNoteText = 'committed update'
   }
   assert.equal(

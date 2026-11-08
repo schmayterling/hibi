@@ -68,6 +68,14 @@ function environment(t, sources = new Map([['note.md', '# One\n']])) {
     app: {
       vault: {
         getFileByPath: (path) => files.get(path) ?? null,
+        getFileForDocument: (target) => {
+          const open = state.open.find(
+            (document) =>
+              document.target.documentId === target.documentId &&
+              document.target.documentGeneration === target.documentGeneration,
+          )
+          return files.get(open?.path) ?? null
+        },
         getFiles: () => [...files.values()],
         read: async (file) => {
           calls.reads.push(file.path)
@@ -157,16 +165,16 @@ function environment(t, sources = new Map([['note.md', '# One\n']])) {
     files,
     target,
     start: () => apiCache.start(),
-    change: (kind = 'content') => {
+    change: (kind = 'content', paths = null) => {
       state.sequence++
       workspaceListener({
         ...target,
         kind,
         sequence: state.sequence,
-        paths: null,
+        paths,
       })
     },
-    documentChange: () => documentListener({ kind: 'changed' }),
+    documentChange: (event = { kind: 'changed' }) => documentListener(event),
     syntaxChange: () => syntaxListener(),
   }
 }
@@ -391,7 +399,6 @@ test('content, document and syntax changes refresh only requested notes; dispose
       })
     })
     change()
-    assert.equal(env.cache.getCache('note.md'), null)
     await completed
     assert.equal(env.cache.getCache('note.md').headings[0].heading, 'new')
   }
@@ -400,6 +407,222 @@ test('content, document and syntax changes refresh only requested notes; dispose
   assert.equal(env.calls.stopped, 3)
   assert.equal(env.cache.getCache('note.md'), null)
   assert.deepEqual(Object.keys(env.cache.resolvedLinks), [])
+})
+
+for (const event of ['document', 'workspace', 'unknown document']) {
+  test(`metadata ${event} change preserves unrelated cache identity and events`, async (t) => {
+    const env = environment(
+      t,
+      new Map([
+        ['a.md', '# old'],
+        ['b.md', '# untouched'],
+      ]),
+    )
+    const target = {
+      documentId: 'doc-a',
+      documentGeneration: 1,
+      contentVersion: 1,
+    }
+    env.state.open = [{ tabId: 'tab-a', path: 'a.md', target }]
+    await env.start()
+    const a = await ready(env.cache, 'a.md')
+    const b = await ready(env.cache, 'b.md')
+    env.calls.native.length = 0
+    const changed = []
+    env.cache.on('changed', (file) => changed.push(file.path))
+    const completed = new Promise((resolve) => {
+      const ref = env.cache.on('resolved', () => {
+        env.cache.offref(ref)
+        resolve()
+      })
+    })
+    // Keep fake worker version constant: metadata still detects the changed note.
+    env.sources.set('a.md', '# new')
+    if (event === 'workspace') env.change('content', ['a.md'])
+    else
+      env.documentChange(
+        event === 'document'
+          ? { kind: 'changed', metadata: { tabId: 'tab-a', target } }
+          : undefined,
+      )
+    assert.equal(env.cache.getCache('b.md'), b)
+    if (event === 'unknown document')
+      assert.equal(env.cache.getCache('a.md'), a)
+    await completed
+    assert.deepEqual(changed, ['a.md'])
+    assert.equal(env.cache.getCache('b.md'), b)
+    assert.equal(env.cache.getCache('a.md').headings[0].heading, 'new')
+    if (event !== 'unknown document')
+      assert.deepEqual(new Set(env.calls.native), new Set(['a.md']))
+  })
+}
+
+test('unknown document refresh preserves unchanged metadata and link rows', async (t) => {
+  const env = environment(t)
+  await env.start()
+  const cache = await ready(env.cache, 'note.md')
+  const row = env.cache.resolvedLinks['note.md']
+  const changed = []
+  env.cache.on('changed', (file) => changed.push(file.path))
+  const completed = new Promise((resolve) => {
+    const ref = env.cache.on('resolved', () => {
+      env.cache.offref(ref)
+      resolve()
+    })
+  })
+  env.documentChange()
+  assert.equal(env.cache.getCache('note.md'), cache)
+  await completed
+  assert.equal(env.cache.getCache('note.md'), cache)
+  assert.equal(env.cache.resolvedLinks['note.md'], row)
+  assert.deepEqual(changed, [])
+})
+
+test('targeted changes do not cancel an unrelated source read', async (t) => {
+  const env = environment(
+    t,
+    new Map([
+      ['a.md', '# a'],
+      ['b.md', '# b'],
+    ]),
+  )
+  const target = {
+    documentId: 'doc-a',
+    documentGeneration: 1,
+    contentVersion: 1,
+  }
+  env.state.open = [{ tabId: 'tab-a', path: 'a.md', target }]
+  await env.start()
+  let release, reading
+  const paused = new Promise((resolve) => {
+    release = resolve
+  })
+  const started = new Promise((resolve) => {
+    reading = resolve
+  })
+  env.state.read = async (file) => {
+    reading()
+    await paused
+    return env.sources.get(file.path)
+  }
+  const completed = ready(env.cache, 'b.md')
+  await started
+  target.contentVersion++
+  env.documentChange({ kind: 'changed', metadata: { tabId: 'tab-a', target } })
+  release()
+  assert.equal((await completed).headings[0].heading, 'b')
+  assert.deepEqual(env.calls.reads, ['b.md'])
+})
+
+test('deleted files cannot expose retained link rows during a refresh', async (t) => {
+  const env = environment(t)
+  await env.start()
+  await ready(env.cache, 'note.md')
+  assert.ok(env.cache.resolvedLinks['note.md'])
+  env.files.delete('note.md')
+  env.change('tree')
+  assert.equal(env.cache.getCache('note.md'), null)
+  assert.equal(env.cache.resolvedLinks['note.md'], undefined)
+  assert.equal(env.cache.unresolvedLinks['note.md'], undefined)
+})
+
+test('targeted changes cancel the older load for the same document', async (t) => {
+  const env = environment(t, new Map([['note.md', '#old']]))
+  const target = { documentId: 'doc', documentGeneration: 1, contentVersion: 1 }
+  env.state.open = [{ tabId: 'tab', path: 'note.md', target }]
+  let release
+  env.state.pause = new Promise((resolve) => {
+    release = resolve
+  })
+  await env.start()
+  const changed = []
+  env.cache.on('changed', (_file, _data, cache) =>
+    changed.push(api.getAllTags(cache)),
+  )
+  const completed = ready(env.cache, 'note.md')
+  await Promise.resolve()
+  assert.equal(env.calls.native.length, 1)
+  env.sources.set('note.md', '#new')
+  env.documentChange({ kind: 'changed', metadata: { tabId: 'tab', target } })
+  release()
+  await completed
+  assert.deepEqual(changed, [['#new']])
+  assert.deepEqual(env.calls.reads, ['note.md'])
+})
+
+test('unknown refresh publishes a new worker version even when metadata is equal', async (t) => {
+  const env = environment(t)
+  await env.start()
+  const cache = await ready(env.cache, 'note.md')
+  const changed = []
+  env.cache.on('changed', (file) => changed.push(file.path))
+  env.state.workerVersion = 'disk:2'
+  const completed = new Promise((resolve) => {
+    const ref = env.cache.on('resolved', () => {
+      env.cache.offref(ref)
+      resolve()
+    })
+  })
+  env.documentChange()
+  await completed
+  assert.notEqual(env.cache.getCache('note.md'), cache)
+  assert.deepEqual(changed, ['note.md'])
+})
+
+test('requested metadata stays bounded to 128 notes across refreshes', async (t) => {
+  const env = environment(
+    t,
+    new Map(
+      Array.from({ length: 129 }, (_, index) => [`${index}.md`, '# note']),
+    ),
+  )
+  await env.start()
+  const completed = ready(env.cache, '0.md')
+  for (let index = 1; index < 129; index++)
+    assert.equal(env.cache.getCache(`${index}.md`), null)
+  await completed
+  assert.equal(new Set(env.calls.native).size, 128)
+  const second = env.cache.getCache('2.md')
+  await ready(env.cache, '128.md')
+  const refreshed = new Promise((resolve) => {
+    const ref = env.cache.on('resolved', () => {
+      env.cache.offref(ref)
+      resolve()
+    })
+  })
+  env.documentChange()
+  await refreshed
+  assert.equal(env.cache.getCache('2.md'), second)
+  assert.equal(env.cache.getCache('1.md'), null)
+})
+
+test('metadata shortest links use the shortest unique folder suffix', async (t) => {
+  const env = environment(
+    t,
+    new Map([
+      ['notes/deep/one/duplicate.md', ''],
+      ['other/two/duplicate.md', ''],
+      ['duplicate.md', ''],
+      ['elsewhere/duplicate.md', ''],
+    ]),
+  )
+  await env.start()
+  assert.equal(
+    env.cache.fileToLinktext(env.files.get('notes/deep/one/duplicate.md'), ''),
+    'one/duplicate',
+  )
+  assert.equal(
+    env.cache.fileToLinktext(
+      env.files.get('notes/deep/one/duplicate.md'),
+      '',
+      false,
+    ),
+    'one/duplicate.md',
+  )
+  assert.equal(
+    env.cache.fileToLinktext(env.files.get('duplicate.md'), ''),
+    '/duplicate',
+  )
 })
 
 test('stale page sequences and stale worker/source versions publish no metadata', async (t) => {
@@ -624,11 +847,13 @@ test('native metadata query rejects config paths, symlinks and changed capture',
   const customConfig = join(fixture.vault, '.profile')
   await rename(standardConfig, customConfig)
   await writeFile(join(customConfig, 'app.json'), '{}')
+  await writeFile(join(customConfig, 'appearance.json'), '{}')
   await assert.rejects(
     query({ ...input, path: '.profile/plugins/metadata-api/main.js' }),
     /configuration folder/,
   )
   await unlink(join(customConfig, 'app.json'))
+  await unlink(join(customConfig, 'appearance.json'))
   await rename(customConfig, standardConfig)
   assert.equal(state.reads, 1)
   state.onRead = () => state.sequence++

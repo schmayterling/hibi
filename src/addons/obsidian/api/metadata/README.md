@@ -33,16 +33,24 @@ and normalized references come from Hibi's existing worker/cache. Frontmatter
 uses the existing shared `noteProperties` helper on the one requested source
 returned by `vault.read`, including an open draft. Worker versions, document
 versions, and workspace sequences must agree around this source read before
-publication. Workspace, document, and syntax changes invalidate requested
-entries; disposal cancels publication and removes all three subscriptions.
-There is no whole-vault source snapshot or second vault parser.
+publication. Workspace content events with known paths and document events with
+mapped targets invalidate only those requested files. Per-file pending jobs
+cancel stale publication without cancelling unrelated reads. Document identities
+are resolved through Vault's cached tab-to-path mapping, not the focused tab.
+Unknown-target events, tree changes, resyncs, and syntax changes queue refreshes
+of requested files while keeping existing cached values available. A refresh
+preserves cache and link-row identity and omits `changed` when both the worker
+version and metadata are unchanged. A workspace replacement clears the cache;
+disposal cancels publication and removes all three subscriptions. There is no
+whole-vault source snapshot or second vault parser.
 
 Metadata requests accept Markdown files; attachments return `null` without a source read.
 All public source paths are vault-relative; an empty source context means the vault root.
 Link resolution uses Hibi's shared
 root/sibling/unique-basename rules. `fileToLinktext` follows Vault's shortest,
 relative, or absolute link setting, preserves attachment extensions, and honors
-`omitMdExtension`.
+`omitMdExtension`. Shortest links use the shared shortest unique folder suffix;
+a leading slash disambiguates a root path that is also another file's suffix.
 
 ## Host limits
 

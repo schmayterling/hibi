@@ -1228,6 +1228,7 @@
   "189599ffaee2": "Move {value1} later",
   "ee1f0c423c5b": "Move {value1} to Trash?",
   "d45fef636bf6": "Move {value1} to trash?",
+  "65d35a3e9664": "Multiple Obsidian configuration folders found ({value1}). Hibi uses Obsidian defaults.",
   "8dd6857baf02": "Mute",
   "0effeab1abad": "Mute keyboard sounds",
   "dcd1d5223f73": "Name",

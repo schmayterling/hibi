@@ -3863,6 +3863,9 @@
   "d45fef636bf6": [
     "src/renderer/src/workspace-menu.ts"
   ],
+  "65d35a3e9664": [
+    "src/main/workspace-obsidian.ts"
+  ],
   "8dd6857baf02": [
     "src/addons/keybeats/Settings.tsx"
   ],

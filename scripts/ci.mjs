@@ -368,6 +368,8 @@ export function runCI({ dev = false } = {}) {
       run([
         '--import',
         './tests/file-limit.mjs',
+        '--import',
+        new URL('../tests/dictionary-protocol.mjs', import.meta.url).href,
         '--test',
         '--test-reporter=tap',
         `--test-concurrency=${concurrency}`,

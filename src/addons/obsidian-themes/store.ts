@@ -157,6 +157,12 @@ export async function readAppearance(vault: string): Promise<VaultAppearance> {
 }
 
 async function readThemeFolder(folder: string) {
+  // Obsidian before 0.16 kept each theme as one file in the themes folder.
+  if ((await lstat(folder)).isFile() && folder.endsWith('.css'))
+    return {
+      manifest: { name: basename(folder).slice(0, -4) } as ThemeManifest,
+      css: await readRegular(folder, MAX_THEME_BYTES),
+    }
   let manifest: ThemeManifest = { name: basename(folder) }
   try {
     const raw: unknown = JSON.parse(
@@ -203,7 +209,10 @@ export async function readVault(vault: string): Promise<Vault> {
   const themeRoot = await configPath(vault, 'themes')
   for (const entry of await entries(themeRoot)) {
     try {
-      if (entry.isDirectory()) {
+      if (
+        entry.isDirectory() ||
+        (entry.isFile() && entry.name.endsWith('.css'))
+      ) {
         const { manifest, css } = await readThemeFolder(
           join(themeRoot as string, entry.name),
         )

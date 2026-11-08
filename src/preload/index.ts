@@ -10,6 +10,7 @@ import { ADDON_HOTKEY_CHANNELS } from '../shared/addon-hotkeys'
 import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
+import { admittedOperations } from '../shared/admitted-operations'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { BACKGROUND_CHANNELS } from '../shared/background'
 import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
@@ -148,6 +149,7 @@ if (process.isMainFrame) {
       },
     },
   )
+  const admitted = admittedOperations(journal.assertCapacity)
   const invoke: typeof transport.invoke = (channel, ...args) =>
     journal.hasPending()
       ? journal.flush().then(() => transport.invoke(channel, ...args))
@@ -357,11 +359,11 @@ if (process.isMainFrame) {
     cancelAnalysis: (owner) =>
       ipcRenderer.invoke(ANALYSIS_CHANNELS.cancel, owner),
     appendDocumentChange: journal.append,
-    appendSourceOperation: (operation) =>
-      typeof operation === 'string'
-        ? journal.appendAdmitted(operation)
-        : journal.appendOperation(operation),
-    admitSourceOperation: journal.admit,
+    appendSourceOperation: async (operation) =>
+      journal.appendOperation(
+        typeof operation === 'string' ? admitted.take(operation) : operation,
+      ),
+    admitSourceOperation: admitted.admit,
     getDocumentRecoveryState: journal.state,
     onDocumentCheckpoint: (callback, read, close) => {
       checkpoint = callback

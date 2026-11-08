@@ -1,6 +1,6 @@
 import type { AddonWindowBridge } from '../../shared/addon-windows'
+import { admittedOperations } from '../../shared/admitted-operations.ts'
 import type { DesktopApi } from '../../shared/desktop'
-import type { SourceOperation } from '../../shared/source-operations'
 
 /**
  * Stand-in for `window.hibi` in an addon editor window. It holds no privileges:
@@ -8,7 +8,7 @@ import type { SourceOperation } from '../../shared/source-operations'
  * read-only bridge, listeners never fire, and every other request rejects.
  */
 export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
-  const admitted = new Map<string, SourceOperation>()
+  const admitted = admittedOperations()
   const unavailable = (name: string) => () =>
     Promise.reject(new Error(`${name} is not available in this window.`))
   const known: Partial<DesktopApi> = {
@@ -23,13 +23,9 @@ export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
       recentWorkspaces: async () => [],
       knownWorkspaces: async () => [],
     },
-    admitSourceOperation: (operation) => {
-      admitted.set(operation.operationId, operation)
-    },
+    admitSourceOperation: admitted.admit,
     appendSourceOperation: async (value) => {
-      const operation = typeof value === 'string' ? admitted.get(value) : value
-      if (!operation) throw new Error('Unknown admitted document change.')
-      admitted.delete(operation.operationId)
+      const operation = typeof value === 'string' ? admitted.take(value) : value
       return {
         tabId: operation.document.tabId,
         revision: operation.document.revision,

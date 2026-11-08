@@ -7,6 +7,8 @@ import {
 } from '../src/renderer/src/document-runtime.ts'
 import { acceptSaved } from '../src/renderer/src/document-saved.ts'
 import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
+import { windowDesktop } from '../src/renderer/src/window-desktop.ts'
+import { admittedOperations } from '../src/shared/admitted-operations.ts'
 import { createDocumentJournal } from '../src/shared/document-journal.ts'
 import { keptHistory } from '../src/shared/undo-history.ts'
 
@@ -807,12 +809,13 @@ test('an admitted edit crosses the preload bridge once', async () => {
     }
   })
   // Same journal wiring as the preload; contextBridge copies every argument.
+  const admitted = admittedOperations(journal.assertCapacity)
   const hibi = {
-    appendSourceOperation: (operation) =>
-      typeof operation === 'string'
-        ? journal.appendAdmitted(operation)
-        : journal.appendOperation(operation),
-    admitSourceOperation: journal.admit,
+    appendSourceOperation: async (operation) =>
+      journal.appendOperation(
+        typeof operation === 'string' ? admitted.take(operation) : operation,
+      ),
+    admitSourceOperation: admitted.admit,
   }
   globalThis.window = {
     hibi: Object.fromEntries(
@@ -843,37 +846,82 @@ test('an admitted edit crosses the preload bridge once', async () => {
     assert.equal(crossed, lines)
     assert.equal(sent.length, 1)
     assert.deepEqual(sent[0].changes, changes)
-    // A tab's next admission drops one whose edit never reached its append.
-    const operation = (tabId, contentVersion, operationId) => ({
-      document: { tabId, revision: 1 },
-      operationId,
-      baseVersion: contentVersion - 1,
-      contentVersion,
-      origin: 'source',
-      historyGroup: 'typing',
-      changes: [{ from: 0, to: 0, insert: 'a' }],
-    })
-    journal.admit(operation('one', 2, 'failed'))
-    journal.admit(operation('two', 1, 'two1'))
-    journal.admit(operation('one', 2, 'one2'))
-    await assert.rejects(journal.appendAdmitted('failed'), /Unknown admitted/)
-    await journal.appendAdmitted('two1')
-    await journal.appendAdmitted('one2')
-    await assert.rejects(journal.appendAdmitted('one2'), /Unknown admitted/)
-    assert.deepEqual(
-      sent.map((operation) => operation.operationId),
-      [sent[0].operationId, 'two1', 'one2'],
-    )
-    const full = createDocumentJournal(async () => {}, {
-      maximumBulkBytes: 300,
-    })
-    assert.throws(
-      () => full.admit(operation('one', 1, 'x'.repeat(100))),
-      /recovery is full/,
-    )
   } finally {
     stop()
     documentRuntime.dispose()
     delete globalThis.window
   }
+})
+
+const admission = (tabId, contentVersion, operationId) => ({
+  document: { tabId, revision: 1 },
+  operationId,
+  baseVersion: contentVersion - 1,
+  contentVersion,
+  origin: 'source',
+  historyGroup: 'typing',
+  changes: [{ from: 0, to: 0, insert: 'a' }],
+})
+
+test('admissions keep one per tab, refuse an id another tab holds and own their payload', () => {
+  const full = createDocumentJournal(async () => {}, { maximumBulkBytes: 300 })
+  assert.throws(
+    () =>
+      admittedOperations(full.assertCapacity).admit(
+        admission('one', 1, 'x'.repeat(100)),
+      ),
+    /recovery is full/,
+  )
+  const admitted = admittedOperations()
+  // A tab's next admission drops one whose edit never reached its append.
+  admitted.admit(admission('one', 2, 'failed'))
+  admitted.admit(admission('two', 1, 'two1'))
+  admitted.admit(admission('one', 2, 'one2'))
+  assert.throws(() => admitted.take('failed'), /Unknown admitted/)
+  assert.equal(admitted.take('two1').document.tabId, 'two')
+  assert.equal(admitted.take('one2').document.tabId, 'one')
+  assert.throws(() => admitted.take('one2'), /Unknown admitted/)
+  // A refused id changes nothing: both tabs keep what they admitted.
+  admitted.admit(admission('two', 2, 'q'))
+  admitted.admit(admission('one', 3, 'p'))
+  assert.throws(() => admitted.admit(admission('two', 3, 'p')), /Conflicting/)
+  assert.equal(admitted.take('q').document.tabId, 'two')
+  assert.equal(admitted.take('p').document.tabId, 'one')
+  // The same tab may admit an id again; the later admission wins.
+  admitted.admit(admission('one', 4, 'r'))
+  admitted.admit(admission('one', 5, 'r'))
+  assert.equal(admitted.take('r').contentVersion, 5)
+  // The caller's object can change after admission; the admission does not.
+  const raw = admission('one', 6, 'm')
+  admitted.admit(raw)
+  raw.operationId = 'other'
+  raw.changes[0].insert = 'changed'
+  assert.throws(() => admitted.take('other'), /Unknown admitted/)
+  assert.equal(admitted.take('m').changes[0].insert, 'a')
+})
+
+test('the addon window stand-in stages admissions the same way', async () => {
+  const hibi = windowDesktop({ states: async () => [] })
+  const raw = admission('one', 2, 'm')
+  hibi.admitSourceOperation(raw)
+  raw.operationId = 'other'
+  raw.contentVersion = 9
+  assert.deepEqual(await hibi.appendSourceOperation('m'), {
+    tabId: 'one',
+    revision: 1,
+    contentVersion: 2,
+    operationId: 'm',
+  })
+  await assert.rejects(hibi.appendSourceOperation('m'), /Unknown admitted/)
+  hibi.admitSourceOperation(admission('two', 2, 'q'))
+  hibi.admitSourceOperation(admission('one', 3, 'p'))
+  assert.throws(
+    () => hibi.admitSourceOperation(admission('two', 3, 'p')),
+    /Conflicting/,
+  )
+  assert.equal((await hibi.appendSourceOperation('q')).tabId, 'two')
+  assert.equal((await hibi.appendSourceOperation('p')).tabId, 'one')
+  hibi.admitSourceOperation(admission('one', 4, 'failed'))
+  hibi.admitSourceOperation(admission('one', 4, 'next'))
+  await assert.rejects(hibi.appendSourceOperation('failed'), /Unknown admitted/)
 })

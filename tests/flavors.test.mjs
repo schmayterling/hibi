@@ -7,6 +7,7 @@ import { setTimeout } from 'node:timers/promises'
 import { mathFlavor } from '../src/addons/math/syntax.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -42,12 +43,13 @@ test('enabled math rechecks notes containing only mid-line display math', {
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'midline.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'midline.md',
+    )
+  })
   const status = page
     .locator('[data-status-id="flavor"]')
     .filter({ hasText: /math/i })

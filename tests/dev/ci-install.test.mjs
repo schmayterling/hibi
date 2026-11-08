@@ -3,9 +3,21 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test from 'node:test'
+import nodeTest, { beforeEach } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { installDependencies } from '../../.github/actions/ci/install.mjs'
+import { WORKER_HANG_TIMEOUT } from '../worker-progress.mjs'
+
+const test = (name, options, run) =>
+  nodeTest(
+    name,
+    {
+      timeout: WORKER_HANG_TIMEOUT,
+      ...(typeof options === 'function' ? {} : options),
+    },
+    run ?? options,
+  )
+beforeEach((t) => t.mock.timers.enable({ apis: ['setTimeout'] }))
 
 function fixture(t, body) {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-install-'))
@@ -23,7 +35,10 @@ try { attempts = JSON.parse(readFileSync(state, 'utf8')) } catch {}
 attempts.push(process.pid)
 writeFileSync(state, JSON.stringify(attempts))
 const attempt = attempts.length
+const ready = () => writeFileSync(state + '.ready', String(attempt))
+process.on('exit', ready)
 ${body}
+ready()
 `,
   )
   const attempts = () => {
@@ -31,6 +46,19 @@ ${body}
       return JSON.parse(readFileSync(state, 'utf8'))
     } catch {
       return []
+    }
+  }
+  let ended = false
+  const started = async (count) => {
+    for (;;) {
+      let ready = 0
+      try {
+        ready = Number(readFileSync(`${state}.ready`, 'utf8'))
+      } catch {}
+      if (ready >= count) return attempts()[count - 1]
+      if (ended)
+        throw new Error(`fixture exited before attempt ${count} was ready`)
+      await delay(20)
     }
   }
   t.after(() => {
@@ -50,11 +78,14 @@ ${body}
     root,
     attempts,
     messages,
+    started,
     run: (options) =>
       installDependencies({
         command: [process.execPath, script],
         timeoutMs: 3000,
         ...options,
+      }).finally(() => {
+        ended = true
       }),
   }
 }
@@ -67,6 +98,12 @@ async function gone(pid) {
     } catch (error) {
       assert.equal(error.code, 'ESRCH')
       return
+    }
+    if (process.platform !== 'win32') {
+      const state = spawnSync('ps', ['-p', String(pid), '-o', 'stat='], {
+        encoding: 'utf8',
+      })
+      if (state.status === 1 || /^Z/.test(state.stdout.trim())) return
     }
     await delay(20)
   }
@@ -120,7 +157,10 @@ test('a download failure followed by a hang still stops after two attempts', asy
 }
 setInterval(() => {}, 1000)`,
   )
-  assert.equal(await install.run(), 124)
+  const running = install.run()
+  await install.started(2)
+  t.mock.timers.tick(3000)
+  assert.equal(await running, 124)
   assert.equal(install.attempts().length, 2)
   await gone(install.attempts()[1])
   assert.match(install.messages.at(-1), /hung on its final attempt/)
@@ -156,7 +196,10 @@ test('a post-summary hang kills the descendant tree and retries once', async (t)
   setInterval(() => {}, 1000)
 }`,
   )
-  assert.equal(await install.run(), 0)
+  const running = install.run()
+  await install.started(1)
+  t.mock.timers.tick(3000)
+  assert.equal(await running, 0)
   assert.equal(install.attempts().length, 2)
   await gone(install.attempts()[0])
   await gone(
@@ -175,7 +218,14 @@ test('a post-summary hang kills the descendant tree and retries once', async (t)
 
 test('two hung installs stop with 124 after exactly one retry', async (t) => {
   const install = fixture(t, 'setInterval(() => {}, 1000)')
-  assert.equal(await install.run(), 124)
+  const running = install.run()
+  await install.started(1)
+  t.mock.timers.tick(2999)
+  assert.equal(install.messages.length, 0)
+  t.mock.timers.tick(1)
+  await install.started(2)
+  t.mock.timers.tick(3000)
+  assert.equal(await running, 124)
   assert.equal(install.attempts().length, 2)
   for (const pid of install.attempts()) await gone(pid)
   assert.match(install.messages.at(-1), /hung on its final attempt/)
@@ -192,7 +242,10 @@ test('a descendant retaining output after npm exits still times out and is kille
   process.exit(0)
 }`,
   )
-  assert.equal(await install.run(), 0)
+  const running = install.run()
+  await install.started(1)
+  t.mock.timers.tick(3000)
+  assert.equal(await running, 0)
   assert.equal(install.attempts().length, 2)
   await gone(
     Number(readFileSync(join(install.root, 'attempts.json.child'), 'utf8')),
@@ -207,7 +260,10 @@ test('unavailable snapshot commands cannot prevent termination or retry', {
   const path = process.env.PATH
   try {
     process.env.PATH = ''
-    assert.equal(await install.run(), 0)
+    const running = install.run()
+    await install.started(1)
+    t.mock.timers.tick(3000)
+    assert.equal(await running, 0)
   } finally {
     process.env.PATH = path
   }
@@ -220,8 +276,7 @@ test('cancellation kills the install and does not retry', async (t) => {
   const install = fixture(t, 'setInterval(() => {}, 1000)')
   const running = install.run()
   try {
-    for (let tries = 0; !install.attempts().length && tries < 100; tries++)
-      await delay(20)
+    await install.started(1)
     assert.equal(install.attempts().length, 1)
   } finally {
     process.emit('SIGTERM')

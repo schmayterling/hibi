@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -39,22 +43,17 @@ async function open(t, text, beforeSplit) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`))
   await waitForAsync(
     page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     text,
   )
-  await waitForDocumentEditor(app, page)
-  // The mode button must not take focus before the opening caret is placed.
-  if (beforeSplit)
-    await waitForAsync(
-      page,
-      (end) =>
-        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
-          .selection.main.head === end,
-      text.trimEnd().length,
-    )
+  // The new view places its opening caret and takes focus. A mode button
+  // pressed before that keeps focus, and the caret stays at the start.
+  await waitForAsync(page, () =>
+    document.activeElement?.matches('.rich-pane .cm-content'),
+  )
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()

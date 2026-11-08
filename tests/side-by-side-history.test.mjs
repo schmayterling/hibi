@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
@@ -129,13 +129,14 @@ test('side-by-side panes keep their own undo steps and selections', {
           filePaths: [file],
         })
       }, file)
-      await clickMenu(app, 'Open…')
-      await waitForAsync(
-        page,
-        async (name) => (await window.hibi.getDocument()).name === name,
-        `note-${index}.md`,
-      )
-      await waitForDocumentEditor(app, page)
+      await openInDocumentEditor(app, page, async () => {
+        await clickMenu(app, 'Open…')
+        await waitForAsync(
+          page,
+          async (name) => (await window.hibi.getDocument()).name === name,
+          `note-${index}.md`,
+        )
+      })
       if (!(await page.locator('.mode-side-by-side').count()))
         await page
           .getByRole('button', { name: /^side-by-side$/i, exact: true })

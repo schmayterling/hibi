@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -160,13 +161,14 @@ test('codemirror: undo and redo scroll to the selection they restore', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
     // The table opens its cell editor after the view's focus update.
     if (focus)
       await page.waitForFunction(
@@ -190,19 +192,16 @@ test('codemirror: undo and redo scroll to the selection they restore', {
       text,
     )
     // The view scrolls at its next measure; the table's rows render after it.
-    let last = null
-    for (let read = 0; read < 30; read++) {
-      await page.waitForTimeout(100)
-      const now = await page.evaluate(restored, scroller)
-      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
-    }
+    let last
+    const landed = () =>
+      last.shown &&
+      (!cell || JSON.stringify(last.cell) === JSON.stringify(cell))
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      last = await page.evaluate(restored, scroller)
+      return landed()
+    }).catch(() => {})
     t.diagnostic(JSON.stringify({ name, ...last }))
-    if (
-      !last.shown ||
-      (cell && JSON.stringify(last.cell) !== JSON.stringify(cell))
-    )
-      differences.push(`${name}: ${JSON.stringify(last)}`)
+    if (!landed()) differences.push(`${name}: ${JSON.stringify(last)}`)
   }
 
   // Tab in the last cell adds a row and edits its first cell. Undo takes it
@@ -537,13 +536,14 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
   }
   // The caret of the note's pane and whether it shows there.
   const caret = (pane) =>
@@ -602,13 +602,11 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
       async (from) => (await window.hibi.getDocument()).markdown === from,
       from,
     )
-    let last = null
-    for (let read = 0; read < 30; read++) {
-      await page.waitForTimeout(100)
-      const now = await caret(pane)
-      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
-    }
+    let last
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      last = await caret(pane)
+      return last.shown && last.head === at
+    }).catch(() => {})
     t.diagnostic(JSON.stringify({ name, at, ...last }))
     if (!last.shown || last.head !== at)
       differences.push(`${name}: ${JSON.stringify({ at, ...last })}`)

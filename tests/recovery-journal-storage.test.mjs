@@ -4,12 +4,21 @@ import * as fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
+import { setTimeout as realSetTimeout } from 'node:timers'
 import { build } from 'esbuild'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const mib = 1024 * 1024
 const day = 24 * 60 * 60 * 1000
+let timers
+beforeEach((t) => {
+  t.mock.timers.enable({
+    apis: ['setTimeout', 'Date'],
+    now: Date.UTC(2026, 10, 9),
+  })
+  timers = t.mock.timers
+})
 const bundle = build({
   entryPoints: ['src/main/recovery-journal.ts'],
   bundle: true,
@@ -86,7 +95,7 @@ function note(
 async function turn(journal) {
   journal.recoverySettled()
   journal.recoveryChanged()
-  await new Promise((resolve) => setTimeout(resolve, 1050))
+  timers.tick(1000)
   await journal.recoveryWritten()
 }
 const folder = (root) => join(root, 'recovery')
@@ -168,10 +177,7 @@ test('damage is never offered and the damaged file stays for a rescue by hand', 
   const bytes = await fs.readFile(path)
   bytes[bytes.indexOf('precious')] ^= 1
   await fs.writeFile(path, bytes)
-  t.mock.timers.enable({
-    apis: ['Date'],
-    now: Math.ceil((await fs.stat(path)).mtimeMs) + 31 * day,
-  })
+  t.mock.timers.setTime(Math.ceil((await fs.stat(path)).mtimeMs) + 31 * day)
   const next = await main(root)
   assert.deepEqual((await next.waitingRecovery()).copies, [])
   const [kept, ...rest] = await files(root)
@@ -189,7 +195,7 @@ test('a damaged copy is never offered, so its time limit starts when a launch fi
   const [name] = await files(root)
   await fs.truncate(join(folder(root), name), 40)
   const found = Date.now()
-  t.mock.timers.enable({ apis: ['Date'], now: found })
+  t.mock.timers.setTime(found)
   await (await main(root)).waitingRecovery()
   t.mock.timers.setTime(found + 29 * day)
   await (await main(root)).waitingRecovery()
@@ -208,10 +214,7 @@ test('lowering the time limit counts a damaged copy from its first offer', async
   const bytes = await fs.readFile(path)
   bytes[bytes.indexOf('offered words')] ^= 1
   await fs.writeFile(path, bytes)
-  t.mock.timers.enable({
-    apis: ['Date'],
-    now: Number(name.split('.')[2]) + 8 * day,
-  })
+  t.mock.timers.setTime(Number(name.split('.')[2]) + 8 * day)
   const next = await main(root)
   assert.deepEqual((await next.waitingRecovery()).copies, [])
   assert.deepEqual(await files(root), [name])
@@ -358,19 +361,18 @@ test('typing without a pause is still written, at most about once a second', asy
   const root = await profile(t)
   const notes = [note(1, 'v0')]
   const journal = await main(root, { notes })
-  const started = Date.now()
-  let key = 0
   // Keys every 50 ms for 2.5 s: a timer pushed back by each key would never fire.
-  while (Date.now() - started < 2500) {
-    notes[0] = note(1, `v${++key}`)
+  for (let key = 1; key <= 50; key++) {
+    notes[0] = note(1, `v${key}`)
     journal.recoveryChanged()
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    timers.tick(50)
+    await journal.recoveryWritten()
   }
   await journal.recoveryWritten()
   const names = await files(root)
   assert.equal(names.length, 1)
   const generation = Number(names[0].split('.')[1])
-  assert.ok(generation >= 2 && generation <= 3, `wrote ${generation} times`)
+  assert.equal(generation, 2)
 })
 
 test('a large note waits longer between writes, by its size and not by the disk', async (t) => {
@@ -383,10 +385,10 @@ test('a large note waits longer between writes, by its size and not by the disk'
   notes[0] = note(1, 'y'.repeat(24 * mib))
   journal.recoveryChanged()
   // 24 MiB waits about 3 s, against 1 s for a small note.
-  await new Promise((resolve) => setTimeout(resolve, 1500))
+  timers.tick(1500)
   await journal.recoveryWritten()
   assert.deepEqual(await files(root), [after])
-  await new Promise((resolve) => setTimeout(resolve, 2000))
+  timers.tick(2000)
   await journal.recoveryWritten()
   assert.notDeepEqual(await files(root), [after])
 })
@@ -434,6 +436,7 @@ test('discarding during the first write removes its copy after the write finishe
   const notes = [note(1, 'discarded before its first copy finished')]
   const journal = await main(root, { io, notes })
   journal.recoveryChanged()
+  timers.tick(1000)
   await writing
   notes.length = 0
   journal.recoverySettled()
@@ -521,7 +524,7 @@ test('an offer repeated in one launch does not restart the time limit', async (t
   const root = await profile(t)
   await leftBehind(root, 'text')
   const first = Date.now()
-  t.mock.timers.enable({ apis: ['Date'], now: first })
+  t.mock.timers.setTime(first)
   const open = await main(root)
   await open.waitingRecovery()
   t.mock.timers.setTime(first + day)
@@ -654,7 +657,7 @@ test('the size limit takes the oldest waiting copy first and never an open tab',
   const root = await profile(t)
   // Two launches that stopped, so the copies have different ages.
   await turn(await main(root, { notes: [note(1, 'a'.repeat(60 * mib))] }))
-  await new Promise((resolve) => setTimeout(resolve, 5))
+  timers.tick(5)
   await turn(await main(root, { notes: [note(2, 'b'.repeat(60 * mib))] }))
   await fs.writeFile(
     join(root, 'recovery-settings.json'),
@@ -745,11 +748,11 @@ test('with open notes filling the limit, a waiting copy stays and the new note i
   notes.push(note(3, 'b'.repeat(70 * mib)))
   journal.recoveryChanged()
   // 70 MiB rests about 9 s.
-  await new Promise((resolve) => setTimeout(resolve, 9500))
+  timers.tick(9500)
   await journal.recoveryWritten()
   notes[1] = note(3, 'c'.repeat(70 * mib))
   journal.recoveryChanged()
-  await new Promise((resolve) => setTimeout(resolve, 1100))
+  timers.tick(1100)
   await journal.recoveryWritten()
   const names = await files(root)
   assert.equal(names.length, 2)
@@ -922,6 +925,7 @@ test('a copy given up while a program holds it is not offered again', async (t) 
 
 test('a quit that outlasts a long write still leaves discarded notes gone', async (t) => {
   const root = await profile(t)
+  const syncing = Promise.withResolvers()
   const notes = [note(1, 'has a copy already')]
   const io = {
     ...fs,
@@ -931,7 +935,10 @@ test('a quit that outlasts a long write still leaves discarded notes gone', asyn
       return new Proxy(file, {
         get: (target, key) =>
           key === 'sync'
-            ? () => new Promise(() => {})
+            ? () => {
+                syncing.resolve()
+                return new Promise(() => {})
+              }
             : typeof target[key] === 'function'
               ? target[key].bind(target)
               : target[key],
@@ -942,10 +949,13 @@ test('a quit that outlasts a long write still leaves discarded notes gone', asyn
   await turn(journal)
   notes.push(note(2, 'its first copy never ends'))
   journal.recoveryChanged()
-  await new Promise((resolve) => setTimeout(resolve, 1050))
+  timers.tick(1000)
+  await syncing.promise
   notes.length = 0
   journal.recoverySettled()
-  await journal.recoveryWritten()
+  const quitting = journal.recoveryWritten()
+  timers.tick(5000)
+  await quitting
   assert.deepEqual((await (await main(root)).waitingRecovery()).copies, [])
 })
 
@@ -988,7 +998,7 @@ test('a note path that is a pipe or device cannot stall the journal', {
     const { copies } = await Promise.race([
       journal.waitingRecovery(),
       new Promise((_, reject) =>
-        setTimeout(reject, 5000, new Error(`stalled on ${path}`)).unref(),
+        realSetTimeout(reject, 5000, new Error(`stalled on ${path}`)).unref(),
       ),
     ])
     assert.equal(copies[0].state, 'changed')
@@ -1001,7 +1011,7 @@ test('a note path that is a pipe or device cannot stall the journal', {
   const { copies } = await Promise.race([
     journal.waitingRecovery(),
     new Promise((_, reject) =>
-      setTimeout(reject, 5000, new Error('stalled on a pipe')).unref(),
+      realSetTimeout(reject, 5000, new Error('stalled on a pipe')).unref(),
     ),
   ])
   assert.deepEqual(copies, [])

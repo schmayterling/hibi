@@ -6,7 +6,7 @@ import test from 'node:test'
 import { marked } from 'marked'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
@@ -177,13 +177,14 @@ test('stored mark review cases through native input and toolbar', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
     await rich.focus()
     await rich.evaluate(
       (element, raw) =>

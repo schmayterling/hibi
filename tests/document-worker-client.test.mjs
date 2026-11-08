@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import nodeTest from 'node:test'
+import {
+  clearTimeout as realClearTimeout,
+  setTimeout as realSetTimeout,
+} from 'node:timers'
 import { DocumentWorkerClient } from '../src/renderer/src/document-worker-client.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
@@ -8,13 +12,28 @@ import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
 import { renderedConfig } from './rendered-config.mjs'
 import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
 
-const wait = async (predicate) => {
-  const end = Date.now() + 3000
-  while (!predicate()) {
-    if (Date.now() > end) throw new Error('Worker condition did not settle')
-    await new Promise((resolve) => setTimeout(resolve, 2))
-  }
-}
+const test = (name, options, run) =>
+  nodeTest(
+    name,
+    {
+      timeout: WORKER_HANG_TIMEOUT,
+      ...(typeof options === 'function' ? {} : options),
+    },
+    run ?? options,
+  )
+let progress = 0
+const wait = (predicate, timers) =>
+  waitForProgress(
+    () => {
+      timers?.tick(0)
+      return predicate()
+    },
+    () => progress,
+    3000,
+    'Worker condition made no progress',
+    { timers: { setTimeout: realSetTimeout, clearTimeout: realClearTimeout } },
+  )
+
 class TestWorker {
   messages = []
   terminated = false
@@ -26,6 +45,7 @@ class TestWorker {
   observeReply = null
   service = new DocumentWorkerService((reply) => {
     this.replies.push(reply)
+    progress++
     this.observeReply?.(reply)
     setImmediate(() => {
       if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
@@ -34,6 +54,7 @@ class TestWorker {
   postMessage(message) {
     const copy = structuredClone(message)
     this.messages.push(copy)
+    progress++
     if (!this.blocked)
       setImmediate(() => {
         if (!this.terminated) this.service.receive(copy)
@@ -575,12 +596,12 @@ test('32 mib real find build completes with progress on one worker', {
 })
 
 test('only current active find progress renews its deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(t, 'one', { timeoutMs: 100 })
   f.find('one')
-  await wait(() => f.results.length)
+  await wait(() => f.results.length, t.mock.timers)
   const worker = f.workers[0]
   worker.blocked = true
-  t.mock.timers.enable({ apis: ['setTimeout'] })
   f.find('two')
   const request = worker.messages.at(-1),
     progress = {
@@ -614,12 +635,12 @@ test('only current active find progress renews its deadline', async (t) => {
 })
 
 test('canceled find progress cannot renew missing cancellation acknowledgement', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(t, 'one', { timeoutMs: 100 })
   f.find('one')
-  await wait(() => f.results.length)
+  await wait(() => f.results.length, t.mock.timers)
   const worker = f.workers[0]
   worker.blocked = true
-  t.mock.timers.enable({ apis: ['setTimeout'] })
   f.find('two')
   const request = worker.messages.at(-1)
   f.client.cancelFind()
@@ -637,12 +658,12 @@ test('canceled find progress cannot renew missing cancellation acknowledgement',
 })
 
 test('only current active metadata progress keeps a lookup alive', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(t, '# one', { timeoutMs: 100 })
   f.find('one')
-  await wait(() => f.results.length)
+  await wait(() => f.results.length, t.mock.timers)
   const worker = f.workers[0]
   worker.blocked = true
-  t.mock.timers.enable({ apis: ['setTimeout'] })
   f.client.metadata('commonmark', 0, 0, 1, false, {
     label: 'ref',
     gfm: false,
@@ -680,12 +701,12 @@ test('only current active metadata progress keeps a lookup alive', async (t) => 
 })
 
 test('canceled metadata progress cannot keep missing owner release alive', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(t, '# one', { timeoutMs: 100 })
   f.find('one')
-  await wait(() => f.results.length)
+  await wait(() => f.results.length, t.mock.timers)
   const worker = f.workers[0]
   worker.blocked = true
-  t.mock.timers.enable({ apis: ['setTimeout'] })
   f.client.metadata('commonmark', 0, 0, 1)
   const request = worker.messages.at(-1)
   t.mock.timers.tick(60)
@@ -778,25 +799,27 @@ test('find and bounded metadata share one replica and keep source/owner generati
 })
 
 test('metadata deadlines remain finite while the find lane keeps replying', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const pages = []
   const f = fixture(t, '# one\n\ntext', {
     timeoutMs: 80,
     metadataResult: (page) => pages.push(page),
   })
   f.find('one')
-  await wait(() => f.results.length)
+  await wait(() => f.results.length, t.mock.timers)
   const first = f.workers[0],
     receive = first.service.receive.bind(first.service)
   first.service.receive = (message) => {
     if (message.type !== 'metadata') receive(message)
   }
   f.client.metadata('commonmark', 0, 5, 2)
-  const active = setInterval(() => f.find('one'), 5)
-  try {
-    await wait(() => f.workers.length === 2 && pages.length)
-  } finally {
-    clearInterval(active)
+  for (let turn = 0; turn < 16; turn++) {
+    const before = f.results.length
+    f.find('one')
+    await wait(() => f.results.length > before, t.mock.timers)
+    t.mock.timers.tick(5)
   }
+  await wait(() => f.workers.length === 2 && pages.length, t.mock.timers)
   assert.equal(first.terminated, true)
   assert.equal(pages[0].complete, true)
   assert.deepEqual(f.errors, [])
@@ -820,55 +843,60 @@ test('frontmatter metadata configuration survives derived worker restart', async
 })
 
 test('find deadlines remain finite while the metadata lane keeps replying', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const pages = []
   const f = fixture(t, '# one\n\ntext', {
     timeoutMs: 80,
     metadataResult: (page) => pages.push(page),
   })
   f.client.metadata('commonmark', 0, 5, 2)
-  await wait(() => pages.length)
+  await wait(() => pages.length, t.mock.timers)
   const first = f.workers[0],
     receive = first.service.receive.bind(first.service)
   first.service.receive = (message) => {
     if (message.type !== 'find') receive(message)
   }
   f.find('one')
-  const active = setInterval(() => f.client.metadata('commonmark', 0, 5, 2), 5)
-  try {
-    await wait(() => f.workers.length === 2 && f.results.length)
-  } finally {
-    clearInterval(active)
+  for (let turn = 0; turn < 16; turn++) {
+    const before = pages.length
+    f.client.metadata('commonmark', 0, 5, 2)
+    await wait(() => pages.length > before, t.mock.timers)
+    t.mock.timers.tick(5)
   }
+  await wait(() => f.workers.length === 2 && f.results.length, t.mock.timers)
   assert.equal(first.terminated, true)
   assert.equal(f.results.at(-1).location.total, 1)
   assert.deepEqual(f.errors, [])
 })
 
 test('closing metadata requires cancellation acknowledgement before releasing its deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const pages = []
   const f = fixture(t, '# one', {
     timeoutMs: 80,
     metadataResult: (page) => pages.push(page),
   })
   f.client.metadata('commonmark', 0, 5, 2)
-  await wait(() => pages.length)
+  await wait(() => pages.length, t.mock.timers)
   const first = f.workers[0]
   first.blocked = true
   f.client.releaseMetadata()
-  await wait(() => f.workers.length === 2)
+  t.mock.timers.tick(80)
+  await wait(() => f.workers.length === 2, t.mock.timers)
   assert.equal(first.terminated, true)
   assert.equal(f.session.snapshot().materialize(), '# one')
   assert.deepEqual(f.errors, [])
 })
 
 test('supersession acknowledgement cannot stand in for metadata owner release', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const pages = []
   const f = fixture(t, '# one', {
     timeoutMs: 80,
     metadataResult: (page) => pages.push(page),
   })
   f.client.metadata('commonmark', 0, 5, 2)
-  await wait(() => pages.length)
+  await wait(() => pages.length, t.mock.timers)
   const first = f.workers[0]
   first.blocked = true
   f.client.metadata('commonmark', 0, 5, 2)
@@ -883,15 +911,17 @@ test('supersession acknowledgement cannot stand in for metadata owner release', 
       release: false,
     },
   })
-  await wait(() => f.workers.length === 2)
+  t.mock.timers.tick(80)
+  await wait(() => f.workers.length === 2, t.mock.timers)
   assert.equal(first.terminated, true)
   assert.equal(pages.length, 1)
 })
 
 test('a late find result does not retire a missing cancellation acknowledgement', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(t, 'one two one', { timeoutMs: 80 })
   f.find('one')
-  await wait(() => f.results.length)
+  await wait(() => f.results.length, t.mock.timers)
   const first = f.workers[0]
   first.blocked = true
   f.find('two')
@@ -906,7 +936,11 @@ test('a late find result does not retire a missing cancellation acknowledgement'
       location: f.results[0].location,
     },
   })
-  await wait(() => f.workers.length === 2 && f.results.length === 2)
+  t.mock.timers.tick(80)
+  await wait(
+    () => f.workers.length === 2 && f.results.length === 2,
+    t.mock.timers,
+  )
   assert.equal(first.terminated, true)
   assert.equal(f.results.at(-1).location.total, 2)
   assert.deepEqual(f.errors, [])
@@ -1230,6 +1264,7 @@ test('client coalesces superseded queries and ignores late replies and errors fr
 })
 
 test('worker restarts are finite and disposal cancels bootstrap, listeners and pending jobs', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const workers = [],
     f = fixture(t, 'one', {
       timeoutMs: 5,
@@ -1241,17 +1276,22 @@ test('worker restarts are finite and disposal cancels bootstrap, listeners and p
       },
     })
   f.find('one')
-  await wait(() => f.errors.length === 1)
+  t.mock.timers.tick(0)
+  t.mock.timers.tick(5)
+  t.mock.timers.tick(5)
+  assert.equal(f.errors.length, 1)
   assert.equal(workers.length, 2)
   assert.ok(workers.every((worker) => worker.terminated))
   f.client.dispose()
   f.append(' two')
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  t.mock.timers.tick(20)
+  await new Promise(setImmediate)
   assert.equal(workers.length, 2)
   const immediate = fixture(t)
   immediate.find('one')
   immediate.client.dispose()
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  t.mock.timers.tick(10)
+  await new Promise(setImmediate)
   assert.equal(immediate.workers.length, 0)
 })
 

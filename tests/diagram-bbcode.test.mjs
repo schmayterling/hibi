@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -274,15 +275,18 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, note)
-  await pressShortcut(
-    app,
-    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
-  )
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    markdown,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+    )
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      markdown,
+    )
+  })
   return { app, page }
 }
 test('Mermaid is on by default and keeps diagram links, images, and markup inert', {

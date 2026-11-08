@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -135,8 +136,10 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
-  await pressShortcut(app, `${mod}+[`)
-  await waitName('a.md')
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+[`)
+    await waitName('a.md')
+  })
   await pressShortcut(app, `${mod}+Shift+\\`)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()

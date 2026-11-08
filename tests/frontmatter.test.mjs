@@ -13,6 +13,7 @@ import {
 } from '../src/addons/frontmatter/markdown.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -384,7 +385,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })
   assert.equal(await readFile(fixture, 'utf8'), await read())
-  await clickMenu(app, 'New')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'New'))
 
   await waitForDocumentEditor(app, page)
   await waitForAsync(
@@ -598,8 +599,7 @@ unit(
         },
         join(folder, name),
       )
-      await clickMenu(app, 'Open…')
-      await waitForDocumentEditor(app, page)
+      await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
       await page.getByRole('tab', { name, exact: true }).waitFor()
       const title = properties.getByRole('textbox', {
         name: /^title$/i,

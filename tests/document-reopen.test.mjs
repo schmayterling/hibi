@@ -13,6 +13,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -91,10 +92,13 @@ async function setup(t) {
     await done()
     await idle()
   }
+  // Every call selects another tab, so its editor is replaced.
   const select = async (id) => {
-    const done = await replied(app, 'document:select-tab')
-    await page.locator(`#document-tab-${id}`).click()
-    await done()
+    await openInDocumentEditor(app, page, async () => {
+      const done = await replied(app, 'document:select-tab')
+      await page.locator(`#document-tab-${id}`).click()
+      await done()
+    })
     await idle()
   }
   const answer = (choice, path = null) =>
@@ -621,9 +625,7 @@ test('reopening a dirty document prompts before discarding external or local tex
   const { app, page, file, read, open, content } = await setup(t)
   const editor = page.locator('.rich-pane [aria-label="Document editor"]')
   await replaceRichText(page, editor, 'local draft')
-  await page.waitForFunction(
-    async () => (await window.hibi.getDocument()).dirty,
-  )
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
   await writeFile(file, 'external replacement\n')
   const before = await read()
   await open()
@@ -641,9 +643,7 @@ test('reopening a dirty document prompts before discarding external or local tex
   assert.equal(await readFile(file, 'utf8'), 'external replacement\n')
 
   await replaceRichText(page, editor, 'saved local draft')
-  await page.waitForFunction(
-    async () => (await window.hibi.getDocument()).dirty,
-  )
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
   await writeFile(file, 'another external replacement\n')
   await app.evaluate(() => {
     globalThis.reopenChoice = 0

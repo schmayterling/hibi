@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -100,14 +100,18 @@ test('bounded metadata stays present, preserves crlf counts and suppresses sourc
         field.checkVisibility({ contentVisibilityAuto: true }),
         field.closest('.frontmatter-field').offsetHeight,
       ]
+      // The note opens at its top: bring the last property beside the body
+      // into view, and wait until the page draws it.
+      const last = page.locator('.frontmatter-field textarea').nth(10082)
+      await page
+        .locator('.frontmatter-field')
+        .nth(10082)
+        .scrollIntoViewIfNeeded()
+      await waitForAsync(last, (field) =>
+        field.checkVisibility({ contentVisibilityAuto: true }),
+      )
       assert.deepEqual(
-        [
-          await middle.evaluate(drawn),
-          await page
-            .locator('.frontmatter-field textarea')
-            .nth(10082)
-            .evaluate(drawn),
-        ],
+        [await middle.evaluate(drawn), await last.evaluate(drawn)],
         [
           [false, 36],
           [true, 36],

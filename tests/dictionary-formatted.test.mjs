@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAddonShortcut,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -97,13 +98,12 @@ async function launch(t, files, { held = false } = {}) {
       },
       join(profile, name),
     )
-    await clickMenu(app, 'Open…')
+    await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
     await waitForAsync(
       page,
       async (name) => (await window.hibi.getDocument()).name === name,
       name,
     )
-    await waitForDocumentEditor(app, page)
   }
   return { app, page, open }
 }

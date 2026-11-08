@@ -13,6 +13,7 @@ import {
 import {
   after,
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -1106,18 +1107,15 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
         key === 'x' ? 'cut' : 'copy',
       )
     else await page.keyboard.press('ControlOrMeta+' + key)
-    const deadline = performance.now() + 3000
-    const types = await app.evaluate(async ({ BrowserWindow }, end) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents
-      while (Date.now() < end) {
-        const types = await contents.executeJavaScript(
-          'window.copiedTypes',
-          false,
-        )
-        if (types) return types
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-    }, Date.now() + 3000)
+    const copied = ({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        'window.copiedTypes',
+        false,
+      )
+    await waitForAsync(app, copied, undefined, {
+      label: 'the page wrote a copy',
+    })
+    const types = await app.evaluate(copied)
     assert.ok(types?.length, 'the page wrote a copy')
     const read = () =>
       app.evaluate(async ({ clipboard }) => {
@@ -1136,8 +1134,16 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       held.text === sentinel ||
       (types.includes('text/plain') && !held.text) ||
       (types.includes('text/html') && held.html === null)
-    let held = await read()
-    while (partial(held) && performance.now() < deadline) held = await read()
+    let held
+    await waitForAsync(
+      { evaluate: (predicate) => predicate() },
+      async () => {
+        held = await read()
+        return !partial(held)
+      },
+      undefined,
+      { label: 'every format the page wrote is on the clipboard' },
+    )
     assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
     assert.ok(!partial(held), 'every format the page wrote is on the clipboard')
     return held
@@ -1995,13 +2001,14 @@ async function launchInputFixture(t, source, counted = false) {
   await waitForFormattedEditor(app, page)
   cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    counted ? 'input.countmd' : 'input.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      counted ? 'input.countmd' : 'input.md',
+    )
+  })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -2033,13 +2040,14 @@ async function openInputFixture(source) {
       filePaths: [path],
     })
   }, path)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    name,
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  })
   return { app, page, rich }
 }
 

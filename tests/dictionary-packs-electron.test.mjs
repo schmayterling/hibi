@@ -7,6 +7,7 @@ import { gzipSync } from 'node:zlib'
 import { packs } from '../src/addons/dictionary/packs.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -266,12 +267,13 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   // Editing does not wait for the lookup code, so it can arrive after a
   // lookup asks for it.
   held = await reloadHeld(app, page)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'offline-note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'offline-note.md',
+    )
+  })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,

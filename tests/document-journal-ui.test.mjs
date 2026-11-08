@@ -283,8 +283,13 @@ test('J07: saturated native input preserves accepted source and history through 
       )
     },
   )
-  await page.evaluate(() => new Promise(requestAnimationFrame))
   await t.test('recovery restores native editability and focus', async () => {
+    await waitForAsync(
+      rich,
+      (element) =>
+        element.getAttribute('contenteditable') === 'true' &&
+        element === document.activeElement,
+    )
     assert.equal(await rich.getAttribute('contenteditable'), 'true')
     assert.equal(
       await rich.evaluate((element) => element === document.activeElement),

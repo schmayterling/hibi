@@ -9,6 +9,7 @@ import {
   waitForFormattedEditor,
 } from './electron.mjs'
 import { replaceRichText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('atomic source operations cross preload barriers, save exact text and recover after reload', {
   timeout: 30_000,
@@ -86,17 +87,12 @@ test('atomic source operations cross preload barriers, save exact text and recov
     )
     await replaceRichText(page, editor, 'AbcdeF')
     await page.evaluate(() => window.hibi.flushDocumentChanges())
-    let edited = true
-    for (let attempt = 0; attempt < 50 && edited; attempt++) {
-      edited = await app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0].isDocumentEdited(),
-      )
-      if (edited) await new Promise((resolve) => setTimeout(resolve, 20))
-    }
-    assert.equal(
-      edited,
-      false,
-      'Returning to saved source clears the native dirty indicator.',
+    await waitForAsync(
+      app,
+      ({ BrowserWindow }) =>
+        !BrowserWindow.getAllWindows()[0].isDocumentEdited(),
+      undefined,
+      { label: 'Returning to saved source clears the native dirty indicator.' },
     )
   }
 })

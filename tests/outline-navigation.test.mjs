@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   stopElectronTree,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -51,7 +52,7 @@ test('large outline follows rich and source carets with bounded rows and ignores
       filePaths: [file],
     })
   }, file)
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
 
   await waitForAsync(
     page,
@@ -273,7 +274,7 @@ test('source outline resolves references through its worker and preserves native
       },
     })
   })
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
 
   // Read rendered labels with the caret outside the heading.
   await waitForDocumentEditor(app, page)

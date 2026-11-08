@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -203,7 +204,8 @@ test(`a note opens with the caret at the end of its last text`, {
   await waitForFormattedEditor(app, page)
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const open = async (name, markdown) => {
+  // `placed` says when the opening caret is where the caller acts on it.
+  const open = async (name, markdown, placed) => {
     const file = join(folder, `${name}.md`)
     await writeFile(file, markdown)
     await app.evaluate(({ dialog }, file) => {
@@ -212,15 +214,50 @@ test(`a note opens with the caret at the end of its last text`, {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
+    // Each note mounts new editors; the last note's stay ready until then.
+    const previous = await page
+      .locator('#document-editor-panel .cm-content')
+      .elementHandles()
+    let shown
+    try {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+      shown = await waitForShown(previous)
+    } finally {
+      await Promise.all(previous.map((editor) => editor.dispose()))
+    }
+    if (shown === 'source') return { focus: 'source view' }
+    await waitForDocumentEditor(app, page)
+    // The first note a new window opens may not take focus.
+    await page
+      .waitForFunction(
+        () => document.activeElement?.closest('.rich-pane'),
+        null,
+        { timeout: 3000 },
+      )
+      .catch(() => {})
+    // The formatted view's table opens its cell editor after its focus update.
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () =>
+      placed(await page.evaluate(caret)),
+    ).catch(() => {})
+    // A selection scrolls the view at its next measure, a frame later.
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done)),
+        ),
     )
-    // A note the formatted view cannot show opens in or beside its source.
-    const shown = await (
-      await page.waitForFunction(() => {
+    return page.evaluate(caret)
+  }
+  // A note the formatted view cannot show opens in or beside its source.
+  const waitForShown = async (previous) =>
+    (
+      await page.waitForFunction((previous) => {
+        if (previous.some((editor) => editor.isConnected)) return false
         const panel = document.querySelector(
           '.app[aria-busy="false"] #document-editor-panel[aria-busy="false"]',
         )
@@ -240,31 +277,27 @@ test(`a note opens with the caret at the end of its last text`, {
         )
           ? 'source'
           : false
-      })
+      }, previous)
     ).jsonValue()
-    if (shown === 'source') return { focus: 'source view' }
-    await waitForDocumentEditor(app, page)
-    // The first note a new window opens may not take focus.
-    await page
-      .waitForFunction(
-        () => document.activeElement?.closest('.rich-pane'),
-        null,
-        { timeout: 3000 },
-      )
-      .catch(() => {})
-    // The formatted view's table opens its cell editor after its focus update.
-    let last = null
-    for (let read = 0; read < 30; read++) {
-      await page.waitForTimeout(100)
-      const now = await page.evaluate(caret)
-      if (JSON.stringify(now) === JSON.stringify(last)) return now
-      last = now
-    }
-    return last
-  }
-  await open('warmup', 'warmup\n')
+  // Only the window's first open matters here, not where its caret goes.
+  await open('warmup', 'warmup\n', () => true)
   const key = ({ focus, cell, code, text }) =>
     focus === 'editor' ? { cell, code, text } : { focus }
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  // Whether a note opened with its caret where the checks below accept it.
+  const opened = (name) => (observed) => {
+    const markdown = notes[name]
+    const expected = accepted[name]
+    const end = markdown.trimEnd().length
+    const block = [markdown.lastIndexOf('\n\n', end) + 2, end]
+    const range = [observed.anchor, observed.head]
+    if (expected === 'block') return same(range, block)
+    if (expected === 'end or block')
+      return observed.head === end || same(range, block)
+    if (expected === 'end or native')
+      return observed.head === end || same(key(observed), native(name))
+    return same(key(observed), expected || native(name))
+  }
   const differences = []
   const check = (name, actual, want) => {
     if (JSON.stringify(actual) !== JSON.stringify(want))
@@ -273,7 +306,13 @@ test(`a note opens with the caret at the end of its last text`, {
       )
   }
   for (const [name, markdown] of Object.entries(notes)) {
-    const observed = await open(name, markdown)
+    const observed = await open(
+      name,
+      markdown,
+      (observed) =>
+        opened(name)(observed) &&
+        (observed.focus !== 'editor' || observed.top === 0),
+    )
     t.diagnostic(JSON.stringify({ name, ...observed }))
     const expected = accepted[name]
     const end = markdown.trimEnd().length
@@ -297,10 +336,19 @@ test(`a note opens with the caret at the end of its last text`, {
   const rendered = { math: 'x^2', mermaid: 'graph TD', typst: '= last' }
   const markdown = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  // A key's edit reaches the document after its handler; `check` reports a
+  // source that never arrives.
+  const settled = (expected) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
+    ).catch(() => {})
   for (const name of atoms)
     for (const press of ['Z', 'Enter', 'Backspace', 'Delete']) {
       const note = notes[name]
-      await open(`${name}-${press}`, note)
+      await open(`${name}-${press}`, note, opened(name))
       if (rendered[name])
         check(
           name,
@@ -318,9 +366,6 @@ test(`a note opens with the caret at the end of its last text`, {
           },
           { name, shown: false },
         )
-      await page.keyboard.press(press)
-      await page.waitForTimeout(300)
-      const after = await markdown()
       const kept = note.trimEnd()
       const want =
         press === 'Z'
@@ -328,6 +373,9 @@ test(`a note opens with the caret at the end of its last text`, {
           : press === 'Enter'
             ? `${kept}\n\n`
             : 'plain\n'
+      await page.keyboard.press(press)
+      await settled(want)
+      const after = await markdown()
       check(name, { name, press, after }, { name, press, after: want })
     }
   // Formatting acts on a selected block as on the rich editor's node
@@ -363,7 +411,11 @@ test(`a note opens with the caret at the end of its last text`, {
       (action) => name === 'rule' || name === 'image' || action.includes('+'),
     )
     for (const action of taken) {
-      await open(`${name}-${action.replace(/\W/g, '')}`, notes[name])
+      await open(
+        `${name}-${action.replace(/\W/g, '')}`,
+        notes[name],
+        opened(name),
+      )
       if (action === taken[0]) {
         // The enabled or pressed actions, or whether they are `want`.
         const shown = (want) => {
@@ -390,9 +442,7 @@ test(`a note opens with the caret at the end of its last text`, {
           return want ? JSON.stringify(ids) === JSON.stringify(want) : ids
         }
         // The toolbar refreshes after a paint.
-        await page
-          .waitForFunction(shown, enabled, { timeout: 3000 })
-          .catch(() => {})
+        await page.waitForFunction(shown, enabled).catch(() => {})
         check(name, await page.evaluate(shown, null), enabled)
       }
       if (action.includes('+'))
@@ -431,10 +481,10 @@ test(`a note opens with the caret at the end of its last text`, {
         { name, action, after: changed },
       )
       if (action !== 'quote' && action !== 'divider') continue
-      await page.keyboard.press('Z')
-      await page.waitForTimeout(300)
       const typed =
         action === 'quote' ? 'plain\n\n> Z\n' : `${kept}\n\n---\n\nZ\n`
+      await page.keyboard.press('Z')
+      await settled(typed)
       check(
         name,
         { name, action, typed: await markdown() },
@@ -451,7 +501,11 @@ test(`a note opens with the caret at the end of its last text`, {
     ['long', true],
   ]) {
     const markdown = notes[name]
-    await open(`${name}-scrolled${moved ? '-moved' : ''}`, markdown)
+    await open(
+      `${name}-scrolled${moved ? '-moved' : ''}`,
+      markdown,
+      opened(name),
+    )
     const end = markdown.trimEnd().length
     if (moved) await page.keyboard.press('ArrowLeft')
     const before = await page.evaluate(caret)
@@ -459,12 +513,35 @@ test(`a note opens with the caret at the end of its last text`, {
       const pane = document.querySelector('.rich-pane')
       pane.scrollTop = pane.scrollHeight
     })
-    let last = null
-    for (let read = 0; read < 30; read++) {
-      await page.waitForTimeout(100)
-      const now = await page.evaluate(caret)
-      if (JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
+    // The caret moves once the view reaches the end, at a later idle slice.
+    let last
+    if (moved) {
+      // The parse reaching the end draws the last code block; the caret
+      // would move then, in a microtask after that update.
+      await waitForAsync(
+        page,
+        () =>
+          [
+            ...document.querySelectorAll(
+              '.rich-pane .cm-line.hibi-lp-codeblock',
+            ),
+          ].some((line) => line.textContent === 'last'),
+        undefined,
+        { label: "the note's last block is drawn" },
+      )
+      last = await page.evaluate(caret)
+    } else {
+      const settled = (last) =>
+        name === 'long-mermaid'
+          ? same(
+              [last.anchor, last.head],
+              [markdown.lastIndexOf('\n\n', end) + 2, end],
+            )
+          : same(key(last), native(name))
+      await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+        last = await page.evaluate(caret)
+        return settled(last)
+      }).catch(() => {})
     }
     t.diagnostic(JSON.stringify({ name, moved, ...last }))
     if (moved)
@@ -487,7 +564,7 @@ test(`a note opens with the caret at the end of its last text`, {
     (await window.hibi.getDocument()).markdown
       .split('\n')
       .filter((line) => line.startsWith('|')).length === count
-  await open('tall-table-undo', note)
+  await open('tall-table-undo', note, ({ cell }) => same(cell, [80, 1]))
   // Tab in the last cell adds a row.
   await page.keyboard.press('Tab')
   await waitForAsync(page, rows, 83)
@@ -496,22 +573,22 @@ test(`a note opens with the caret at the end of its last text`, {
   })
   await page.keyboard.press('ControlOrMeta+z')
   await waitForAsync(page, rows, 82)
-  let last = null
-  for (let read = 0; read < 30; read++) {
-    await page.waitForTimeout(100)
-    const now = await page.evaluate(() => {
-      const shown = document.querySelector('.rich-pane').getBoundingClientRect()
-      const cell = document.activeElement?.closest('td, th')
-      const box = cell?.getBoundingClientRect()
-      return {
-        cell: cell ? [cell.parentElement.rowIndex, cell.cellIndex] : null,
-        shown:
-          !!box && box.top >= shown.top - 1 && box.bottom <= shown.bottom + 1,
-      }
-    })
-    if (JSON.stringify(now) === JSON.stringify(last)) break
-    last = now
+  const landed = () => {
+    const shown = document.querySelector('.rich-pane').getBoundingClientRect()
+    const cell = document.activeElement?.closest('td, th')
+    const box = cell?.getBoundingClientRect()
+    return {
+      cell: cell ? [cell.parentElement.rowIndex, cell.cellIndex] : null,
+      shown:
+        !!box && box.top >= shown.top - 1 && box.bottom <= shown.bottom + 1,
+    }
   }
+  // The undo scrolls to the cell at a later measure.
+  let last
+  await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+    last = await page.evaluate(landed)
+    return last.shown && last.cell?.join() === '80,1'
+  }).catch(() => {})
   t.diagnostic(JSON.stringify({ name: 'tall-table-undo', ...last }))
   check('tall-table-undo', last, { cell: [80, 1], shown: true })
   assert.deepEqual(differences, [])
@@ -650,8 +727,12 @@ test('a note opens at its top while diagrams above its caret draw', {
     (target) => document.querySelector('.rich-pane').clientHeight === target,
     target,
   )
-  await page.waitForTimeout(300)
-  const opened = await place()
+  // The pane takes its new height at a later measure.
+  let opened
+  await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+    opened = await place()
+    return opened.height > opened.client && opened.caretShown
+  }).catch(() => {})
   t.diagnostic(JSON.stringify({ shown, opened }))
   // The diagrams draw only once their renderer arrives, and the caret is on
   // screen above their placeholders in a pane that scrolls.
@@ -723,13 +804,14 @@ test('codemirror: a note opened again keeps its caret in a table cell', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
   }
   const table = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
     { length: 80 },

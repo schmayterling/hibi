@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -132,14 +133,13 @@ async function launchTargetProbe(t) {
     await clickMenu(app, 'Open…')
   }
   const openTarget = async (file) => {
-    await open(file)
+    await openInDocumentEditor(app, page, () => open(file))
     const name = file === first ? 'first.md' : 'second.md'
     await waitForAsync(
       page,
       async (name) => (await window.hibi.getDocument()).name === name,
       name,
     )
-    await waitForDocumentEditor(app, page)
     return page.evaluate(
       (name) =>
         window.targetProbe.list().find((document) => document.name === name)
@@ -217,14 +217,15 @@ test('inactive addon target edits save exact source without changing active inpu
   await waitForMarkdown(page, '# two')
   assert.equal(await acceptedMarkdown(page), '# two')
   assert.equal(await readFile(first, 'utf8'), '# ONE')
-  await page.getByRole('tab', { name: 'first.md', exact: true }).click()
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).markdown === '# ONE',
-    undefined,
-    { timeout: 30000 },
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await page.getByRole('tab', { name: 'first.md', exact: true }).click()
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === '# ONE',
+      undefined,
+      { timeout: 30000 },
+    )
+  })
   assert.equal(await acceptedMarkdown(page), '# ONE')
   assert.equal(
     await rich.locator('[role="heading"][aria-level="1"]').innerText(),
@@ -315,7 +316,9 @@ test('a deferred legacy command rejects a target switched while tab selection is
   const { app, page, first, second, openTarget } = await launchTargetProbe(t)
   await openTarget(first)
   await openTarget(second)
-  await page.getByRole('tab', { name: 'first.md', exact: true }).click()
+  await openInDocumentEditor(app, page, () =>
+    page.getByRole('tab', { name: 'first.md', exact: true }).click(),
+  )
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   const source = page.getByRole('textbox', {
@@ -436,8 +439,9 @@ test('mounted inactive target edits keep the other document and its native focus
   await waitForDocumentEditor(app, page)
   await openTarget(second)
   const secondId = (await page.evaluate(() => window.hibi.getDocument())).tabId
-  await page.getByRole('tab', { name: 'first.md', exact: true }).click()
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () =>
+    page.getByRole('tab', { name: 'first.md', exact: true }).click(),
+  )
   // Reopening the tab remounts this host; retain source in the current mount.
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -496,8 +500,9 @@ test('split-focused target edits retain native focus in the editable formatted p
   await waitForDocumentEditor(app, page)
   await openTarget(second)
   const secondId = (await page.evaluate(() => window.hibi.getDocument())).tabId
-  await page.getByRole('tab', { name: 'first.md', exact: true }).click()
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () =>
+    page.getByRole('tab', { name: 'first.md', exact: true }).click(),
+  )
   await splitTab(app, page, secondId)
   const left = page.locator('.editor-page[data-side="left"]')
   const leftRich = left.locator('.rich-pane .cm-content')

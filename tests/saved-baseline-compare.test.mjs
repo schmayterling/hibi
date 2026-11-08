@@ -3,8 +3,15 @@ import * as fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { build } from 'esbuild'
+
+let timers
+beforeEach((t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(performance, 'now', () => 0)
+  timers = t.mock.timers
+})
 
 // The main process's document module with real files and history; only
 // electron is stood in for, and the note's final rename can be held or fail.
@@ -85,8 +92,7 @@ function edit(value) {
 }
 /** Whether the note reads dirty once its scheduled comparison has had its tasks. */
 async function settled() {
-  for (let task = 0; task < 20 && document.getDocument().dirty; task++)
-    await new Promise((done) => setTimeout(done, 0))
+  timers.tick(0)
   return document.getDocument().dirty
 }
 /** Holds the note's final rename until `during` has run; `entered` says whether the save reached it. */

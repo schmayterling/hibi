@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAddonShortcut,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -84,12 +85,13 @@ async function dictionaryCase(t) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+  })
   if (t.dictionarySource) {
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     await waitForDocumentEditor(app, page, { name: 'Markdown editor' })

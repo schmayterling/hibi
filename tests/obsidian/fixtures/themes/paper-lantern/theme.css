@@ -1,0 +1,28 @@
+/* Variables-only theme: the common pattern of re-colouring Obsidian's roles. */
+body {
+  --font-text-theme: Georgia, serif;
+  --h1-color: #8a3b12;
+  --h2-color: #2f6b3a;
+}
+.theme-light {
+  --background-primary: #fbf3e4;
+  --background-secondary: #f1e4cc;
+  --background-modifier-border: #d9c7a5;
+  --text-normal: #3b2f22;
+  --text-muted: #7a6650;
+  --text-faint: #a8957c;
+  --interactive-accent: #b5541c;
+  --text-selection: #f3d6a8;
+  --link-color: #b5541c;
+}
+.theme-dark {
+  --background-primary: #1d1a16;
+  --background-secondary: #26221c;
+  --background-modifier-border: #3d362c;
+  --text-normal: #eadbc4;
+  --text-muted: #b3a185;
+  --text-faint: #7d6f5b;
+  --interactive-accent: #e08a4f;
+  --text-selection: #4a3a28;
+  --link-color: #e08a4f;
+}

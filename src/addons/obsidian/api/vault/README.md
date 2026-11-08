@@ -1,0 +1,15 @@
+# vault service
+
+`Vault` owns one metadata-only file tree for the captured Hibi workspace. It loads Hibi's existing retained entries in bounded pages, preserves file objects across renames, and refreshes only the named file stats after content changes. It never retains note sources or builds a second vault index. Hibi's file filters still apply: hidden files, ignored entries, symlinks and unsupported document types are not loaded.
+
+`TAbstractFile`, `TFile` and `TFolder` expose vault-relative paths, names, parents, file stats and folder children. The root path is an empty string. Lookups are case sensitive. The adapter exposes only `exists`, `read`, `write`, `list` and `stat`; it has no native filesystem paths or arbitrary filesystem operations.
+
+Reads of open notes use the canonical document session, including unsaved edits. `process` serializes callbacks per file, applies a version-checked raw source edit, and saves that captured version through Hibi's document service. Closed notes use Hibi's disk-version check and atomic replacement. Callbacks must return text synchronously. Conflicts and unsupported editor states reject without falling back to overwriting the disk. If saving conflicts after an accepted session edit, that edit remains visible and recoverable in the document session.
+
+`modify`, `append` and adapter writes use the same process path. An explicit `modify` is a replacement of the note's current contents; callers preserving unrelated edits should use `process`. Binary creation and reads use Hibi's bounded attachment service. Unsupported binary extensions reject. Binary replacement is unavailable. New folders require an existing parent.
+
+Renames, copies and deletion call Hibi's shared workspace actions. Their link update and trash policies come from the vault settings. `delete` and `trash` both honor that policy; the optional system-trash preference does not override the vault setting. Permanent deletion still requires the existing Hibi confirmation. Folder operations refuse protected or hidden descendants and symlink traversal.
+
+The native host captures the vault identity, generation and addon activation. It validates paths again, refuses configuration folders (including detected custom folders), absolute paths, traversal and symlinks, and returns only relative descriptors. `configDir` comes from Hibi's shared read-only Obsidian configuration detector. Existing host message limits, file metadata-reset behavior and same-user filesystem race limitations still apply.
+
+The handwritten `vault-api` fixture and scoped tests exercise file operations, native guards, open document edits, conflicts and byte-identical untouched files. The parent host must import this module before metadata/workspace/file-manager registrations, and compose `createVaultNative` into its native handlers behind the host capture check.

@@ -112,10 +112,11 @@ export class ObsidianHost {
     const keymap = new Keymap()
     keymap.pushScope(scope)
     this.app = {
-      vault: {},
-      metadataCache: {},
-      workspace: {},
-      fileManager: {},
+      // Service factories replace these stubs before any plugin executes.
+      vault: {} as App['vault'],
+      metadataCache: {} as App['metadataCache'],
+      workspace: {} as App['workspace'],
+      fileManager: {} as App['fileManager'],
       scope,
       keymap,
       lastEvent: null,

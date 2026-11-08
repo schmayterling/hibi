@@ -1581,6 +1581,28 @@ async function readMetadataBatch(
   return current() ? result : []
 }
 
+/** Read one requested file through the existing worker/cache, including its draft. */
+export async function workspaceMetadataFile(
+  path: string,
+  syntax: WorkspaceSyntax,
+  current: () => boolean,
+): Promise<WorkspaceMetadataPage | null> {
+  const selected = root
+  if (!selected) return null
+  const revision = indexRevision
+  const active = () =>
+    current() && root === selected && indexRevision === revision
+  const pages = await readMetadataBatch(
+    [path],
+    selected,
+    syntax,
+    metadataDrafts(selected),
+    cachedRoot === selected ? cachedPages : new Map(),
+    active,
+  )
+  return active() ? (pages[0]?.[1].page ?? null) : null
+}
+
 type WorkspaceMetadataRead<Pages> = {
   pages: Pages
   commit: () => boolean

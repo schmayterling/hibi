@@ -1,0 +1,9 @@
+{
+  "id": "vault-api",
+  "name": "Vault API fixture",
+  "version": "1.0.0",
+  "minAppVersion": "0.0.0",
+  "description": "Handwritten temporary-vault API checks.",
+  "author": "Hibi",
+  "isDesktopOnly": false
+}

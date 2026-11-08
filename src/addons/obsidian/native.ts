@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { app, dialog } from 'electron'
 import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
+import { createMetadataNative } from './api/metadata/native'
+import { createVaultNative } from './api/vault/native'
 import { validPluginId, wrapObsidianPlugin } from './package'
 import {
   discoverObsidianPlugins,
@@ -136,9 +138,36 @@ export async function obsidianPluginAsset(
       : null
 }
 
+function vaultQuery(
+  name: keyof ReturnType<typeof createVaultNative>['queries'],
+) {
+  return async (input: unknown, context: NativeAddonContext) => {
+    const place = await captured(input, context)
+    return createVaultNative(context, place.check).queries[name](input)
+  }
+}
+function vaultMethod(
+  name: keyof ReturnType<typeof createVaultNative>['methods'],
+) {
+  return async (input: unknown, context: NativeAddonContext) => {
+    const place = await captured(input, context)
+    return createVaultNative(context, place.check).methods[name](input)
+  }
+}
+
 export default {
   id: 'obsidian',
   queries: {
+    vaultInfo: vaultQuery('vaultInfo'),
+    vaultStat: vaultQuery('vaultStat'),
+    vaultList: vaultQuery('vaultList'),
+    async obsidianMetadataFile(input, context) {
+      const place = await captured(input, context)
+      return createMetadataNative(
+        context,
+        place.check,
+      ).queries.obsidianMetadataFile(input)
+    },
     async list(input, context) {
       const place = await captured(input, context)
       return place.store.list()
@@ -158,6 +187,8 @@ export default {
     },
   },
   methods: {
+    vaultCreateFolder: vaultMethod('vaultCreateFolder'),
+    vaultAction: vaultMethod('vaultAction'),
     install: (input, context) => install(input, context, false),
     installVault: (input, context) => install(input, context, true),
     async enable(input, context) {

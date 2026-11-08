@@ -672,6 +672,25 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
   const doc = state.doc
   let offset = 0,
     past = false
+  // The stretch the last edit merged, in this note's terms. Later edits inside
+  // it only lengthen it, as a Tab over the lines of one code block does, so
+  // its replace waits for an edit elsewhere.
+  let merged: { from: number; to: number } | null = null,
+    grown = 0
+  const lengthen = () => {
+    if (!grown) return
+    const by = grown
+    groups = replace(
+      groups,
+      start,
+      merged!.from,
+      merged!.from + 1,
+      ([kept]) => [
+        { length: kept!.length + by, definitions: kept!.definitions },
+      ],
+    ).groups
+    grown = 0
+  }
   for (const { fromA, toA, fromB, toB } of changes) {
     const size = toB - fromB - (toA - fromA)
     // A block read on past windows holds while edits come after its last read line.
@@ -688,6 +707,15 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
     // Edits come in order, so once one is past the read text, the rest are
     // too; a Tab over 16k lines would look each line up.
     if (past) continue
+    if (merged && from >= merged.from && Math.max(to, from + 1) <= merged.to) {
+      // Stale text already covers the stretch and grew with it above.
+      grown += size
+      merged.to += size
+      read += size
+      continue
+    }
+    lengthen()
+    merged = null
     // Blocks can join across the two lines above an edit.
     const near = doc.line(Math.max(1, doc.lineAt(fromB).number - 2)).from
     if (near >= read) {
@@ -729,7 +757,9 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
     stale = stale
       ? { from: Math.min(stale.from, first.from), to: Math.max(stale.to, end) }
       : { from: first.from, to: end }
+    merged = { from: first.from, to: end }
   }
+  lengthen()
   return { ...index, groups, read, stale, pending }
 }
 

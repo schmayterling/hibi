@@ -810,7 +810,10 @@ export const documentRuntime = new DocumentRuntime({
     }
   },
   enqueue: (operation) => {
-    void window.hibi.appendSourceOperation(operation).catch(reportError)
+    // The preload holds the admitted operation: only its id crosses again.
+    void window.hibi
+      .appendSourceOperation(operation.operationId)
+      .catch(reportError)
   },
   onError: reportError,
   opened: (tabId, session) => {

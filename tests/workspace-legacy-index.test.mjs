@@ -216,7 +216,11 @@ test('oversized reply stops before reading the rest and retains no partial new k
   for (const source of disk.values()) source.text = 'x'.repeat(1024 * 1024)
   await assert.rejects(index.read(options), /20 MiB message limit/)
   assert.equal(counters.reads, 0)
-  assert.equal(counters.stats, 20)
+  assert.equal(
+    counters.stats,
+    40,
+    'one scan and one metadata-only confirmation',
+  )
   disk.get('0.md').text = 'small'
   options.entries = [file('0.md')]
   const result = await index.read(options)
@@ -239,7 +243,7 @@ test('preflight includes page envelopes before reading any text and clears the o
   counters.reads = 0
   counters.stats = 0
   await assert.rejects(index.read(options), /20 MiB message limit/)
-  assert.deepEqual(counters, { stats: 2, reads: 0 })
+  assert.deepEqual(counters, { stats: 4, reads: 0 })
   assert.equal(index.cached, undefined)
   options.key = 'small-again'
   disk.set('0.md', { version: 'small-again', text: 'small' })
@@ -316,6 +320,61 @@ test('a file removed after preflight is skipped while its tree row remains', asy
   )
   assert.equal(result.workspace.entries.length, 3)
   assert.deepEqual(counters, { stats: 3, reads: 2 })
+})
+
+for (const change of ['shrink', 'delete']) {
+  test(`preflight confirms sizes when an earlier file changes after stat: ${change}`, async () => {
+    const { index, options, disk, counters } = fixture(2)
+    const large = 'x'.repeat(12 * 1024 * 1024)
+    for (const source of disk.values()) source.text = large
+    const resolve = options.resolve
+    let changed = false
+    options.resolve = async (path) => {
+      const source = await resolve(path)
+      if (path === '0.md' && !changed) {
+        changed = true
+        if (change === 'shrink') {
+          disk.get(path).text = ''
+          disk.get(path).version = 'disk:2'
+        } else disk.delete(path)
+      }
+      return {
+        ...source,
+        read: (budget) => {
+          if (!disk.has(path))
+            throw Object.assign(new Error('Gone'), { code: 'ENOENT' })
+          return source.read(budget)
+        },
+      }
+    }
+    const result = await index.read(options)
+    assert.deepEqual(
+      result.pages.map((page) => page.path),
+      change === 'shrink' ? ['0.md', '1.md'] : ['1.md'],
+    )
+    assert.deepEqual(
+      result.pages.map((page) => page.markdown.length),
+      change === 'shrink' ? [0, large.length] : [large.length],
+    )
+    assert.equal(counters.stats, 4)
+    assert.equal(counters.reads, change === 'shrink' ? 2 : 1)
+    assert.ok(bytes(result) < MAX_LEGACY_INDEX_BYTES)
+  })
+}
+
+test('clear between a preflight refusal and confirmation cancels without more stats or reads', async () => {
+  const { index, options, disk, counters } = fixture(2)
+  for (const source of disk.values()) source.text = 'x'.repeat(12 * 1024 * 1024)
+  let clearing = false
+  options.current = () => {
+    if (counters.stats === 2 && !clearing) {
+      clearing = true
+      queueMicrotask(() => index.clear())
+    }
+    return true
+  }
+  assert.equal(await index.read(options), null)
+  assert.deepEqual(counters, { stats: 2, reads: 0 })
 })
 
 test('remaining reply budget rejects oversized source before materialization', async () => {

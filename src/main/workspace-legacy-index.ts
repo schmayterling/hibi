@@ -49,6 +49,8 @@ type CachedIndex = {
   bytes: number
 }
 
+class UnverifiedLegacySize extends Error {}
+
 /** Owns one bounded reply; per-file entries share its page objects and strings. */
 export class LegacyWorkspaceIndex {
   private cached: CachedIndex | undefined
@@ -61,6 +63,20 @@ export class LegacyWorkspaceIndex {
 
   async read(options: LegacyIndexOptions): Promise<WorkspaceIndex | null> {
     const generation = this.generation
+    try {
+      return await this.readPass(options, generation, true)
+    } catch (error) {
+      if (!(error instanceof UnverifiedLegacySize)) throw error
+      // Confirm stat sizes once; neither pass reads text before this check.
+      return this.readPass(options, generation, false)
+    }
+  }
+
+  private async readPass(
+    options: LegacyIndexOptions,
+    generation: number,
+    verifyOverflow: boolean,
+  ): Promise<WorkspaceIndex | null> {
     const current = () => generation === this.generation && options.current()
     if (!current()) return null
     let count = 0
@@ -76,6 +92,8 @@ export class LegacyWorkspaceIndex {
     const charge = (amount: number) => {
       bytes += amount
       if (bytes + minimumBytes > MAX_LEGACY_INDEX_BYTES) {
+        if (verifyOverflow && bytes <= MAX_LEGACY_INDEX_BYTES && minimumBytes)
+          throw new UnverifiedLegacySize()
         if (current()) this.cached = undefined
         checkLegacyIndexBytes(bytes + minimumBytes)
       }

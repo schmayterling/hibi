@@ -1691,9 +1691,10 @@ export function workspaceMetadataPages(
     }
     if (!active()) return
     const pruneStarted = performance.now()
-    if (building) await metadataParser.finishBuild(active)
-    trace('finish-build', { ms: round(performance.now() - pruneStarted), building })
-    else {
+    if (building) {
+      await metadataParser.finishBuild(active)
+      trace('finish-build', { ms: round(performance.now() - pruneStarted), building })
+    } else {
       await metadataParser.close()
       if (!active()) return
       const id = createHash('sha256').update(selected).digest('hex')

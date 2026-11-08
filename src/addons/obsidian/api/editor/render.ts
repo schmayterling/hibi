@@ -1,3 +1,6 @@
+import { syntaxTree } from '@codemirror/language'
+import { EditorView } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
 import { formattedRegistry } from '../../../../renderer/src/formatted-registry.ts'
 import type { FencedRenderer } from '../../../_shared/formatted-fence'
 import { Component } from '../core/component.ts'
@@ -56,15 +59,51 @@ const settle = (result: unknown) =>
 function processorContext(
   sourcePath: string,
   owner: Component,
+  // ponytail: MarkdownRenderer output keeps no source lines, so null ("unknown"); map Marked token lines if plugins need it there.
+  getSectionInfo: MarkdownPostProcessorContext['getSectionInfo'] = () => null,
 ): MarkdownPostProcessorContext {
   return {
     docId: `obsidian-${++sequence}`,
     sourcePath,
     frontmatter: null,
     addChild: (child) => owner.addChild(child),
-    // ponytail: rendered blocks do not keep their source lines; null is Obsidian's "unknown". Add when a fence widget passes its range.
-    getSectionInfo: () => null,
+    getSectionInfo,
   }
+}
+
+/** The fence holding a rendered block in a formatted view: the note and its 0-based lines. */
+export function fenceSection(
+  el: HTMLElement,
+): MarkdownSectionInformation | null {
+  const editor = el.closest<HTMLElement>('.cm-editor')
+  const view = editor && EditorView.findFromDOM(editor)
+  if (!view) return null
+  let at: number
+  try {
+    at = view.posAtDOM(el)
+  } catch {
+    return null
+  }
+  // A replaced fence starts at the block; a revealed one ends there.
+  for (const side of [1, -1] as const) {
+    for (
+      let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(
+        at,
+        side,
+      );
+      node;
+      node = node.parent
+    ) {
+      if (node.name !== 'FencedCode') continue
+      const { doc } = view.state
+      return {
+        text: doc.toString(),
+        lineStart: doc.lineAt(node.from).number - 1,
+        lineEnd: doc.lineAt(node.to).number - 1,
+      }
+    }
+  }
+  return null
 }
 
 /** Code block and post processors of one vault, with removal on plugin unload. */
@@ -117,27 +156,40 @@ export class Processors {
               indented: () => true,
               mount: (dom, block) => {
                 let owner = new Component()
+                let current = 0
+                // Runs once the block is in the view, so getSectionInfo can find its fence.
                 const render = (source: string) => {
-                  owner.unload()
-                  owner = new Component()
-                  owner.load()
-                  dom.replaceChildren()
-                  try {
-                    settle(
-                      handler(
-                        source,
-                        dom,
-                        processorContext(this.sourcePath(), owner),
-                      ),
-                    )
-                  } catch (error) {
-                    reportError(error)
-                  }
+                  const run = ++current
+                  queueMicrotask(() => {
+                    if (run !== current) return
+                    owner.unload()
+                    owner = new Component()
+                    owner.load()
+                    dom.replaceChildren()
+                    try {
+                      settle(
+                        handler(
+                          source,
+                          dom,
+                          processorContext(
+                            this.sourcePath(),
+                            owner,
+                            fenceSection,
+                          ),
+                        ),
+                      )
+                    } catch (error) {
+                      reportError(error)
+                    }
+                  })
                 }
                 render(block.source)
                 return {
                   update: ({ source }) => render(source),
-                  dispose: () => owner.unload(),
+                  dispose: () => {
+                    current++
+                    owner.unload()
+                  },
                 }
               },
               settled: () => true,

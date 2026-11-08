@@ -19,9 +19,11 @@ import {
   type Selection,
   type StoredSelection,
   snippetCss,
+  snippetHash,
   styleValues,
   themeCss,
   themeHash,
+  withCopies,
   writeSelection,
 } from './store'
 import { styleSettingsCss } from './style-settings'
@@ -127,8 +129,7 @@ async function recopy(
   }
   for (const name of stored.snippets)
     try {
-      const { hash } = await checkSnippet(vault, name)
-      if (hash !== snippetHashes[name]) {
+      if ((await snippetHash(vault, name)) !== snippetHashes[name]) {
         snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
         changed = true
       }
@@ -174,7 +175,7 @@ export default {
       if (disabled() || !vault) return { disabled: disabled(), css: null }
       const kept = await readSelection(data(), vault)
       if (!kept) return { disabled: false, css: null }
-      const stored = await recopy(vault, kept, context)
+      const stored = await withCopies(() => recopy(vault, kept, context))
       const parts = [
         stored.theme
           ? await themeCss(root(), stored.theme).catch(() => '')
@@ -223,46 +224,53 @@ export default {
       const vault = context.workspace.directory()
       if (!vault) throw new Error('Open an Obsidian vault first.')
       const request = (input ?? {}) as { theme?: unknown; snippets?: unknown }
-      let theme: string | null = null
-      if (typeof request.theme === 'string') {
-        theme = request.theme.startsWith('vault:')
-          ? (
-              await installTheme(
-                root(),
-                await vaultThemeFolder(vault, request.theme.slice(6)),
-                'vault',
-              )
-            ).id
-          : request.theme
-        await themeCss(root(), theme)
-      }
-      const snippets = strings(request.snippets)
-      const snippetHashes: Record<string, string> = {}
-      for (const name of snippets)
-        snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
-      if (!context.isCurrent()) return null
-      // Options chosen earlier stay with the vault when the theme changes.
-      const styleValues =
-        (await readSelection(data(), vault))?.styleValues ?? {}
-      await writeSelection(data(), vault, {
-        theme,
-        snippets,
-        snippetHashes,
-        styleValues,
+      const kept = await withCopies(async () => {
+        let theme: string | null = null
+        if (typeof request.theme === 'string') {
+          theme = request.theme.startsWith('vault:')
+            ? (
+                await installTheme(
+                  root(),
+                  await vaultThemeFolder(vault, request.theme.slice(6)),
+                  'vault',
+                )
+              ).id
+            : request.theme
+          await themeCss(root(), theme)
+        }
+        const snippets = strings(request.snippets)
+        const snippetHashes: Record<string, string> = {}
+        for (const name of snippets)
+          snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
+        if (!context.isCurrent()) return false
+        // Options chosen earlier stay with the vault when the theme changes.
+        const styleValues =
+          (await readSelection(data(), vault))?.styleValues ?? {}
+        await writeSelection(data(), vault, {
+          theme,
+          snippets,
+          snippetHashes,
+          styleValues,
+        })
+        await pruneCopies(root(), data())
+        return true
       })
-      await pruneCopies(root(), data())
+      if (!kept) return null
       return state(context)
     },
     /** Save Style Settings values for this vault's kept theme and snippets. */
     async setStyleValues(input, context) {
       const vault = context.workspace.directory()
       if (!vault) throw new Error('Open an Obsidian vault first.')
-      const stored = await readSelection(data(), vault)
-      if (!stored) throw new Error('Apply a theme first.')
       const values = styleValues((input as { values?: unknown } | null)?.values)
-      if (!context.isCurrent()) return null
-      await writeSelection(data(), vault, { ...stored, styleValues: values })
-      return state(context)
+      const saved = await withCopies(async () => {
+        const stored = await readSelection(data(), vault)
+        if (!stored) throw new Error('Apply a theme first.')
+        if (!context.isCurrent()) return false
+        await writeSelection(data(), vault, { ...stored, styleValues: values })
+        return true
+      })
+      return saved ? state(context) : null
     },
     /** Add a theme from a folder outside the vault. */
     async addFolder(_input, context) {
@@ -276,11 +284,13 @@ export default {
         : runFileDialog(() => dialog.showOpenDialog(options)))
       const folder = selection.filePaths[0]
       if (selection.canceled || !folder) return null
-      await installTheme(root(), folder, 'folder')
+      await withCopies(() => installTheme(root(), folder, 'folder'))
       return state(context)
     },
     async remove(input, context) {
-      await removeTheme(root(), (input as { id?: unknown } | null)?.id)
+      await withCopies(() =>
+        removeTheme(root(), (input as { id?: unknown } | null)?.id),
+      )
       return state(context)
     },
   },

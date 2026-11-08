@@ -459,31 +459,13 @@ class PieceTree {
   /** Sorted, disjoint edits rebuilt from one pass over the tree's pieces. */
   replaceAll(root: Node, edits: readonly RawEdit[]): Node {
     const pieces: Piece[] = [],
-      leaves: Node[] = [root]
-    let leaf: Piece[] = [],
-      index = 0,
-      offset = 0,
-      at = 0
+      seek = this.walk(root)
+    let at = 0
     const keep = (to: number) => {
       while (at < to) {
-        while (index === leaf.length) {
-          const node = leaves.pop()!
-          if (node.kind === 'branch')
-            leaves.push(...[...node.entries].reverse())
-          else {
-            leaf = node.entries as Piece[]
-            index = 0
-          }
-        }
-        const piece = leaf[index]!,
-          end = offset + piece.metrics.rawUnits
-        if (end <= at) {
-          offset = end
-          index++
-          continue
-        }
-        const a = at - offset,
-          b = Math.min(to, end) - offset
+        const [piece, offset] = seek(at),
+          a = at - offset,
+          b = Math.min(to - offset, piece.metrics.rawUnits)
         pieces.push(
           a === 0 && b === piece.metrics.rawUnits
             ? piece
@@ -499,6 +481,47 @@ class PieceTree {
     }
     keep(root.metrics.rawUnits)
     return this.fromPieces(pieces)
+  }
+
+  /**
+   * The piece holding each position asked for, with where it starts: mostly
+   * ascending positions, found in one forward walk that skips the subtrees
+   * before them. A position before the last piece starts over from the root.
+   */
+  walk(root: Node) {
+    let stack = [root],
+      leaf: readonly Piece[] = [],
+      index = 0,
+      offset = 0,
+      next = 0
+    return (at: number): [Piece, number] => {
+      if (at < offset) {
+        stack = [root]
+        leaf = []
+        index = offset = next = 0
+      }
+      for (;;) {
+        const piece = leaf[index]
+        if (piece) {
+          if (at < offset + piece.metrics.rawUnits) return [piece, offset]
+          offset += piece.metrics.rawUnits
+          index++
+          continue
+        }
+        const node = stack.pop()!
+        this.counters.nodeVisits++
+        if (next + node.metrics.rawUnits <= at) next += node.metrics.rawUnits
+        else if (node.kind === 'branch')
+          for (let child = node.entries.length; child--; )
+            stack.push(node.entries[child]!)
+        else {
+          leaf = node.entries
+          index = 0
+          offset = next
+          next += node.metrics.rawUnits
+        }
+      }
+    }
   }
 
   replace(root: Node, edit: RawEdit): Node {
@@ -590,59 +613,6 @@ class PieceTree {
       }
       if (end >= to) break
       offset = end
-    }
-  }
-  /**
-   * Slices mostly read in ascending order, each found by walking forward from
-   * the last instead of descending from the root. A slice that starts before
-   * the last piece read starts over from the root.
-   */
-  reader(root: Node) {
-    let stack = [root],
-      leaf: readonly Piece[] = [],
-      index = 0,
-      offset = 0,
-      next = 0
-    return (from: number, to: number) => {
-      if (from === to) return ''
-      if (from < offset) {
-        stack = [root]
-        leaf = []
-        index = offset = next = 0
-      }
-      let text = '',
-        at = from
-      for (;;) {
-        if (index < leaf.length) {
-          const end = offset + leaf[index]!.metrics.rawUnits
-          if (end <= at) {
-            offset = end
-            index++
-            continue
-          }
-          const piece = leaf[index]!,
-            a = at - offset,
-            b = Math.min(to, end) - offset
-          this.counters.sourceUnitsRead += b - a
-          text += piece.chunk.slice(piece.from + a, piece.from + b)
-          at = offset + b
-          if (at === to) return text
-          continue
-        }
-        const node = stack.pop()
-        if (!node) throw new Error('Source range is outside the snapshot.')
-        this.counters.nodeVisits++
-        if (next + node.metrics.rawUnits <= at) next += node.metrics.rawUnits
-        else if (node.kind === 'branch')
-          for (let child = node.entries.length - 1; child >= 0; child--)
-            stack.push(node.entries[child]!)
-        else {
-          leaf = node.entries
-          index = 0
-          offset = next
-          next += node.metrics.rawUnits
-        }
-      }
     }
   }
   /** `chunks` without a generator per level, for the many small reads edits make. */
@@ -920,13 +890,25 @@ const plainSource = (snapshot: SourceSnapshot) =>
 const splitsSeam = (seam: string) =>
   seam === '\r\n' ||
   (highSurrogate(seam.charCodeAt(0)) && lowSurrogate(seam.charCodeAt(1)))
+type Seek = ReturnType<PieceTree['walk']>
+/** Text read through a forward walk of the tree. */
+function read(seek: Seek, from: number, to: number) {
+  let text = ''
+  while (from < to) {
+    const [piece, offset] = seek(from),
+      end = Math.min(to - offset, piece.metrics.rawUnits)
+    text += piece.chunk.slice(piece.from + from - offset, piece.from + end)
+    from = offset + end
+  }
+  return text
+}
 /**
  * Edit boundary checks for ascending positions, read in one forward walk
  * instead of a descent each, as when Tab edits every line of CRLF or CJK text.
  */
 function editBoundaries(
   snapshot: SourceSnapshot,
-  read = trees.get(snapshot)!.reader(roots.get(snapshot)!),
+  seek = trees.get(snapshot)!.walk(roots.get(snapshot)!),
 ) {
   const plain = plainSource(snapshot)
   let last = -1,
@@ -937,7 +919,7 @@ function editBoundaries(
       return true
     if (position !== last) {
       last = position
-      result = !splitsSeam(read(position - 1, position + 1))
+      result = !splitsSeam(read(seek, position - 1, position + 1))
     }
     return result
   }
@@ -949,10 +931,8 @@ function safeInverse(
   snapshot: SourceSnapshot,
   edits: readonly RawEdit[],
 ): readonly RawEdit[] {
-  const tree = trees.get(snapshot)!,
-    root = roots.get(snapshot)!,
-    boundary = editBoundaries(snapshot),
-    read = tree.reader(root)
+  const boundary = editBoundaries(snapshot),
+    seek = trees.get(snapshot)!.walk(roots.get(snapshot)!)
   const groups: { from: number; to: number; edits: RawEdit[] }[] = []
   for (const edit of edits) {
     const start = boundary(edit.from) ? edit.from : edit.from - 1
@@ -969,10 +949,10 @@ function safeInverse(
       let insert = '',
         end = from
       for (const edit of edits) {
-        insert += read(end, edit.from) + edit.insert
+        insert += read(seek, end, edit.from) + edit.insert
         end = edit.to
       }
-      return Object.freeze({ from, to, insert: insert + read(end, to) })
+      return Object.freeze({ from, to, insert: insert + read(seek, end, to) })
     }),
   )
 }
@@ -1193,8 +1173,8 @@ export class SourceStore {
     let changed = false,
       shift = 0
     const inverse: RawEdit[] = [],
-      read = this.#tree.reader(roots.get(before)!),
-      boundary = editBoundaries(before, read)
+      seek = this.#tree.walk(roots.get(before)!),
+      boundary = editBoundaries(before, seek)
     const splits = () =>
       new Error(
         'Source operation splits a Unicode character or line ending, or is outside the source.',
@@ -1202,7 +1182,7 @@ export class SourceStore {
     for (const edit of operation.changes) {
       // The removed text is read before the end's seam so the reads ascend.
       if (!boundary(edit.from) || edit.to > before.utf16Length) throw splits()
-      const removed = read(edit.from, edit.to)
+      const removed = read(seek, edit.from, edit.to)
       if (!boundary(edit.to)) throw splits()
       if (removed !== edit.insert) changed = true
       inverse.push(

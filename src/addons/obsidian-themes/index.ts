@@ -5,6 +5,7 @@ import manifest from './manifest'
 type Active = {
   disabled: boolean
   css: string | null
+  classes?: string[]
   appearance?: { accentColor?: string; baseFontSize?: number }
 }
 let stop: (() => void) | undefined
@@ -40,7 +41,7 @@ export default defineAddon({
       }
       const theme = await load()
       if (disposed || previewing) return
-      theme.show(active.css, active.appearance)
+      theme.show(active.css, active.appearance, active.classes)
       if (!shown) {
         shown = true
         // Shown at first apply, in case a theme hides the settings.
@@ -88,6 +89,9 @@ export default defineAddon({
       id: 'turn-off',
       label: 'Obsidian themes: turn off for this vault',
       keywords: 'obsidian theme snippet css reset disable',
+      // The app menu and keyboard are out of a theme's reach.
+      menu: { location: 'app', group: 'obsidian-themes' },
+      defaultShortcut: 'mod+alt+shift+o',
       run: () => turnOff(),
     })
     void workspaceChanged().catch(report)

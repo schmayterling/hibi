@@ -2,14 +2,19 @@ import { ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import { Button, DocumentNotice, Select, SettingRow, Toggle } from '../ui'
+import { StyleOptions } from './StyleOptions'
 import type { DroppedRule } from './sanitize'
 import type { InstalledTheme, Selection, Vault } from './store'
+import type { StyleSection, StyleValues } from './style-settings'
 
 type State = {
   disabled: boolean
   vault: Vault | null
   installed: InstalledTheme[]
-  selection: (Selection & { preselected: boolean }) | null
+  selection:
+    | (Selection & { preselected: boolean; styleValues?: StyleValues })
+    | null
+  styleSettings?: StyleSection[]
 }
 const id = 'obsidian-themes'
 
@@ -253,6 +258,23 @@ export function Settings() {
           </Button>
         </SettingRow>
       </div>
+      {state.selection && !state.selection.preselected && (
+        <StyleOptions
+          sections={state.styleSettings ?? []}
+          values={state.selection.styleValues ?? {}}
+          disabled={busy}
+          onChange={(values) =>
+            run(async () => {
+              load(
+                (await window.hibi.invokeAddon(id, 'setStyleValues', {
+                  values,
+                })) as State,
+              )
+              window.dispatchEvent(new Event('hibi:obsidian-themes-saved'))
+            })
+          }
+        />
+      )}
       {error && <DocumentNotice title="Could not apply" message={error} />}
       {dropped && (
         <details className="ui-disclosure">

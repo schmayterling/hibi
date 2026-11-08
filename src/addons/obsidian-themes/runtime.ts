@@ -6,8 +6,8 @@ import { bridgeCss, type VaultAppearance } from './bridge'
 const hostStyle = [
   'all: initial',
   'position: fixed',
-  'right: 12px',
-  'bottom: 12px',
+  'inset: auto 12px 12px auto',
+  'margin: 0',
   'z-index: 2147483647',
   'display: block',
   'visibility: visible',
@@ -17,6 +17,12 @@ const hostStyle = [
   'clip-path: none',
   'pointer-events: auto',
   'contain: none',
+  'content-visibility: visible',
+  'zoom: 1',
+  'translate: none',
+  'scale: none',
+  'rotate: none',
+  'mask: none',
 ]
   .map((rule) => `${rule} !important`)
   .join('; ')
@@ -27,6 +33,8 @@ export function createRuntime(context: AddonContext) {
   let style: ReturnType<AddonContext['styles']['register']> | null = null
   let safe: HTMLElement | null = null
   let safeTimer: ReturnType<typeof setTimeout> | undefined
+  // Body classes from Style Settings, removed with the theme.
+  let added: string[] = []
   const root = document.documentElement
   const mode = () =>
     (root.dataset.appearance ??
@@ -50,7 +58,16 @@ export function createRuntime(context: AddonContext) {
     safe = null
   }
   return {
-    show(css: string, appearance: VaultAppearance = {}) {
+    show(
+      css: string,
+      appearance: VaultAppearance = {},
+      bodyClasses: readonly string[] = [],
+    ) {
+      document.body.classList.remove(...added)
+      added = bodyClasses.filter(
+        (name) => !document.body.classList.contains(name),
+      )
+      document.body.classList.add(...added)
       const text = bridgeCss(appearance) + css
       if (style) style.update(text)
       else {
@@ -67,7 +84,8 @@ export function createRuntime(context: AddonContext) {
       style = null
       observer.disconnect()
       media.removeEventListener('change', classes)
-      document.body.classList.remove('theme-dark', 'theme-light')
+      document.body.classList.remove('theme-dark', 'theme-light', ...added)
+      added = []
     },
     /** A button themes can't hide; `timeout` removes it on its own. */
     safeButton(label: string, onClick: () => void, timeout?: number) {
@@ -87,6 +105,10 @@ export function createRuntime(context: AddonContext) {
       shadow.append(button)
       // Outside body, so body-wide theme rules don't reach it either.
       root.append(host)
+      // The top layer paints above every theme overlay and isn't clipped,
+      // moved or faded by the page's own boxes.
+      host.popover = 'manual'
+      host.showPopover()
       safe = host
       if (timeout) safeTimer = setTimeout(hideSafe, timeout)
     },

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { SANITIZER_VERSION } from '../src/addons/obsidian-themes/sanitize.ts'
 import {
   checkSnippet,
   checkTheme,
@@ -74,6 +75,7 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
       ['heavy-grid', 'Heavy Grid'],
       ['legacy-ink', 'legacy-ink'],
       ['paper-lantern', 'Paper Lantern'],
+      ['settings-garden', 'Settings Garden'],
     ],
   )
   assert.deepEqual(
@@ -134,7 +136,13 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
     theme: heavy.id,
     snippets: ['accent-tags'],
     snippetHashes: { 'accent-tags': snippet.hash },
+    styleValues: {},
   })
+  // The copy keeps the theme's Style Settings description.
+  assert.deepEqual(
+    heavy.settings.map((section) => section.settings.map((item) => item.id)),
+    [['grid-accent']],
+  )
   // Choices live in the vault's overlay in Hibi's data.
   const overlays = await readdir(join(data, 'obsidian-vaults'))
   assert.equal(overlays.length, 1)
@@ -191,6 +199,38 @@ test('a renamed Obsidian settings folder is found; links and outside files are n
   await assert.rejects(themeCss(store, '../../etc'))
   assert.equal(await readSelection(data, vault), null)
   assert.deepEqual(await snapshot(vault), before)
+})
+
+test('copies checked by an older sanitizer are checked again from their original', async (t) => {
+  const { vault, store } = await fixtureVault(t)
+  const theme = await installTheme(
+    store,
+    join(vault, '.obsidian', 'themes', 'heavy-grid'),
+    'vault',
+  )
+  const folder = join(store, 'themes', theme.id)
+  // What an older, weaker sanitizer might have let through.
+  await writeFile(
+    join(folder, 'checked.css'),
+    'body { background: url(https://evil.test/old.png); }',
+  )
+  const record = JSON.parse(
+    await readFile(join(folder, 'hibi-theme.json'), 'utf8'),
+  )
+  await writeFile(
+    join(folder, 'hibi-theme.json'),
+    JSON.stringify({ ...record, sanitizerVersion: 1 }),
+  )
+  const css = await themeCss(store, theme.id)
+  assert.doesNotMatch(css, /evil/)
+  // The theme's own images survive, from the kept assets.
+  assert.match(css, /url\("data:image\/png;base64,/)
+  assert.equal(await readFile(join(folder, 'checked.css'), 'utf8'), css)
+  assert.equal(
+    JSON.parse(await readFile(join(folder, 'hibi-theme.json'), 'utf8'))
+      .sanitizerVersion,
+    SANITIZER_VERSION,
+  )
 })
 
 test('a vault without Obsidian settings has no themes', async (t) => {

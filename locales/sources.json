@@ -455,6 +455,9 @@
   "a1e57e3c2176": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "e5fa925de142": [
+    "src/addons/obsidian-themes/native.ts"
+  ],
   "2ca103b50a02": [
     "src/addons/review/index.tsx"
   ],
@@ -4261,7 +4264,8 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "dc937b598926": [
-    "src/addons/obsidian-themes/Settings.tsx"
+    "src/addons/obsidian-themes/Settings.tsx",
+    "src/addons/obsidian-themes/StyleOptions.tsx"
   ],
   "a7248eeb45eb": [
     "src/renderer/src/Introduction.tsx",

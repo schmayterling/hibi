@@ -299,6 +299,7 @@ import {
   snapshotWorkspace,
   subscribeWorkspaceChanges,
   workspaceChangeSnapshot,
+  workspaceId,
   workspaceRelativePath,
   workspaceRoot,
 } from './workspace'
@@ -942,6 +943,36 @@ async function serveAssetResponse(request: Request): Promise<Response> {
             remoteImagePlace(parsed.searchParams.get('tab')),
             manualFetch,
           )
+    if (
+      parsed.hostname === 'hibi' &&
+      parsed.pathname.startsWith('/obsidian-plugins/')
+    ) {
+      const vault = workspaceRoot()
+      const identity = workspaceId()
+      const generation = getAddonActivationGeneration('obsidian')
+      if (!vault || !identity || generation === null)
+        return new Response(null, { status: 403 })
+      const { obsidianPluginAsset } = await import('../addons/obsidian/native')
+      const asset = await obsidianPluginAsset(request, vault, identity)
+      if (
+        generation !== getAddonActivationGeneration('obsidian') ||
+        workspaceRoot() !== vault ||
+        workspaceId() !== identity
+      )
+        return new Response(null, { status: 403 })
+      return asset
+        ? new Response(asset.body, {
+            headers: {
+              'Content-Type': asset.type,
+              'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+              'X-Content-Type-Options': 'nosniff',
+              'Access-Control-Allow-Origin': devUrl
+                ? new URL(devUrl).origin
+                : 'app://hibi',
+            },
+          })
+        : new Response(null, { status: 404 })
+    }
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
     const path = isAddon
       ? await installedAsset(request.url)

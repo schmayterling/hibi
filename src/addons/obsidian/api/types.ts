@@ -1,3 +1,4 @@
+import type { CommandExecutionContext } from '../../../shared/foundation-contracts'
 import type { AddonContext } from '../../api'
 import type { Component } from './core/component'
 import type { Keymap, Scope } from './core/keymap'
@@ -48,6 +49,9 @@ export interface ApiContext {
 }
 
 export interface ApiContribution {
+  commandEditor?: (
+    context: CommandExecutionContext,
+  ) => { editor: unknown; view: unknown } | null
   app?: Partial<
     Pick<App, 'vault' | 'metadataCache' | 'workspace' | 'fileManager'>
   >

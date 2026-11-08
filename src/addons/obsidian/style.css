@@ -1,0 +1,43 @@
+.hibi-obsidian .setting-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding-block: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.hibi-obsidian .setting-item-info {
+  flex: 1;
+  min-width: 0;
+}
+.hibi-obsidian .setting-item-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.hibi-obsidian .setting-item-description {
+  color: var(--muted);
+  font-size: 0.875em;
+}
+.hibi-obsidian .setting-item-heading {
+  font-weight: 600;
+}
+.hibi-obsidian .setting-item-error {
+  color: var(--status-danger);
+}
+.hibi-obsidian input:not([type="checkbox"], [type="range"], [type="color"]),
+.hibi-obsidian textarea,
+.hibi-obsidian select {
+  max-width: 100%;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem;
+}
+.hibi-obsidian .ribbon-icon {
+  display: flex;
+}
+.hibi-obsidian svg {
+  width: 1.2em;
+  height: 1.2em;
+}

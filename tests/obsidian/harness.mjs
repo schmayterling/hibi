@@ -20,14 +20,25 @@ export async function readFixturePlugin(id) {
       await readFile(new URL('manifest.json', folder), 'utf8'),
     ),
     main: await readFile(new URL('main.js', folder), 'utf8'),
+    styles: await readFile(new URL('styles.css', folder), 'utf8').catch(
+      (error) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      },
+    ),
   }
 }
 
-export async function fixtureVault(t, id = 'host-smoke') {
+export async function fixtureVault(
+  t,
+  id = 'host-smoke',
+  { cleanup = true } = {},
+) {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), 'hibi-obsidian-host-')),
   )
-  t.after(() => rm(root, { recursive: true, force: true }))
+  const dispose = () => rm(root, { recursive: true, force: true })
+  if (cleanup) t.after(dispose)
   const vault = join(root, 'vault')
   const overlay = join(root, 'profile')
   const plugin = await readFixturePlugin(id)
@@ -39,6 +50,7 @@ export async function fixtureVault(t, id = 'host-smoke') {
     JSON.stringify(plugin.manifest),
   )
   await writeFile(join(folder, 'main.js'), plugin.main)
+  if (plugin.styles) await writeFile(join(folder, 'styles.css'), plugin.styles)
   await writeFile(
     join(folder, 'data.json'),
     '{"enabled":false,"seeded":true}\r\n',
@@ -50,6 +62,7 @@ export async function fixtureVault(t, id = 'host-smoke') {
   const before = await snapshot(vault)
   return {
     root,
+    dispose,
     vault,
     overlay,
     folder,

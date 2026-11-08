@@ -683,11 +683,17 @@ function rule(
     const name = head.value
     const rest = prelude.slice(start + 1)
     if (name === 'layer') {
-      // Keep theme layers apart from Hibi's own.
+      // Theme layers get names of their own, so `@layer guard.x` or
+      // `@layer compat` can't nest inside Hibi's obsidian-guard or
+      // obsidian-compat (an inner layer's !important would beat the guard).
       for (let i = 0; i < rest.length; i++) {
         const node = rest[i] as Node
-        if (node.type === 'ident')
-          rest[i] = { ...node, raw: `obsidian-${node.raw}` }
+        const before = rest[i - 1]
+        if (
+          node.type === 'ident' &&
+          !(before?.type === 'delim' && before.value === '.')
+        )
+          rest[i] = { ...node, raw: `obsidian-theme-${node.raw}` }
       }
       const kept = serialize([head, ...rest])
       if (!body) return `${kept};`

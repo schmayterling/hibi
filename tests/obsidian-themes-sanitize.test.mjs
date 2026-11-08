@@ -192,7 +192,14 @@ test('Obsidian selectors also match the Hibi elements that play their part', () 
   // Theme layers never land in Hibi's own layers.
   assert.match(
     sanitizeCss('@layer hibi-base { a { color: red } }').css,
-    /^@layer obsidian-hibi-base \{/,
+    /^@layer obsidian-theme-hibi-base \{/,
+  )
+  // Not even under the guard or bridge layers' own names.
+  assert.match(
+    sanitizeCss(
+      '@layer guard.x, compat; @layer obsidian-guard.x { a { color: red } }',
+    ).css,
+    /^@layer obsidian-theme-guard\.x, obsidian-theme-compat;@layer obsidian-theme-obsidian-guard\.x \{/,
   )
 })
 

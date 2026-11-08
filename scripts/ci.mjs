@@ -374,29 +374,63 @@ export function runCI({ dev = false } = {}) {
         ...tests,
       ])
   }
-  runTests(unitTests, availableParallelism())
-  // A red here must not hide the reds of the groups after it.
-  const failures = []
-  for (const [tests, concurrency] of [
-    [
-      selected.filter(
-        (test) =>
-          !unitTests.includes(test) &&
-          !aloneTests.includes(test) &&
-          !appTests.includes(test),
-      ),
-      workers.node,
-    ],
-    [appTests, workers.apps],
-    [aloneTests, 1],
-  ]) {
-    try {
-      runTests(tests, concurrency)
-    } catch (error) {
-      failures.push(error)
+  // Never merge: exact real workspace only; ci-plan fixture workspaces stay unarmed.
+  const evidence =
+    process.env.PREVIEW_EVIDENCE_ROOT === root &&
+    process.env.GITHUB_ACTIONS === 'true' &&
+    shard === '0/4'
+  const pinEvidence = (phase) =>
+    run([
+      new URL('./preview-native-evidence.mjs', import.meta.url).pathname,
+      phase,
+      JSON.stringify({
+        all: plan.allTests,
+        selected,
+        unitTests,
+        aloneTests,
+        appTests,
+        unitWorkers: availableParallelism(),
+        nodeWorkers: workers.node,
+        appWorkers: workers.apps,
+      }),
+    ])
+  if (evidence) pinEvidence('before-tests')
+  let afterEvidenceError
+  try {
+    runTests(unitTests, availableParallelism())
+    // A red here must not hide the reds of the groups after it.
+    const failures = []
+    for (const [tests, concurrency] of [
+      [
+        selected.filter(
+          (test) =>
+            !unitTests.includes(test) &&
+            !aloneTests.includes(test) &&
+            !appTests.includes(test),
+        ),
+        workers.node,
+      ],
+      [appTests, workers.apps],
+      [aloneTests, 1],
+    ]) {
+      try {
+        runTests(tests, concurrency)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length) throw failures[0]
+  } finally {
+    if (evidence) {
+      try {
+        pinEvidence('after-tests')
+      } catch (error) {
+        console.error('preview-evidence-stage-failed: after-tests')
+        afterEvidenceError = error
+      }
     }
   }
-  if (failures.length) throw failures[0]
+  if (afterEvidenceError) throw afterEvidenceError
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (

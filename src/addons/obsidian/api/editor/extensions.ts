@@ -27,7 +27,11 @@ export const editorLivePreviewField = StateField.define<boolean>({
 })
 
 type Presentation = 'source' | 'formatted'
-type Entry = { extension: Extension; remove: () => void }
+type Entry = {
+  plugin: PluginInstance
+  extension: Extension
+  remove: () => void
+}
 
 /**
  * One vault host's editors: each plugin extension is its own Hibi editor
@@ -141,8 +145,10 @@ export class EditorRuntime {
     return editor
   }
 
-  private install(extension: Extension) {
-    const id = `obsidian-${++this.sequence}`
+  /** Named after its plugin, so Hibi's fault reports say whose extension failed. */
+  private install(plugin: PluginInstance, extension: Extension) {
+    const name = plugin.manifest.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    const id = `${/^[a-z]/.test(name) ? '' : 'plugin-'}${name}-${++this.sequence}`
     // Plugins may change their array and call updateOptions.
     const create = () => (Array.isArray(extension) ? [...extension] : extension)
     const { editor } = this.context.hibi
@@ -155,7 +161,8 @@ export class EditorRuntime {
   }
 
   register(plugin: PluginInstance, extension: Extension) {
-    const entry: Entry = { extension, remove: this.install(extension) }
+    const entry: Entry = { plugin, extension, remove: () => {} }
+    entry.remove = this.install(plugin, extension)
     this.entries.add(entry)
     plugin.register(() => {
       if (!this.entries.delete(entry)) return
@@ -167,7 +174,7 @@ export class EditorRuntime {
   refresh() {
     for (const entry of this.entries) {
       entry.remove()
-      entry.remove = this.install(entry.extension)
+      entry.remove = this.install(entry.plugin, entry.extension)
     }
   }
 }

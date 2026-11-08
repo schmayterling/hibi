@@ -1440,7 +1440,7 @@ test("a new width lays out a huge paragraph at the pane's top in the frame that 
       await window.tables.mount(
         doc,
         { width: 1400, height: 800 },
-        { editable: true },
+        { editable: true, slice: 100000 },
       )
       const view = window.tables.view()
       const pane = document.querySelector('.rich-pane')
@@ -1491,8 +1491,13 @@ test("a new width lays out a huge paragraph at the pane's top in the frame that 
         }),
       )
       for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+        // Advance within the joined block so viewport work keeps its head.
+        const next = Math.min(
+          at,
+          Math.max(start, view.lineBlockAt(start).to - 1),
+        )
         view.dispatch({
-          effects: view.constructor.scrollIntoView(at, {
+          effects: view.constructor.scrollIntoView(next, {
             y: 'start',
             yMargin: 0,
           }),

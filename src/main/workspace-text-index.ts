@@ -47,6 +47,7 @@ type Query = {
 type Options = {
   root: string
   database: string
+  dataDirectory?: string
   extensions: readonly string[]
   showAllFiles?: boolean
   readDraft?: (id: string, path: string) => AsyncIterable<string>
@@ -164,7 +165,7 @@ export class WorkspaceTextIndex {
   static async open(options: Options): Promise<WorkspaceTextIndex> {
     options = { ...options, root: await realpath(options.root) }
     await mkdir(dirname(options.database), { recursive: true, mode: 0o700 })
-    const ignored = await workspaceIgnore(options.root)
+    const ignored = await workspaceIgnore(options.root, options.dataDirectory)
     let db: DatabaseSync | undefined
     try {
       db = new DatabaseSync(options.database)

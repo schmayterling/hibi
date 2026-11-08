@@ -1,10 +1,14 @@
 import { constants } from 'node:fs'
-import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
+import { open, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
 import sanitizeHtml from 'sanitize-html'
 import { lexMarkdown } from '../shared/marked-blocks.ts'
+import {
+  obsidianAttachmentDirectory,
+  obsidianConfiguration,
+} from './workspace-obsidian.ts'
 import { isPathInside } from './workspace-paths.ts'
 
 export function imageMime(data: Buffer): string | null {
@@ -160,32 +164,19 @@ export async function resolveDocumentMediaPath(
       ? [resolve(workspacePath, decoded)]
       : []
   if (workspacePath && !source.startsWith('/')) {
-    const settings = resolve(workspacePath, '.obsidian', 'app.json')
-    paths?.add(settings)
-    if (signal?.aborted) return null
-    const info = await lstat(settings).catch(() => null)
-    if (info?.isFile() && !info.isSymbolicLink() && info.size < 65536) {
+    const config = await obsidianConfiguration(workspacePath)
+    if (config) {
+      for (const folder of config.folders)
+        paths?.add(resolve(workspacePath, folder, 'app.json'))
       try {
-        if (signal?.aborted) return null
-        const saved = JSON.parse(
-          await readFile(settings, { encoding: 'utf8', signal }),
+        const folder = await obsidianAttachmentDirectory(
+          workspacePath,
+          documentPath ?? resolve(workspacePath, 'untitled.md'),
+          false,
         )
-        const folder = saved.attachmentFolderPath
-        if (
-          typeof folder === 'string' &&
-          folder &&
-          !folder.includes('\\') &&
-          !folder.split('/').includes('..')
-        )
-          candidates.push(
-            resolve(
-              workspacePath,
-              folder.replace(/^\/+/, '').replace(/^\.\//, ''),
-              decoded,
-            ),
-          )
+        if (folder) candidates.push(resolve(folder, decoded))
       } catch {
-        /* Invalid Obsidian settings do not affect ordinary media paths. */
+        // Invalid settings do not affect ordinary media paths.
       }
     }
   }

@@ -43,12 +43,7 @@ export function localTarget(
 
 export function wikiTargetName(target: string): string | null {
   const file = target.split('#', 1)[0]?.trim() ?? ''
-  if (
-    file.includes('\\') ||
-    file.includes('\0') ||
-    file.split('/').includes('..')
-  )
-    return null
+  if (file.includes('\\') || file.includes('\0')) return null
   return file
 }
 
@@ -59,7 +54,10 @@ export function resolveWikiTarget(
   basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
   if (!file) return from
+  if (/^\.{1,2}\//.test(file)) return localTarget(from, file, paths)
+  if (file.split('/').includes('..')) return null
   const name = file.replace(/^\//, '')
+  if (file.startsWith('/')) return resolveLocalTarget(name, paths)
   const candidates = name.endsWith('.md') ? [name] : [name, `${name}.md`]
   const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : ''
   for (const candidate of candidates) {
@@ -67,7 +65,12 @@ export function resolveWikiTarget(
     const beside = parent ? `${parent}/${candidate}` : candidate
     if (paths.has(beside)) return beside
   }
-  if (name.includes('/')) return null
+  if (name.includes('/')) {
+    const matches = [...paths].filter((path) =>
+      candidates.some((candidate) => path.endsWith('/' + candidate)),
+    )
+    return matches.length === 1 ? matches[0]! : null
+  }
   const matches = basenames
     ? candidates.flatMap((candidate) => basenames.get(candidate) ?? [])
     : [...paths].filter((path) =>

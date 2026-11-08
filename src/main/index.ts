@@ -196,6 +196,7 @@ import {
 import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
+  formatDocumentLink,
   openDocumentLink,
   openExternalDocumentLink,
   openRemoteDocument,
@@ -2469,6 +2470,13 @@ if (!app.requestSingleInstanceLock()) {
           ),
       )
       handle(
+        MEDIA_CHANNELS.formatLink,
+        (event, href: unknown, label: unknown) => {
+          trustedWindow(event)
+          return formatDocumentLink(href, label)
+        },
+      )
+      handle(
         MEDIA_CHANNELS.open,
         (event, path: unknown, includeEntries: unknown) =>
           runFileOperation(event, (window) =>
@@ -2991,12 +2999,12 @@ if (!app.requestSingleInstanceLock()) {
           runFileOperation(event, (window) => exportPdf(window, tabId, html)),
       )
       handle(DOCUMENT_CHANNELS.rename, (event, name: unknown) =>
-        runFileOperation(event, async () => {
+        runFileOperation(event, async (window) => {
           const previous = getDocumentPath()
           const pending = getDocument().ephemeral
           const root = workspaceRoot()
           const renamed = await renameWithTableLayout(
-            () => renameDocument(name),
+            () => renameDocument(name, window),
             () =>
               pending || previous === getDocumentPath()
                 ? null

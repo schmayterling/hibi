@@ -1,6 +1,6 @@
 import type { DocumentState } from './desktop'
 
-export type MediaAttachment = { url: string; alt: string }
+export type MediaAttachment = { url: string; alt: string; markdown?: string }
 export type AttachmentResult = {
   document: DocumentState
   attachments: MediaAttachment[]
@@ -38,6 +38,7 @@ export function mediaPathsChanged(
 }
 export const MEDIA_CHANNELS = {
   attach: 'media:attach',
+  formatLink: 'media:format-link',
   read: 'media:read',
   resolve: 'media:resolve',
   cancel: 'media:cancel',

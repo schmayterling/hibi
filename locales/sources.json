@@ -107,6 +107,9 @@
   "5a897082f8b6": [
     "src/renderer/src/recovery-offer.tsx"
   ],
+  "72e3366cf43b": [
+    "src/main/workspace-obsidian-links.ts"
+  ],
   "eab4b9331e40": [
     "src/shared/markdown-source-model.ts"
   ],
@@ -476,6 +479,9 @@
   "284cc8732649": [
     "src/renderer/src/FlavorPicker.tsx"
   ],
+  "acabaa031687": [
+    "src/main/workspace-obsidian-links.ts"
+  ],
   "94a1674d162c": [
     "src/renderer/src/main.tsx"
   ],
@@ -621,6 +627,7 @@
     "src/main/document.ts",
     "src/main/index.ts",
     "src/main/sideload.ts",
+    "src/main/workspace-trash.ts",
     "src/renderer/src/AddonInstallChooser.tsx",
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/History.tsx",
@@ -778,6 +785,9 @@
     "src/main/addons.ts",
     "src/main/pdf-export.ts"
   ],
+  "454e88552565": [
+    "src/main/workspace-trash.ts"
+  ],
   "4f06af701050": [
     "src/main/workspace-actions.ts"
   ],
@@ -805,6 +815,9 @@
   ],
   "84c5d2b7d29b": [
     "src/addons/quick-note/native.ts"
+  ],
+  "3d9da500ee79": [
+    "src/main/workspace-obsidian.ts"
   ],
   "0433bc8a92c0": [
     "src/main/workspace-settings.ts"
@@ -838,6 +851,12 @@
   ],
   "c5e6dc6d1789": [
     "src/main/workspace-entry-transfer.ts"
+  ],
+  "2735080e33d5": [
+    "src/main/workspace-obsidian.ts"
+  ],
+  "cb41bc9a3d3b": [
+    "src/main/workspace-obsidian-links.ts"
   ],
   "97fc4ea85080": [
     "src/main/global-shortcuts.ts"
@@ -1728,6 +1747,9 @@
   ],
   "837dbb2c66b1": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "280b10c89cc4": [
+    "src/main/workspace-trash.ts"
   ],
   "5260f6b2fa9f": [
     "src/renderer/src/FormattingToolbar.tsx"
@@ -3528,6 +3550,9 @@
   "6af8cc7da9bd": [
     "src/addons/autocomplete/index.tsx"
   ],
+  "bb72b4e693c8": [
+    "src/main/workspace-obsidian-links.ts"
+  ],
   "3eaa4332ff51": [
     "src/renderer/src/addon-reload.ts"
   ],
@@ -4159,6 +4184,9 @@
   "2cb4007f6fbe": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "df5f9f81b472": [
+    "src/main/workspace-obsidian.ts"
+  ],
   "34cf55f332a8": [
     "src/addons/autocomplete/Settings.tsx"
   ],
@@ -4534,6 +4562,10 @@
   "591ae64cac49": [
     "src/renderer/src/AddonSettings.tsx"
   ],
+  "83d7f25d200b": [
+    "src/main/media.ts",
+    "src/preload/index.ts"
+  ],
   "62fa5a5b0d3c": [
     "src/renderer/src/DependencySettings.tsx"
   ],
@@ -4548,6 +4580,9 @@
   ],
   "cf2b92c2e475": [
     "src/shared/document-journal.ts"
+  ],
+  "6da810471275": [
+    "src/main/workspace-trash.ts"
   ],
   "49bac35016ed": [
     "src/addons/review/index.tsx"
@@ -5214,6 +5249,9 @@
   ],
   "ac752922d909": [
     "src/renderer/src/AutosaveSettings.tsx"
+  ],
+  "02085961545a": [
+    "src/main/workspace-obsidian-links.ts"
   ],
   "73c583fedbc0": [
     "src/main/addons.ts"
@@ -6259,6 +6297,9 @@
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
   ],
+  "4b7c54f03a79": [
+    "src/main/workspace-trash.ts"
+  ],
   "a4ca39fe0c58": [
     "src/renderer/src/recovery-offer.tsx"
   ],
@@ -6300,11 +6341,14 @@
   "ab67f8c89666": [
     "src/shared/addon-manifest.ts"
   ],
-  "c7085d2772ec": [
+  "dddbc50752ff": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "2469fb10d7a2": [
     "src/renderer/src/history-points.ts"
+  ],
+  "fd7ebf9c6839": [
+    "src/main/workspace-case-rename.ts"
   ],
   "95e4db0dfa62": [
     "src/main/workspace-settings.ts"
@@ -6408,6 +6452,9 @@
   "09aae7464226": [
     "src/main/workspace-layout.ts"
   ],
+  "6afa397c219e": [
+    "src/main/workspace-case-rename.ts"
+  ],
   "bee50784d023": [
     "src/shared/document-edits.ts"
   ],
@@ -6438,6 +6485,9 @@
   ],
   "b22c9541adab": [
     "src/main/updates.ts"
+  ],
+  "ff11a7c12dc2": [
+    "src/main/workspace-trash.ts"
   ],
   "fbdb2fff1c81": [
     "src/renderer/src/main.tsx"
@@ -6956,6 +7006,9 @@
   "d1390befc2e8": [
     "src/renderer/src/main.tsx"
   ],
+  "ed9998517628": [
+    "src/main/workspace-trash.ts"
+  ],
   "cf536ea00613": [
     "src/renderer/src/addon-views.ts",
     "src/renderer/src/addons.ts"
@@ -7291,6 +7344,12 @@
   ],
   "c296b396f03c": [
     "src/main/updates.ts"
+  ],
+  "3b79a45355ae": [
+    "src/main/workspace-obsidian-links.ts"
+  ],
+  "d9ba61637f47": [
+    "src/main/workspace-obsidian-links.ts"
   ],
   "1e6bf669df09": [
     "src/renderer/src/UpdateSettings.tsx"

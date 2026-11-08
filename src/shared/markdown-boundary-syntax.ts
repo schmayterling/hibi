@@ -39,6 +39,8 @@ const catalog = {
   'obsidian@1': obsidianSyntax,
 } satisfies Record<string, MarkdownConfig>
 
+export { catalog as boundarySyntax }
+
 /** Normalized UTF-16 offsets; whole-block bounds exclude its terminating newline. */
 export type CodeBlockExtent = Readonly<{
   from: number

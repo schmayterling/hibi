@@ -1,13 +1,24 @@
 import assert from 'node:assert/strict'
 import * as fs from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
-import { basename, dirname, extname, isAbsolute, join, win32 } from 'node:path'
+import { tmpdir } from 'node:os'
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  sep,
+  win32,
+} from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { parse } from '@babel/parser'
 import { DocumentMediaServer, openMedia } from '../src/main/document-media.ts'
 import {
+  imageMime,
   isLocalMediaPath,
   resolveDocumentMediaPath,
 } from '../src/main/images.ts'
@@ -51,6 +62,11 @@ async function fixture(t, absolute = isAbsolute) {
   const bindings = {
     lstat: fs.lstat,
     mkdir: fs.mkdir,
+    mkdtemp: fs.mkdtemp,
+    rm: fs.rm,
+    writeFile: fs.writeFile,
+    tmpdir,
+    imageMime,
     open: fs.open,
     realpath: fs.realpath,
     unlink: fs.unlink,
@@ -60,6 +76,8 @@ async function fixture(t, absolute = isAbsolute) {
     isAbsolute: absolute,
     isLocalMediaPath,
     join,
+    relative,
+    sep,
     pipeline,
     DocumentMediaServer,
     resolveDocumentMediaPath,
@@ -98,6 +116,33 @@ async function fixture(t, absolute = isAbsolute) {
     },
   }
 }
+
+test('pasted image bytes use attachment copy policy and retain exact bytes', async (t) => {
+  const f = await fixture(t)
+  const result = await f.attachMedia(
+    null,
+    [{ name: 'pasted.gif', bytes: new Uint8Array(gif) }],
+    7,
+  )
+  assert.equal(result.attachments[0].url, 'assets/pasted.gif')
+  assert.deepEqual(await fs.readFile(join(f.root, 'assets/pasted.gif')), gif)
+})
+test('invalid pasted images are rejected before creating attachment directories', async (t) => {
+  const f = await fixture(t)
+  for (const input of [
+    { name: '../escape.gif', bytes: new Uint8Array(gif) },
+    { name: 'bad.gif', bytes: new Uint8Array() },
+    {
+      name: 'bad.gif',
+      bytes: new Uint8Array(
+        Buffer.concat([gif, Buffer.alloc(16 * mib + 1 - gif.length)]),
+      ),
+    },
+    { name: 'bad.gif', bytes: new Uint8Array([0, 1, 2]) },
+  ])
+    await assert.rejects(f.attachMedia(null, [input], 7))
+  assert.deepEqual(await fs.readdir(f.root), [])
+})
 
 for (const [name, header, size, error] of [
   ['large.mp4', video, 512 * mib + 1, /512 MiB/],

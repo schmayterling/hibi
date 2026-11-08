@@ -9,13 +9,14 @@ import {
   resolve,
   sep,
 } from 'node:path'
-import { type BrowserWindow, shell } from 'electron'
+import type { BrowserWindow } from 'electron'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type { WorkspaceActionResult } from '../shared/workspace'
 import {
   closeDeletedDocuments,
   confirmDiscardAll,
   getDocument,
+  getDocumentPath,
   getOpenDocuments,
   newPendingDocument,
   relocateDocument,
@@ -31,6 +32,7 @@ import {
   type WorkspaceReply,
   workspaceRoot,
 } from './workspace'
+import { isCaseOnlyRename, renameCaseOnly } from './workspace-case-rename'
 import { copyEntry, moveEntry } from './workspace-entry-transfer'
 import { renameWithTableLayout } from './workspace-layout'
 import {
@@ -38,6 +40,7 @@ import {
   resolveWorkspaceEntry,
   validateWorkspaceName,
 } from './workspace-paths'
+import { trashWorkspaceEntry } from './workspace-trash'
 
 export { validateWorkspaceName } from './workspace-paths'
 
@@ -162,6 +165,7 @@ export async function workspaceAction(
   let resultPath: string
   let sourcePath: string | null = null
   let treeChanged = false
+  let changedLinks: string[] = []
   if (action === 'new-file' || action === 'new-folder') {
     const parent = await resolveWorkspaceEntry(base, path, false, true)
     if (!(await lstat(parent)).isDirectory())
@@ -190,7 +194,7 @@ export async function workspaceAction(
     if (action === 'delete') {
       if (!(await confirmDiscardAll(window, source))) return null
       if (await lstat(source).catch(missing)) {
-        await shell.trashItem(source)
+        if (!(await trashWorkspaceEntry(window, base, source))) return null
         treeChanged = true
       }
       await closeDeletedDocuments(window, source)
@@ -222,7 +226,9 @@ export async function workspaceAction(
         throw new Error(
           'A document is open at that location. Choose another name or location.',
         )
-      if (await lstat(resultPath).catch(missing))
+      const caseOnly =
+        action === 'rename' && (await isCaseOnlyRename(source, resultPath))
+      if (!caseOnly && (await lstat(resultPath).catch(missing)))
         throw new Error(
           'A file or folder exists at that location. Choose another name or location.',
         )
@@ -243,21 +249,36 @@ export async function workspaceAction(
           rethrowPartialCopy(error, base, source, resultPath),
         )
       } else {
+        const { prepareObsidianLinkUpdates } = await import(
+          './workspace-obsidian-links'
+        )
+        const updates = await prepareObsidianLinkUpdates(
+          base,
+          relative(base, source).split(sep).join('/'),
+          relative(base, resultPath).split(sep).join('/'),
+          getOpenDocuments,
+          window,
+        )
+        await updates.verify()
         const moved = await renameWithTableLayout(
           () =>
-            moveEntry(source, resultPath, folder, async () => {
-              await resolveWorkspaceEntry(base, path)
-              await resolveWorkspaceEntry(
-                base,
-                relative(base, resultPath).split(sep).join('/'),
-                true,
-              )
-              return !getOpenDocuments().some(
-                (draft) => draft.file === resultPath,
-              )
-            }).catch((error: unknown) =>
-              rethrowPartialCopy(error, base, source, resultPath),
-            ),
+            caseOnly
+              ? renameCaseOnly(source, resultPath).then(() => ({
+                  sourceRemoved: true,
+                }))
+              : moveEntry(source, resultPath, folder, async () => {
+                  await resolveWorkspaceEntry(base, path)
+                  await resolveWorkspaceEntry(
+                    base,
+                    relative(base, resultPath).split(sep).join('/'),
+                    true,
+                  )
+                  return !getOpenDocuments().some(
+                    (draft) => draft.file === resultPath,
+                  )
+                }).catch((error: unknown) =>
+                  rethrowPartialCopy(error, base, source, resultPath),
+                ),
           (moved) =>
             moved.sourceRemoved
               ? [
@@ -281,6 +302,16 @@ export async function workspaceAction(
           )
         }
         relocateDocument(source, resultPath)
+        changedLinks = await updates.apply()
+        const active = getDocument()
+        if (
+          changedLinks.includes(
+            relative(base, getDocumentPath() ?? '')
+              .split(sep)
+              .join('/'),
+          )
+        )
+          await selectDocumentTab(window, active.tabId, false, true)
       }
       treeChanged = !draft
     }
@@ -288,6 +319,7 @@ export async function workspaceAction(
   const paths = [sourcePath, resultPath]
     .filter((path): path is string => path !== null)
     .map((path) => relative(base, path).split(sep).join('/'))
+    .concat(changedLinks)
   let workspace: WorkspaceReply<boolean> | null
   try {
     workspace = treeChanged

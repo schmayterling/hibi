@@ -4,7 +4,7 @@ import { app, dialog } from 'electron'
 import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { createMetadataNative } from './api/metadata/native'
-import { createVaultNative } from './api/vault/native'
+import { closeVaultLists, createVaultNative } from './api/vault/native'
 import { validPluginId, wrapObsidianPlugin } from './package'
 import {
   discoverObsidianPlugins,
@@ -157,6 +157,7 @@ function vaultMethod(
 
 export default {
   id: 'obsidian',
+  stop: closeVaultLists,
   queries: {
     vaultInfo: vaultQuery('vaultInfo'),
     vaultStat: vaultQuery('vaultStat'),

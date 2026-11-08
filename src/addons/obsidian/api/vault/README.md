@@ -1,6 +1,6 @@
 # vault service
 
-`Vault` owns one metadata-only file tree for the captured Hibi workspace. It loads Hibi's existing retained entries in bounded pages, preserves file objects across renames, and refreshes only the named file stats after content changes. It never retains note sources or builds a second vault index. Hibi's file filters still apply: hidden files, ignored entries, symlinks and unsupported document types are not loaded.
+`Vault` owns one metadata-only file tree for the captured vault. A native directory iterator returns at most 100 descriptors per page, independent of Hibi's explorer filters and ignore preferences. Every regular file and folder is included, including attachments; configuration folders, dot-prefixed entries and symlinks are excluded. The tree preserves file objects across renames and refreshes only named file stats after ordinary content changes. New or removed files trigger a descriptor traversal. It never retains note sources or builds a second parser or whole-content snapshot. Native traversal cursors expire after inactivity and close on addon stop. Adapter directory listing pages only the requested folder.
 
 `TAbstractFile`, `TFile` and `TFolder` expose vault-relative paths, names, parents, file stats and folder children. The root path is an empty string. Lookups are case sensitive. The adapter exposes only `exists`, `read`, `write`, `list` and `stat`; it has no native filesystem paths or arbitrary filesystem operations.
 

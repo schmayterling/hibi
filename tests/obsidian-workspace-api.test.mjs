@@ -36,6 +36,7 @@ test.before(async () => {
   cacheRoot = await mkdtemp(join(tmpdir(), 'hibi-workspace-api-cache-'))
   server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true },
     cacheDir: cacheRoot,
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',

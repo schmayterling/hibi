@@ -634,16 +634,13 @@ export type DesktopApi = {
   appendDocumentChange: (
     change: import('./document-journal').DocumentChange,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
+  /** An operation, or the id of one admitted, which then need not cross again. */
   appendSourceOperation: (
-    operation: import('./source-operations').SourceOperation,
+    operation: import('./source-operations').SourceOperation | string,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
-  /** Returns a token to append the admitted operation without sending it again. */
   admitSourceOperation: (
     operation: import('./source-operations').SourceOperation,
-  ) => number | undefined
-  appendAdmittedSourceOperation: (
-    token: number,
-  ) => Promise<import('./document-journal').DocumentAcknowledgment>
+  ) => void
   onDocumentCheckpoint: (
     callback: (
       tabId: string,

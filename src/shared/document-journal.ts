@@ -547,27 +547,25 @@ export function createDocumentJournal(
   // An admitted operation waits here so its append need not carry it across the
   // bridge again. A session admits again only after it appended, so a tab's
   // next admission drops an admission whose edit failed before its append.
-  const admitted = new Map<number, JournalMessage>()
-  let lastAdmitted = 0
+  const admitted = new Map<string, SourceOperation>()
   return {
     append,
     appendOperation: (operation: SourceOperation) => append(operation),
     assertCapacity,
-    admit: (value: JournalMessage) => {
-      const change = parseMessage(value),
-        tabId = identity(change).tabId
-      assertCapacity(change)
-      for (const [token, staged] of admitted)
-        if (identity(staged).tabId === tabId) admitted.delete(token)
-      admitted.set(++lastAdmitted, change)
-      return lastAdmitted
+    admit: (value: SourceOperation) => {
+      const operation = parseSourceOperation(value),
+        { tabId } = operation.document
+      assertCapacity(operation)
+      for (const [id, staged] of admitted)
+        if (staged.document.tabId === tabId) admitted.delete(id)
+      admitted.set(operation.operationId, operation)
     },
-    appendAdmitted: (token: number) => {
-      const change = admitted.get(token)
-      if (!change)
+    appendAdmitted: (id: string) => {
+      const operation = admitted.get(id)
+      if (!operation)
         return Promise.reject(new Error('Unknown admitted document change.'))
-      admitted.delete(token)
-      return append(change)
+      admitted.delete(id)
+      return append(operation)
     },
     hasPending: () => pending.size > 0,
     pendingBytes: () => pendingBytes,

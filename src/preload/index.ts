@@ -357,9 +357,11 @@ if (process.isMainFrame) {
     cancelAnalysis: (owner) =>
       ipcRenderer.invoke(ANALYSIS_CHANNELS.cancel, owner),
     appendDocumentChange: journal.append,
-    appendSourceOperation: journal.appendOperation,
+    appendSourceOperation: (operation) =>
+      typeof operation === 'string'
+        ? journal.appendAdmitted(operation)
+        : journal.appendOperation(operation),
     admitSourceOperation: journal.admit,
-    appendAdmittedSourceOperation: journal.appendAdmitted,
     getDocumentRecoveryState: journal.state,
     onDocumentCheckpoint: (callback, read, close) => {
       checkpoint = callback

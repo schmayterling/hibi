@@ -1,5 +1,6 @@
 import type { AddonWindowBridge } from '../../shared/addon-windows'
 import type { DesktopApi } from '../../shared/desktop'
+import type { SourceOperation } from '../../shared/source-operations'
 
 /**
  * Stand-in for `window.hibi` in an addon editor window. It holds no privileges:
@@ -7,6 +8,7 @@ import type { DesktopApi } from '../../shared/desktop'
  * read-only bridge, listeners never fire, and every other request rejects.
  */
 export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
+  const admitted = new Map<string, SourceOperation>()
   const unavailable = (name: string) => () =>
     Promise.reject(new Error(`${name} is not available in this window.`))
   const known: Partial<DesktopApi> = {
@@ -21,13 +23,20 @@ export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
       recentWorkspaces: async () => [],
       knownWorkspaces: async () => [],
     },
-    admitSourceOperation: () => undefined,
-    appendSourceOperation: async (operation) => ({
-      tabId: operation.document.tabId,
-      revision: operation.document.revision,
-      contentVersion: operation.contentVersion,
-      operationId: operation.operationId,
-    }),
+    admitSourceOperation: (operation) => {
+      admitted.set(operation.operationId, operation)
+    },
+    appendSourceOperation: async (value) => {
+      const operation = typeof value === 'string' ? admitted.get(value) : value
+      if (!operation) throw new Error('Unknown admitted document change.')
+      admitted.delete(operation.operationId)
+      return {
+        tabId: operation.document.tabId,
+        revision: operation.document.revision,
+        contentVersion: operation.contentVersion,
+        operationId: operation.operationId,
+      }
+    },
     flushDocumentChanges: async () => {},
     getWorkspace: async () => null,
     setHotkeyRecording: async () => {},

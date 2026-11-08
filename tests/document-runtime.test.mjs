@@ -808,9 +808,11 @@ test('an admitted edit crosses the preload bridge once', async () => {
   })
   // Same journal wiring as the preload; contextBridge copies every argument.
   const hibi = {
-    appendSourceOperation: journal.appendOperation,
+    appendSourceOperation: (operation) =>
+      typeof operation === 'string'
+        ? journal.appendAdmitted(operation)
+        : journal.appendOperation(operation),
     admitSourceOperation: journal.admit,
-    appendAdmittedSourceOperation: journal.appendAdmitted,
   }
   globalThis.window = {
     hibi: Object.fromEntries(
@@ -842,22 +844,22 @@ test('an admitted edit crosses the preload bridge once', async () => {
     assert.equal(sent.length, 1)
     assert.deepEqual(sent[0].changes, changes)
     // A tab's next admission drops one whose edit never reached its append.
-    const operation = (tabId, contentVersion) => ({
+    const operation = (tabId, contentVersion, operationId) => ({
       document: { tabId, revision: 1 },
-      operationId: `${tabId}${contentVersion}`,
+      operationId,
       baseVersion: contentVersion - 1,
       contentVersion,
       origin: 'source',
       historyGroup: 'typing',
       changes: [{ from: 0, to: 0, insert: 'a' }],
     })
-    const failed = journal.admit(operation('one', 2)),
-      other = journal.admit(operation('two', 1)),
-      next = journal.admit(operation('one', 2))
-    await assert.rejects(journal.appendAdmitted(failed), /Unknown admitted/)
-    await journal.appendAdmitted(other)
-    await journal.appendAdmitted(next)
-    await assert.rejects(journal.appendAdmitted(next), /Unknown admitted/)
+    journal.admit(operation('one', 2, 'failed'))
+    journal.admit(operation('two', 1, 'two1'))
+    journal.admit(operation('one', 2, 'one2'))
+    await assert.rejects(journal.appendAdmitted('failed'), /Unknown admitted/)
+    await journal.appendAdmitted('two1')
+    await journal.appendAdmitted('one2')
+    await assert.rejects(journal.appendAdmitted('one2'), /Unknown admitted/)
     assert.deepEqual(
       sent.map((operation) => operation.operationId),
       [sent[0].operationId, 'two1', 'one2'],
@@ -866,8 +868,7 @@ test('an admitted edit crosses the preload bridge once', async () => {
       maximumBulkBytes: 300,
     })
     assert.throws(
-      () =>
-        full.admit({ ...operation('one', 1), operationId: 'x'.repeat(100) }),
+      () => full.admit(operation('one', 1, 'x'.repeat(100))),
       /recovery is full/,
     )
   } finally {

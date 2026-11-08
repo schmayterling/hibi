@@ -11,6 +11,7 @@ import {
   installedThemes,
   installSnippet,
   installTheme,
+  pruneCopies,
   readAppearance,
   readSelection,
   readVault,
@@ -137,6 +138,7 @@ async function recopy(
   if (!changed || !context.isCurrent()) return stored
   const next = { ...stored, theme, snippetHashes }
   await writeSelection(data(), vault, next)
+  await pruneCopies(root(), data())
   return next
 }
 
@@ -248,6 +250,7 @@ export default {
         snippetHashes,
         styleValues,
       })
+      await pruneCopies(root(), data())
       return state(context)
     },
     /** Save Style Settings values for this vault's kept theme and snippets. */

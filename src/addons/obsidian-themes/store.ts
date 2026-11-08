@@ -581,7 +581,76 @@ export async function writeSelection(
 ) {
   const target = await selectionPath(data, vault)
   await mkdir(dirname(target), { recursive: true })
+  // The copies chosen before stay for a while, so a change can be undone.
+  let previous: unknown
+  try {
+    const old = JSON.parse(await readFile(target, 'utf8'))
+    const same =
+      old.theme === selection.theme &&
+      JSON.stringify(old.snippetHashes ?? {}) ===
+        JSON.stringify(selection.snippetHashes)
+    previous = same
+      ? old.previous
+      : { theme: old.theme ?? null, snippetHashes: old.snippetHashes ?? {} }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
   const temporary = `${target}.${randomUUID()}.tmp`
-  await writeFile(temporary, JSON.stringify(selection))
+  await writeFile(temporary, JSON.stringify({ ...selection, previous }))
   await rename(temporary, target)
+}
+
+/**
+ * Remove vault theme and snippet copies that no vault keeps or kept just
+ * before. Themes added from a folder stay until removed. Only Hibi's data
+ * folder is touched.
+ */
+export async function pruneCopies(root: string, data: string) {
+  const themes = new Set<string>()
+  const snippets = new Set<string>()
+  const keep = (choice: unknown) => {
+    if (!choice || typeof choice !== 'object') return
+    const { theme, snippetHashes } = choice as Record<string, unknown>
+    if (typeof theme === 'string') themes.add(theme)
+    if (snippetHashes && typeof snippetHashes === 'object')
+      for (const hash of Object.values(snippetHashes))
+        if (typeof hash === 'string') snippets.add(hash)
+  }
+  for (const entry of await entries(join(data, 'obsidian-vaults'))) {
+    if (!entry.isDirectory()) continue
+    let value: Record<string, unknown>
+    try {
+      value = JSON.parse(
+        await readFile(
+          join(data, 'obsidian-vaults', entry.name, 'themes.json'),
+          'utf8',
+        ),
+      )
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      // An unreadable choice might name any copy: keep them all.
+      return []
+    }
+    keep(value)
+    keep(value.previous)
+  }
+  const removed: string[] = []
+  for (const theme of await installedThemes(root))
+    if (theme.source === 'vault' && !themes.has(theme.id)) {
+      await rm(join(root, 'themes', theme.id), { recursive: true, force: true })
+      removed.push(`themes/${theme.id}`)
+    }
+  for (const entry of await entries(join(root, 'snippets')))
+    if (
+      entry.isDirectory() &&
+      /^[a-f0-9]{64}$/.test(entry.name) &&
+      !snippets.has(entry.name)
+    ) {
+      await rm(join(root, 'snippets', entry.name), {
+        recursive: true,
+        force: true,
+      })
+      removed.push(`snippets/${entry.name}`)
+    }
+  return removed
 }

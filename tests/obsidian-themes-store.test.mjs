@@ -20,6 +20,7 @@ import {
   installedThemes,
   installSnippet,
   installTheme,
+  pruneCopies,
   readSelection,
   readVault,
   removeTheme,
@@ -241,6 +242,79 @@ test('copies checked by an older sanitizer are checked again from their original
       .sanitizerVersion,
     SANITIZER_VERSION,
   )
+})
+
+test('copies no vault keeps, or kept just before, are pruned from Hibi data only', async (t) => {
+  const { vault, data, store } = await fixtureVault(t)
+  const before = await snapshot(vault)
+  const themes = join(vault, '.obsidian', 'themes')
+  const install = (name) => installTheme(store, join(themes, name), 'vault')
+  const paper = await install('paper-lantern')
+  const heavy = await install('heavy-grid')
+  const garden = await install('settings-garden')
+  const flat = await install('Old Flat.css')
+  const library = await installTheme(
+    store,
+    join(themes, 'legacy-ink'),
+    'folder',
+  )
+  const tags = await installSnippet(vault, store, 'accent-tags')
+  const wide = await installSnippet(vault, store, 'wide-lines')
+  const hostile = await installSnippet(vault, store, 'hostile')
+  const choose = (theme, snippetHashes) =>
+    writeSelection(data, vault, {
+      theme,
+      snippets: Object.keys(snippetHashes),
+      snippetHashes,
+    })
+  await choose(paper.id, { hostile: hostile.hash })
+  await choose(heavy.id, { 'accent-tags': tags.hash })
+  // Changing only Style Settings values keeps the previous choice as it was.
+  await writeSelection(data, vault, {
+    theme: heavy.id,
+    snippets: ['accent-tags'],
+    snippetHashes: { 'accent-tags': tags.hash },
+    styleValues: { 'heavy-grid@@grid-accent': '#000000' },
+  })
+  // A second vault keeps the one-file theme.
+  const other = join(vault, '..', 'other-vault')
+  await mkdir(join(other, '.obsidian'), { recursive: true })
+  await writeSelection(data, other, {
+    theme: flat.id,
+    snippets: [],
+    snippetHashes: {},
+  })
+  const removed = await pruneCopies(store, data)
+  assert.deepEqual(removed.sort(), [
+    `snippets/${wide.hash}`,
+    `themes/${garden.id}`,
+  ])
+  assert.deepEqual(
+    (await installedThemes(store)).map((theme) => theme.id).sort(),
+    [heavy.id, library.id, flat.id, paper.id].sort(),
+  )
+  assert.deepEqual(
+    (await readdir(join(store, 'snippets'))).sort(),
+    [hostile.hash, tags.hash].sort(),
+  )
+  // One more change drops what is now two choices back.
+  await choose(heavy.id, {})
+  assert.deepEqual((await pruneCopies(store, data)).sort(), [
+    `snippets/${hostile.hash}`,
+    `themes/${paper.id}`,
+  ])
+  // A choice file that can't be read keeps every copy.
+  await writeFile(
+    join(
+      data,
+      'obsidian-vaults',
+      (await readdir(join(data, 'obsidian-vaults')))[0],
+      'themes.json',
+    ),
+    '{',
+  )
+  assert.deepEqual(await pruneCopies(store, data), [])
+  assert.deepEqual(await snapshot(vault), before)
 })
 
 test('a vault without Obsidian settings has no themes', async (t) => {

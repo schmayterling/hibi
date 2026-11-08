@@ -14,6 +14,10 @@ import { Readable } from 'node:stream'
 import { downloadUrl } from '../shared/addon-package.ts'
 import { writeText } from './files.ts'
 import { imageMime } from './images.ts'
+import {
+  obsidianConfiguration,
+  obsidianDataPath,
+} from './workspace-obsidian.ts'
 import { isPathInside } from './workspace-paths.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -91,13 +95,19 @@ async function imagePath(source: unknown, place: RemoteImagePlace) {
     place.note &&
     isPathInside(place.workspace, place.note)
   ) {
-    const metadata = await folder(join(place.workspace, '.hibi'))
-    const cache = metadata && (await folder(join(metadata, 'cache')))
-    if (cache) {
-      await writeFile(join(cache, '.gitignore'), '*\n', { flag: 'wx' }).catch(
-        () => {},
-      )
-      directory = await folder(join(cache, 'images'))
+    if (await obsidianConfiguration(place.workspace)) {
+      const data = await obsidianDataPath(place.workspace, place.data)
+      await mkdir(data, { recursive: true, mode: 0o700 })
+      directory = await folder(join(data, 'image-cache'))
+    } else {
+      const metadata = await folder(join(place.workspace, '.hibi'))
+      const cache = metadata && (await folder(join(metadata, 'cache')))
+      if (cache) {
+        await writeFile(join(cache, '.gitignore'), '*\n', { flag: 'wx' }).catch(
+          () => {},
+        )
+        directory = await folder(join(cache, 'images'))
+      }
     }
   }
   directory ??= await folder(join(place.data, 'image-cache'))

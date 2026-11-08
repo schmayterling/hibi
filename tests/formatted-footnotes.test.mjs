@@ -795,6 +795,105 @@ test('edits past the read text look up no lines, as a Tab over every line of a m
   assert.deepEqual(indexed(settle(edited)), parsed(edited.doc.toString()))
 })
 
+test('edits inside one read block update the index once, as a Tab over every line of a megabyte of code', (t) => {
+  const lines = 16384
+  const code = Array.from({ length: lines }, (_, n) => `${n}`.padEnd(63, 'x'))
+  const state = settle(
+    create(`\`\`\`\n${code.join('\n')}\n\`\`\`\n\n[^a]: end`),
+  )
+  const { slice } = footnoteScan
+  // Only the edit's own work: no reading after it.
+  footnoteScan.slice = 0
+  try {
+    const transaction = state.update({
+      changes: code.map((_, n) => ({ from: 4 + n * 64, insert: '\t' })),
+    })
+    const lineAt = t.mock.method(
+      Object.getPrototypeOf(transaction.newDoc),
+      'lineAt',
+    )
+    const edited = transaction.state
+    // Each edit looked its line up and replaced the block's stretch again.
+    assert.ok(lineAt.mock.callCount() < 64, `${lineAt.mock.callCount()}`)
+    lineAt.mock.restore()
+    footnoteScan.slice = slice
+    assert.deepEqual(indexed(settle(edited)), parsed(edited.doc.toString()))
+  } finally {
+    footnoteScan.slice = slice
+  }
+})
+
+test('many edits in one transaction leave the index one transaction each would', () => {
+  // Blocks of several lines, so several edits land in one stretch.
+  const line = (n) => `line ${n} [^a]`
+  const lines = (count) => Array.from({ length: count }, (_, n) => line(n))
+  const snippets = [
+    () => '[^a]: a note',
+    () => ['```', ...lines(6), '```'].join('\n'),
+    () => lines(5).join('\n'),
+    () =>
+      lines(4)
+        .map((text) => `- ${text}`)
+        .join('\n'),
+    () =>
+      lines(4)
+        .map((text) => `> ${text}`)
+        .join('\n'),
+    () => ['[^b]: first', ...lines(3).map((text) => `    ${text}`)].join('\n'),
+    () => '# heading',
+    () => '~~~',
+  ]
+  const { slice, window } = footnoteScan
+  try {
+    for (let seed = 1; seed <= 300; seed++) {
+      const r = random(seed * 104729)
+      // Small windows read the note as many stretches.
+      footnoteScan.window = [16, 48, 256, 4096][seed % 4]
+      const pick = () => snippets[Math.floor(r() * snippets.length)]()
+      const doc = Array.from({ length: 40 }, pick).join(
+        r() < 0.5 ? '\n' : '\n\n',
+      )
+      footnoteScan.slice = slice
+      const state = settle(create(doc))
+      // Compare the edits' own work: neither reads after them.
+      footnoteScan.slice = 0
+      // Some edits start lines, as Tab does, and some skip several blocks.
+      const lineStarts = r() < 0.5,
+        far = r() < 0.5 ? 400 : 40
+      const changes = []
+      for (let at = 0; ; ) {
+        at += 1 + Math.floor(r() * (r() < 0.1 ? far : 40))
+        if (lineStarts) at = doc.indexOf('\n', at - 1) + 1 || doc.length + 1
+        if (at > doc.length) break
+        const to =
+          r() < 0.7 ? at : Math.min(doc.length, at + Math.floor(r() * 30))
+        changes.push({
+          from: at,
+          to,
+          insert: ['\t', '', 'x', '\n', '`'][Math.floor(r() * 5)],
+        })
+        at = to + 1
+      }
+      let one = state,
+        shift = 0
+      for (const { from, to, insert } of changes) {
+        one = one.update({
+          changes: { from: from + shift, to: to + shift, insert },
+        }).state
+        shift += insert.length - (to - from)
+      }
+      assert.deepEqual(
+        state.update({ changes }).state.field(footnoteDefinitions),
+        one.field(footnoteDefinitions),
+        `seed ${seed}`,
+      )
+    }
+  } finally {
+    footnoteScan.slice = slice
+    footnoteScan.window = window
+  }
+})
+
 test('properties keystrokes retain an 8 mib footnote index without reading its body', async () => {
   const { contribution: frontmatter } = await import(
     '../src/addons/frontmatter/formatted.ts'

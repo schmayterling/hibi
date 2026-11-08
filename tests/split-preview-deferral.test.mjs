@@ -6,6 +6,14 @@ import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+import {
+  armPreviewEvidence,
+  beginPreviewEvidence,
+  finishPreviewEvidence,
+  observePreviewRich,
+  previewEvidenceArmed,
+  rememberPreviewDocument,
+} from './preview-native-evidence.mjs'
 
 // Every built-in rich attachment, with math changing the preview grammar.
 const addons = [
@@ -114,7 +122,7 @@ async function cmSplit(t, original) {
   const { page } = state
   // Hidden panes leave the accessibility tree; retain DOM locators for their
   // saved selections, then compare text only while that pane is shown.
-  const rich = page.locator('.rich-pane .cm-content')
+  const rich = observePreviewRich(page.locator('.rich-pane .cm-content'))
   const source = page.locator('.source-pane .cm-content')
   const selection = () =>
     rich.evaluate((element) => {
@@ -158,9 +166,7 @@ async function cmSplit(t, original) {
     }
     for (const editor of editors)
       assert.equal(
-        await editor.evaluate((element) =>
-          element.cmTile.root.view.state.doc.toString(),
-        ),
+        await editor.evaluate(rememberPreviewDocument, previewEvidenceArmed()),
         canonical.replace(/\r\n?/g, '\n'),
       )
     if (!sourceMode) {
@@ -620,47 +626,55 @@ test('a preview hidden during source edits keeps its mapped selection when shown
 test('hidden preview edits copy only current input and retain selection', {
   timeout: 90000,
 }, async (t) => {
-  const original = `alpha $x^2$ beta ${'a '.repeat(1200)}gamma\n\nomega`
-  const { page, source, beta, edit, selection, exact, normal } = await cmSplit(
-    t,
-    original,
-  )
-  const before = await beta()
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
-  await edit({ from: 0, insert: '!' })
-  await edit({
-    from: (await exact()).length,
-    insert: `\n\n${'b'.repeat(900000)}`,
-  })
-  await source.focus()
-  const copied = await source.evaluate((element) => {
-    const view = element.cmTile.root.view
-    const clone = window.structuredClone
-    let units = 0
-    window.structuredClone = (value, ...rest) => {
-      if (typeof value === 'string') units += value.length
-      return clone(value, ...rest)
-    }
-    try {
-      window.structuredClone('probe')
-      if (units !== 5)
-        throw new Error('clone counter must observe the positive control')
-      units = 0
-      for (let index = 0; index < 30; index++)
-        view.dispatch({
-          changes: { from: view.state.doc.line(1).to, insert: '?' },
-          userEvent: 'input.type',
-        })
-    } finally {
-      window.structuredClone = clone
-    }
-    return units
-  })
-  assert.ok(copied < 30 * 1000, String(copied))
-  await normal()
-  assert.equal((await selection()).text, 'beta')
-  assert.equal((await selection()).anchor, before.anchor + 1)
-  await exact()
+  beginPreviewEvidence(t)
+  let originalError
+  try {
+    const original = `alpha $x^2$ beta ${'a '.repeat(1200)}gamma\n\nomega`
+    const { page, source, beta, edit, selection, exact, normal } =
+      await cmSplit(t, original)
+    const before = await beta()
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    await edit({ from: 0, insert: '!' })
+    await edit({
+      from: (await exact()).length,
+      insert: `\n\n${'b'.repeat(900000)}`,
+    })
+    await source.focus()
+    const copied = await source.evaluate((element) => {
+      const view = element.cmTile.root.view
+      const clone = window.structuredClone
+      let units = 0
+      window.structuredClone = (value, ...rest) => {
+        if (typeof value === 'string') units += value.length
+        return clone(value, ...rest)
+      }
+      try {
+        window.structuredClone('probe')
+        if (units !== 5)
+          throw new Error('clone counter must observe the positive control')
+        units = 0
+        for (let index = 0; index < 30; index++)
+          view.dispatch({
+            changes: { from: view.state.doc.line(1).to, insert: '?' },
+            userEvent: 'input.type',
+          })
+      } finally {
+        window.structuredClone = clone
+      }
+      return units
+    })
+    assert.ok(copied < 30 * 1000, String(copied))
+    armPreviewEvidence()
+    await normal()
+    assert.equal((await selection()).text, 'beta')
+    assert.equal((await selection()).anchor, before.anchor + 1)
+    await exact()
+  } catch (error) {
+    originalError = error
+    throw error
+  } finally {
+    await finishPreviewEvidence(t, originalError, waitForAsync)
+  }
 })
 
 test('a hidden preview maps selections through more than 1,024 edits', {

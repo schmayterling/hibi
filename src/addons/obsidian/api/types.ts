@@ -5,16 +5,9 @@ import type { Keymap, Scope } from './core/keymap'
 export type Dispose = () => void
 export type ApiModule = Record<string, unknown>
 
-export interface PluginManifest {
-  id: string
-  name: string
-  version: string
-  minAppVersion: string
-  description: string
-  author: string
-  isDesktopOnly: boolean
-  dir?: string
-}
+import type { PluginManifest } from '../package'
+
+export type { InstalledPlugin, PluginManifest } from '../package'
 
 /** Service lanes augment these interfaces in their own modules. No native paths. */
 export interface VaultApi {
@@ -67,11 +60,4 @@ export interface ApiContribution {
 export interface ApiRegistration {
   id: string
   create: (context: ApiContext) => ApiContribution | Promise<ApiContribution>
-}
-
-export interface InstalledPlugin {
-  manifest: PluginManifest
-  hash: string
-  enabled: boolean
-  hasStyles: boolean
 }

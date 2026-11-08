@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -23,7 +24,9 @@ export async function readFixturePlugin(id) {
 }
 
 export async function fixtureVault(t, id = 'host-smoke') {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-obsidian-host-'))
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-obsidian-host-')),
+  )
   t.after(() => rm(root, { recursive: true, force: true }))
   const vault = join(root, 'vault')
   const overlay = join(root, 'profile')

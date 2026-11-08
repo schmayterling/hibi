@@ -1432,6 +1432,122 @@ for (const [layout, doc, target] of [
     assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
   })
 
+test("a new width lays out a huge paragraph at the pane's top in the frame that paints it", {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(
+    async ({ doc, at, start }) => {
+      await window.tables.mount(
+        doc,
+        { width: 1400, height: 800 },
+        { editable: true },
+      )
+      const view = window.tables.view()
+      const pane = document.querySelector('.rich-pane')
+      const panes = document.querySelector('.editor-panes')
+      const frame = () => new Promise(requestAnimationFrame)
+      const settle = async () => {
+        for (let frames = 0; frames < 30; frames++) await frame()
+      }
+      const text = (pos) => {
+        const { node, offset } = view.domAtPos(pos, 1)
+        return node.nodeType === Node.TEXT_NODE && offset < node.length
+          ? { node, offset }
+          : null
+      }
+      const where = (pos) => {
+        if (
+          !view.visibleRanges.some(
+            (range) => range.from <= pos && pos < range.to,
+          )
+        )
+          return null
+        const drawn = text(pos) ?? text(pos + 1)
+        if (!drawn) return view.coordsAtPos(pos, 1).top
+        const range = document.createRange()
+        range.setStart(drawn.node, drawn.offset)
+        range.setEnd(drawn.node, drawn.offset + 1)
+        return range.getClientRects()[0].top
+      }
+      const rowAtTop = (y = 1) => {
+        const caret = document.caretPositionFromPoint(
+          view.contentDOM.getBoundingClientRect().left +
+            Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
+            1,
+          pane.getBoundingClientRect().top + y,
+        )
+        return view.posAtDOM(caret.offsetNode, caret.offset)
+      }
+      // The text the view says it shows, as the reading place reads it when
+      // an update ends, is text the page draws.
+      const undrawn = []
+      let checking = false
+      window.tables.extend(
+        view.constructor.updateListener.of(({ view }) => {
+          if (!checking) return
+          for (const { from, to } of view.visibleRanges)
+            for (const pos of to - from > 4 ? [from + 1, to - 3] : [])
+              if (!text(pos) && !text(pos + 1)) undrawn.push(pos)
+        }),
+      )
+      for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(at, {
+            y: 'start',
+            yMargin: 0,
+          }),
+        })
+        for (let frames = 0; frames < 4; frames++) await frame()
+      }
+      await settle()
+      // The whole paragraph parsed, one line from its start: the screen is
+      // far into it. Parsing ahead runs while the page is idle.
+      for (let i = 0; view.lineBlockAt(at).from !== start; i++) {
+        if (i === 600) return 'paragraph not parsed'
+        await new Promise((done) => setTimeout(done, 100))
+      }
+      await settle()
+      await settle()
+      // A few rows above the place held, still inside the text drawn.
+      pane.scrollTop -= 600
+      await settle()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+      })
+      for (let frames = 0; frames < 3; frames++) await frame()
+      const pos = rowAtTop()
+      const top = where(pos)
+      const offs = []
+      checking = true
+      for (const width of [1200, 800, 1400]) {
+        panes.style.width = `${width}px`
+        // What the frame paints: this task runs after it.
+        await frame()
+        await new Promise((done) => setTimeout(done))
+        const painted = where(pos)
+        await settle()
+        const settled = where(pos)
+        for (const shown of [painted, settled])
+          offs.push(shown === null ? null : shown - top)
+      }
+      checking = false
+      return { offs, undrawn }
+    },
+    {
+      doc: hugeParagraph,
+      at: hugeParagraph.indexOf('line 15000 of'),
+      start: hugeParagraphs.length + 2,
+    },
+  )
+  const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
+  assert.ok(
+    typeof result === 'object' &&
+      !result.undrawn.length &&
+      result.offs.every(rowsHeld),
+    JSON.stringify(result),
+  )
+})
+
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>
   harness.evaluate(

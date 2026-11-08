@@ -305,6 +305,50 @@ test('Style Settings options become body classes and variables, saved per vault'
   assert.deepEqual(await snapshot(vault), before)
 })
 
+test('source editors get Obsidian token classes only while a theme is on', {
+  timeout: 90000,
+}, async (t) => {
+  const { vault, profile } = await themedVault(t)
+  await writeFile(
+    join(vault, '.obsidian', 'snippets', 'heading-colour.css'),
+    '.cm-s-obsidian .cm-header-1 { color: rgb(1, 2, 3); }\n',
+  )
+  const { page } = await launch(profile)
+  const note = page.locator('[role="treeitem"]', { hasText: 'Note.md' })
+  if (!(await note.isVisible())) await page.locator('.sidebar-toggle').click()
+  await note.click()
+  await page.getByRole('button', { name: 'Source view' }).click()
+  const source = page.getByRole('textbox', { name: 'Markdown editor' })
+  await source.locator('.cm-line', { hasText: 'Heading' }).waitFor()
+  const classes = () =>
+    source.evaluate((editor) =>
+      ['cm-header-1', 'cm-formatting'].map(
+        (name) => editor.querySelectorAll(`.${name}`).length,
+      ),
+    )
+  assert.deepEqual(await classes(), [0, 0])
+  await select(page, { theme: null, snippets: ['heading-colour'] })
+  await source.locator('.cm-header-1').first().waitFor()
+  const [headers, marks] = await classes()
+  assert.ok(headers > 0 && marks > 0)
+  // The theme's heading colour reaches the source view through the class.
+  assert.equal(
+    await source
+      .locator('.cm-header-1')
+      .first()
+      .evaluate((node) => getComputedStyle(node).color),
+    'rgb(1, 2, 3)',
+  )
+  await select(page, { theme: null, snippets: [] })
+  await page.waitForFunction(
+    () => !document.querySelector('[role="textbox"] .cm-header-1'),
+  )
+  assert.equal(
+    await source.locator('.cm-line', { hasText: 'Heading' }).count(),
+    1,
+  )
+})
+
 test('--disable-obsidian-themes starts without the chosen theme', {
   timeout: 60000,
 }, async (t) => {

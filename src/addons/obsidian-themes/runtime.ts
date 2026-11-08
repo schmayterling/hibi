@@ -33,6 +33,8 @@ export function createRuntime(context: AddonContext) {
   let style: ReturnType<AddonContext['styles']['register']> | null = null
   let safe: HTMLElement | null = null
   let safeTimer: ReturnType<typeof setTimeout> | undefined
+  // Obsidian's token classes in source editors, only while a theme is on.
+  let tokens: (() => void) | null = null
   // Body classes from Style Settings, removed with the theme.
   let added: string[] = []
   const root = document.documentElement
@@ -68,6 +70,13 @@ export function createRuntime(context: AddonContext) {
         (name) => !document.body.classList.contains(name),
       )
       document.body.classList.add(...added)
+      tokens ??= context.editor.registerSource({
+        id: 'token-classes',
+        create: () =>
+          import('./source-classes').then(
+            (module) => module.obsidianTokenClasses,
+          ),
+      })
       const text = bridgeCss(appearance) + css
       if (style) style.update(text)
       else {
@@ -79,6 +88,8 @@ export function createRuntime(context: AddonContext) {
     },
     clear() {
       hideSafe()
+      tokens?.()
+      tokens = null
       if (!style) return
       style.dispose()
       style = null

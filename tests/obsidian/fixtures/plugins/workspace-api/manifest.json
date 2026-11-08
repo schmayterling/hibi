@@ -1,0 +1,9 @@
+{
+  "id": "workspace-api",
+  "name": "Workspace API fixture",
+  "version": "1.0.0",
+  "minAppVersion": "0.0.0",
+  "description": "Handwritten sidebar and leaf checks.",
+  "author": "Hibi",
+  "isDesktopOnly": false
+}

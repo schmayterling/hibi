@@ -1,0 +1,19 @@
+{
+  "id": "obsidian-themes",
+  "name": "Obsidian themes",
+  "description": "Use a vault's Obsidian theme and CSS snippets.",
+  "apiVersion": 3,
+  "kind": "extension",
+  "version": "0.1.0",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

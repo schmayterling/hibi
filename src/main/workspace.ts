@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type BigIntStats, type FSWatcher, watch } from 'node:fs'
-import { lstat, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { lstat, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
 import ignore from 'ignore'
@@ -68,6 +68,7 @@ import {
   incompleteMetadataPage,
   WorkspaceMetadataParser,
 } from './workspace-metadata-parser'
+import { obsidianVault } from './workspace-obsidian'
 import { resolveWorkspaceEntry } from './workspace-paths'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import { scanWorkspaceTree } from './workspace-scan'
@@ -360,24 +361,6 @@ export function subscribeWorkspaceChanges(
     includeEntries ? entries : [],
     workspaceStreamStatus(),
   )
-}
-
-async function obsidianVault(
-  base: string,
-): Promise<WorkspaceState['obsidian']> {
-  const settings = join(base, '.obsidian')
-  const folder = await lstat(settings).catch(() => null)
-  if (!folder?.isDirectory() || folder.isSymbolicLink()) return undefined
-  const plugins = join(settings, 'community-plugins.json')
-  const file = await lstat(plugins).catch(() => null)
-  if (!file?.isFile() || file.isSymbolicLink()) return { externalAddons: false }
-  if (file.size > 65536) return { externalAddons: true }
-  try {
-    const enabled = JSON.parse(await readFile(plugins, 'utf8'))
-    return { externalAddons: Array.isArray(enabled) && enabled.length > 0 }
-  } catch {
-    return { externalAddons: false }
-  }
 }
 
 export function workspaceRelativePath(path: string | null): string | null {

@@ -332,7 +332,9 @@ test('table layout eviction serializes the whole file a bounded number of times'
   const metadata = join(root, '.hibi')
   const fast = load({
     lstat: (path, ...rest) =>
-      path.startsWith(metadata) ? lstat(path, ...rest) : Promise.resolve({}),
+      path.startsWith(metadata) || path === join(root, '.obsidian')
+        ? lstat(path, ...rest)
+        : Promise.resolve({}),
   })
   const tables = Array.from({ length: 45 }, (_, index) =>
     table(`${index}:a`, [120], Array(1000).fill(48)),

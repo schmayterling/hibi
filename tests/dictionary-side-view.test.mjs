@@ -7,6 +7,7 @@ import { gzipSync } from 'node:zlib'
 import { packs } from '../src/addons/dictionary/packs.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -116,12 +117,13 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
   const markdown = async () =>
     (await page.evaluate(() => window.hibi.getDocument())).markdown
 
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+  })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,

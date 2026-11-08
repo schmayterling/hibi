@@ -12,6 +12,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -6225,7 +6226,6 @@ test('two views of a tab keep the table sizes each other stores', {
           window.tables.layouts('two').some((table) => table.key === key),
         ),
       keys,
-      { timeout: 3000 },
     )
     .catch(() => {})
   assert.deepEqual(
@@ -6761,7 +6761,6 @@ test('a save that waits for the workspace stays ahead of the next one', {
     (expected) =>
       JSON.stringify(window.tables.layouts('queue')[0]?.rows) === expected,
     JSON.stringify(heights),
-    { timeout: 5000 },
   )
 })
 
@@ -6884,15 +6883,17 @@ const openFormatted = async () => {
   await waitForDocumentEditor(app, page)
   const revision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (revision) => {
-      const current = await window.hibi.getDocument()
-      return current.name === 'tables.md' && current.revision > revision
-    },
-    revision,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (revision) => {
+        const current = await window.hibi.getDocument()
+        return current.name === 'tables.md' && current.revision > revision
+      },
+      revision,
+    )
+  })
   await page.locator('.rich-pane .hibi-lp-table').first().waitFor()
   // Hidden windows have no focus; editors need a focused page.
   const session = await page.context().newCDPSession(page)
@@ -7266,13 +7267,14 @@ test('toolbar formatting preserves genuine DOM picks across table redraws', {
             filePaths: [file],
           })
         }, file)
-        await clickMenu(app, 'Open…')
-        await waitForAsync(
-          page,
-          async (name) => (await window.hibi.getDocument()).name === name,
-          name,
-        )
-        await waitForDocumentEditor(app, page)
+        await openInDocumentEditor(app, page, async () => {
+          await clickMenu(app, 'Open…')
+          await waitForAsync(
+            page,
+            async (name) => (await window.hibi.getDocument()).name === name,
+            name,
+          )
+        })
         const rich = page.getByRole('textbox', {
           name: 'Document editor',
           exact: true,

@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   electron,
   expectPageError,
+  openInDocumentEditor,
   waitForDocumentEditor,
 } from './electron.mjs'
 import { pressShortcut, withHeldClock } from './keyboard.mjs'
@@ -68,12 +69,15 @@ async function open(t, source, code, prepare) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    source,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
+  })
   await page
     .locator('.editor-panes[data-source-ready="true"] .rich-pane .cm-content')
     .waitFor()

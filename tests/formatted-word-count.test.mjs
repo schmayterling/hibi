@@ -10,6 +10,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -104,12 +105,14 @@ async function open(name) {
     },
     join(folder, name),
   )
-  await pressShortcut(app, mod + '+o')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    name,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, mod + '+o')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  })
 }
 test('formatted counts match rich document totals and ignore selections', {
   timeout: 90000,

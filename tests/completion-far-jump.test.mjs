@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -78,7 +82,7 @@ for (const [label, tail, before] of [
         filePaths: [path],
       })
     }, file)
-    await pressShortcut(app, `${mod}+o`)
+    await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`))
     await waitForAsync(
       page,
       async (expected) =>
@@ -86,7 +90,6 @@ for (const [label, tail, before] of [
       source,
     )
     await page.waitForFunction(() => window.completionProbe?.ready)
-    await waitForDocumentEditor(app, page)
     const formatted = page.locator('.rich-pane .cm-content')
     await formatted.waitFor()
     await formatted.focus()

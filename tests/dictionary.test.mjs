@@ -147,13 +147,14 @@ test('dictionary strips malformed markup in linear time', (t) => {
     assert.equal(plainText(html), expected)
     const timings = []
     for (let run = 0; run < 7; run++) {
-      const started = performance.now()
+      const started = process.cpuUsage()
       const result = plainText(html)
-      timings.push(performance.now() - started)
+      const used = process.cpuUsage(started)
+      timings.push((used.user + used.system) / 1000)
       assert.equal(result, expected)
     }
     const median = timings.sort((a, b) => a - b)[3]
-    const label = `${html.slice(0, 8)}… median ${median.toFixed(2)} ms`
+    const label = `${html.slice(0, 8)}… median ${median.toFixed(2)} cpu ms`
     t.diagnostic(label)
     assert.ok(median < 250, label)
   }

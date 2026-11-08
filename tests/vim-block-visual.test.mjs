@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync } from './electron.mjs'
+import { electron, openInDocumentEditor, waitForAsync } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('vim block visual draws and edits every line without adding mouse cursors', {
@@ -32,7 +32,7 @@ test('vim block visual draws and edits every line without adding mouse cursors',
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   await page.getByRole('button', { name: /^source view$/i }).click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await page.locator('.source-pane [data-vim-plugin]').waitFor()

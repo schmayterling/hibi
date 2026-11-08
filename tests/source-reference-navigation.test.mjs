@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   stopElectronTree,
-  waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
@@ -106,11 +106,13 @@ test('source reference links use current definitions and coexist with find', {
       globalThis.openedReference = href
     }
   }, path)
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'references.md',
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'references.md',
+    )
+  })
   await page.waitForFunction(
     () => document.querySelector('.app').getAttribute('aria-busy') === 'false',
   )
@@ -253,12 +255,13 @@ test('addon reference syntax keeps source references out of the built-in reader'
       globalThis.openedReference = href
     }
   }, path)
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'references.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'references.md',
+    )
+  })
 
   assert.equal(
     await page

@@ -47,6 +47,24 @@ async function main(root, io) {
   )
   return module.exports
 }
+// The public prune promise ends after both looks; this timer receipt marks their gap.
+async function pausePrune(t, api, wait) {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const scheduled = Promise.withResolvers()
+  const schedule = globalThis.setTimeout
+  const timer = t.mock.method(
+    globalThis,
+    'setTimeout',
+    (run, delay, ...args) => {
+      if (delay === wait) scheduled.resolve()
+      return schedule(run, delay, ...args)
+    },
+  )
+  const finished = api.pruneUndoHistory(wait)
+  await scheduled.promise
+  timer.mock.restore()
+  return { finished, resume: () => t.mock.timers.tick(wait) }
+}
 const folder = (root) => join(root, 'undo-history')
 const kept = (root, path) =>
   join(folder(root), `${createHash('sha256').update(path).digest('hex')}.json`)
@@ -363,17 +381,22 @@ test('notes Hibi moves to the trash take their kept histories with them', async 
 })
 
 test('a quit waits for a move or a removal still in progress', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const root = await profile(t)
   for (const operation of ['rename', 'unlink']) {
     // Moves rename kept files and removals unlink them; this one is slow.
     const slow = Promise.withResolvers()
+    const started = Promise.withResolvers()
     const data = join(root, operation)
     await fs.mkdir(data)
     const real = operation === 'rename' ? fs.rename : fs.unlink
     const api = await main(data, {
       ...fs,
       [operation]: async (path, ...rest) => {
-        if (/[0-9a-f]{64}\.json$/.test(path)) await slow.promise
+        if (/[0-9a-f]{64}\.json$/.test(path)) {
+          started.resolve()
+          await slow.promise
+        }
         return real(path, ...rest)
       },
     })
@@ -395,7 +418,8 @@ test('a quit waits for a move or a removal still in progress', async (t) => {
       .then(() => {
         quit = true
       })
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await started.promise
+    await new Promise(setImmediate)
     assert.equal(quit, false, operation)
     slow.resolve()
     await quitting
@@ -541,21 +565,28 @@ test('a quit waits 5 seconds at most for a move that never finishes', {
 })
 
 test('a quit waits for a clear, and for keeping turned off, asked for before it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const root = await profile(t)
   for (const action of ['clear', 'off']) {
     const data = join(root, action)
     await fs.mkdir(data)
     // The clear (or the setting before it) is slow.
     const slow = Promise.withResolvers()
+    const started = Promise.withResolvers()
     const api = await main(data, {
       ...fs,
       rename: async (path, to, ...rest) => {
-        if (String(to).endsWith('undo-history-settings.json'))
+        if (String(to).endsWith('undo-history-settings.json')) {
+          started.resolve()
           await slow.promise
+        }
         return fs.rename(path, to, ...rest)
       },
       rm: async (path, ...rest) => {
-        if (String(path).endsWith('undo-history')) await slow.promise
+        if (String(path).endsWith('undo-history')) {
+          started.resolve()
+          await slow.promise
+        }
         return fs.rm(path, ...rest)
       },
     })
@@ -569,7 +600,8 @@ test('a quit waits for a clear, and for keeping turned off, asked for before it'
     const quitting = api.undoHistoryWritten().then(() => {
       quit = true
     })
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await started.promise
+    await new Promise(setImmediate)
     assert.equal(quit, false, action)
     slow.resolve()
     await quitting
@@ -684,10 +716,10 @@ test('notes missing for 30 days let go of their kept histories, and notes on a m
   // A note gone at the first look and back by the second, as a branch
   // switch puts it back, keeps its history.
   await fs.rm(join(notes, 'a.md'))
-  const pruning = later.pruneUndoHistory(1000)
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  const pruning = await pausePrune(t, later, 1000)
   await fs.writeFile(join(notes, 'a.md'), note.source)
-  await pruning
+  pruning.resume()
+  await pruning.finished
   assert.equal(await exists(kept(root, join(notes, 'a.md'))), true)
   assert.deepEqual(await records(root), {})
 })
@@ -986,10 +1018,11 @@ test('a note with a record that Hibi moves or trashes takes it along, and a clea
   const later = await main(root)
   await fs.mkdir(folder(root), { recursive: true })
   await fs.writeFile(kept(root, from), JSON.stringify({}))
-  const pruning = later.pruneUndoHistory(50)
+  const pruning = await pausePrune(t, later, 50)
   await fs.writeFile(to, note.source)
   await later.relocateUndoHistory(from, to)
-  await pruning
+  pruning.resume()
+  await pruning.finished
   assert.equal(await exists(kept(root, to)), true)
   assert.deepEqual(await entries(root), [to])
 })
@@ -1065,9 +1098,10 @@ test('a note Hibi moves while missing notes are looked for keeps its history', a
   // Hibi moved the note on disk; its history follows once the move is done,
   // after the first look found the note missing.
   await fs.rename(from, to)
-  const pruning = api.pruneUndoHistory(50)
+  const pruning = await pausePrune(t, api, 50)
   await api.relocateUndoHistory(from, to)
-  await pruning
+  pruning.resume()
+  await pruning.finished
   assert.deepEqual(
     await api.readUndoHistory(to, reopened(note.source)),
     note.history,
@@ -1079,12 +1113,12 @@ test('missing notes are looked at again only after the moves Hibi queued, even a
   const from = join(root, 'a.md'),
     to = join(root, 'b.md')
   const moved = Promise.withResolvers()
-  let moving = false
+  const moving = Promise.withResolvers()
   const api = await main(root, {
     ...fs,
     rename: async (path, ...rest) => {
       if (path === kept(root, from)) {
-        moving = true
+        moving.resolve()
         await moved.promise
       }
       return fs.rename(path, ...rest)
@@ -1094,13 +1128,14 @@ test('missing notes are looked at again only after the moves Hibi queued, even a
   await fs.writeFile(from, note.source)
   await api.storeUndoHistory(from, note.file, note.history)
   await fs.rename(from, to)
-  const pruning = api.pruneUndoHistory(10)
+  const pruning = await pausePrune(t, api, 10)
   const relocating = api.relocateUndoHistory(from, to)
-  while (!moving) await new Promise((resolve) => setTimeout(resolve, 10))
+  await moving.promise
   // The second look is due while the history's move is still on its way.
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  pruning.resume()
+  await new Promise(setImmediate)
   moved.resolve()
-  await Promise.all([relocating, pruning])
+  await Promise.all([relocating, pruning.finished])
   assert.deepEqual(
     await api.readUndoHistory(to, reopened(note.source)),
     note.history,
@@ -1170,12 +1205,12 @@ test('a quit waits for the histories a prune removes, not for the wait between i
   const root = await profile(t)
   const path = join(root, 'a.md')
   const removed = Promise.withResolvers()
-  let removing = false
+  const removing = Promise.withResolvers()
   const api = await main(root, {
     ...fs,
     unlink: async (file, ...rest) => {
       if (file === kept(root, path)) {
-        removing = true
+        removing.resolve()
         await removed.promise
       }
       return fs.unlink(file, ...rest)
@@ -1190,32 +1225,29 @@ test('a quit waits for the histories a prune removes, not for the wait between i
     ...fs,
     unlink: async (file, ...rest) => {
       if (file === kept(root, path)) {
-        removing = true
+        removing.resolve()
         await removed.promise
       }
       return fs.unlink(file, ...rest)
     },
   })
   t.mock.method(Date, 'now', () => today + 31 * day)
-  const pruning = later.pruneUndoHistory(300)
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  const pruning = await pausePrune(t, later, 300)
   let quit = false
   await later.undoHistoryWritten().then(() => {
     quit = true
   })
   assert.equal(quit, true)
-  for (let tries = 0; !removing; tries++) {
-    assert.ok(tries < 500, 'the history was never removed')
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
+  pruning.resume()
+  await removing.promise
   quit = false
   const quitting = later.undoHistoryWritten().then(() => {
     quit = true
   })
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  await new Promise(setImmediate)
   assert.equal(quit, false)
   removed.resolve()
-  await Promise.all([quitting, pruning])
+  await Promise.all([quitting, pruning.finished])
   assert.equal(await exists(kept(root, path)), false)
 })
 
@@ -1300,12 +1332,13 @@ test('a clear, keeping off or a trash between the looks leaves nothing behind', 
       await api.storeUndoHistory(join(notes, name), note.file, note.history)
     }
     await fs.rm(join(notes, 'a.md'))
-    const pruning = api.pruneUndoHistory(100)
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    const pruning = await pausePrune(t, api, 100)
     if (action === 'clear') await api.clearUndoHistory()
     else if (action === 'off') await api.setKeepUndoHistory(false)
     else await api.removeUndoHistory(notes)
-    await pruning
+    pruning.resume()
+    await pruning.finished
+    t.mock.timers.reset()
     assert.deepEqual(await fs.readdir(folder(root)).catch(() => []), [], action)
     // A clear's index stays gone: the second look writes none back.
     if (action === 'trash') assert.deepEqual(await index(root), [], action)

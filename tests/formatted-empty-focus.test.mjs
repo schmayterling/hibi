@@ -3,7 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -40,11 +44,13 @@ for (const action of ['backspace', 'cut', 'cut shortcut', 'type in empty']) {
         filePaths: [path],
       })
     }, file)
-    await pressShortcut(app, `${mod}+o`)
-    await waitForAsync(
-      page,
-      async () => (await window.hibi.getDocument()).name === 'note.md',
-    )
+    await openInDocumentEditor(app, page, async () => {
+      await pressShortcut(app, `${mod}+o`)
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).name === 'note.md',
+      )
+    })
     await waitForAsync(
       page,
       async (expected) =>

@@ -32,6 +32,9 @@ import { ChunkedMarkdownParser } from '../src/shared/chunked-markdown.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { frozenOracle } from './frozen-oracle.mjs'
 
+// Adjacent glyphs share a history group regardless of host scheduling.
+test.beforeEach((t) => t.mock.method(Date, 'now', () => 1000))
+
 /**
  * What the removed rich editor, with the GitHub and text extras flavors,
  * wrote, read and reported for this suite's notes, selections and actions.

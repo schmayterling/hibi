@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -184,12 +185,10 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
   await page.waitForFunction(
     () => !document.querySelector('#addon-documentation').checked,
   )
-  await page.waitForFunction(() =>
-    window.hibi
-      .getAddonStates()
-      .then((states) =>
-        states.some((addon) => addon.id === 'documentation' && !addon.enabled),
-      ),
+  await waitForAsync(page, async () =>
+    (await window.hibi.getAddonStates()).some(
+      (addon) => addon.id === 'documentation' && !addon.enabled,
+    ),
   )
   await assert.rejects(
     page.evaluate(() => window.hibi.invokeAddon('documentation', 'export')),
@@ -199,12 +198,10 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
   await page.waitForFunction(
     () => document.querySelector('#addon-documentation').checked,
   )
-  await page.waitForFunction(() =>
-    window.hibi
-      .getAddonStates()
-      .then((states) =>
-        states.some((addon) => addon.id === 'documentation' && addon.enabled),
-      ),
+  await waitForAsync(page, async () =>
+    (await window.hibi.getAddonStates()).some(
+      (addon) => addon.id === 'documentation' && addon.enabled,
+    ),
   )
   await assert.rejects(
     page.evaluate(() =>

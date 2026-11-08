@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   stopElectronTree,
   waitForAsync,
   waitForFormattedEditor,
@@ -341,11 +342,13 @@ test('a note deleted outside and a note never saved both come back as new notes'
   await first.open('original')
   await first.edit('gone but kept')
   await first.kept('gone but kept')
-  await pressShortcut(first.app, `${mod}+n`)
-  await waitForAsync(
-    first.page,
-    async () => (await window.hibi.getDocument()).name === 'untitled.md',
-  )
+  await openInDocumentEditor(first.app, first.page, async () => {
+    await pressShortcut(first.app, `${mod}+n`)
+    await waitForAsync(
+      first.page,
+      async () => (await window.hibi.getDocument()).name === 'untitled.md',
+    )
+  })
   await first.edit('a new draft')
   await first.kept('a new draft')
   await first.kill()

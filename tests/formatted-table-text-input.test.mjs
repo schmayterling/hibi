@@ -115,7 +115,7 @@ import { parseRow } from '../src/shared/markdown-table-source.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
@@ -358,13 +358,14 @@ test('raw partial DOM range replacement and per-event history match the recorded
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      basename(file),
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        basename(file),
+      )
+    })
     await waitForAsync(
       page,
       async (content) => {

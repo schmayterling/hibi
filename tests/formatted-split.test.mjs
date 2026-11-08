@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -33,18 +37,23 @@ async function open(t, text, beforeSplit) {
   })
   await page.reload()
   await waitForDocumentEditor(app, page)
+  if (beforeSplit) await page.evaluate(beforeSplit)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`))
   await waitForAsync(
     page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     text,
   )
-  if (beforeSplit) await page.evaluate(beforeSplit)
+  // The new view places its opening caret and takes focus. A mode button
+  // pressed before that keeps focus, and the caret stays at the start.
+  await waitForAsync(page, () =>
+    document.activeElement?.matches('.rich-pane .cm-content'),
+  )
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()

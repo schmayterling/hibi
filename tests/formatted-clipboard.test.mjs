@@ -5,7 +5,13 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { parser as markdownParser } from '@lezer/markdown'
 import { marked } from 'marked'
-import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  after,
+  before,
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
@@ -44,7 +50,7 @@ async function open() {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`))
   await page.locator('.rich-pane .cm-content').getByText('quoted').waitFor()
   // Hidden windows have no focus; editors need a focused page.
   const session = await page.context().newCDPSession(page)

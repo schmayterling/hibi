@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { DocInput } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
@@ -13,6 +13,9 @@ import { createSourceSession } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
 import { frozenOracle } from './frozen-oracle.mjs'
+
+// These glyphs belong to one typing burst; host scheduling must not split history.
+beforeEach((t) => t.mock.method(Date, 'now', () => 1000))
 
 /** What the removed rich editor, with the GitHub flavor, read after the same input. */
 const native = frozenOracle('formatted-stored-marks-history')

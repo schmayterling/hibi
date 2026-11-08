@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -95,8 +99,7 @@ async function openSplit(t, original) {
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   await waitForAsync(
     page,
     async (original) => (await window.hibi.getDocument()).markdown === original,

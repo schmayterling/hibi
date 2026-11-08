@@ -1,4 +1,4 @@
-import { waitForAsync } from './poll.mjs'
+import { waitForAsync } from './electron.mjs'
 
 /** The formatted view is a CodeMirror editor, so its text is replaced like source. */
 export const replaceRichText = replaceSourceText

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { parseVimConfig } from '../src/addons/vim/config.ts'
-import { electron } from './electron.mjs'
+import { electron, openInDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('Vim configs import mode-specific mappings and leaders without interpreting scripts', () => {
@@ -147,7 +147,7 @@ error('Do not execute config')
   await app.evaluate(({ dialog }, note) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [note] })
   }, note)
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   await page.getByRole('button', { name: /^source view$/i }).click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await page.locator('[data-vim-plugin]').waitFor()

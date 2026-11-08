@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   electron,
   expectPageError,
+  openInDocumentEditor,
   waitForDocumentEditor,
 } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
@@ -153,7 +154,9 @@ async function open(
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`), {
+    timeout: 20000,
+  })
   context.pane = presentation === 'formatted' ? '.rich-pane' : '.source-pane'
   // Renderer focus stays inside a hidden test window.
   const cdp = await page.context().newCDPSession(page)

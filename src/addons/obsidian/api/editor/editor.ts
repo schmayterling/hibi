@@ -46,8 +46,10 @@ export type EditorTransaction = {
 
 export type EditorHost = {
   hibi: AddonContext
-  /** The pane's mounted CodeMirror view, for selection, focus and scrolling. */
+  /** The pane's mounted CodeMirror view, for selection, focus and scrolling; null once the pane shows something else. */
   viewOf: (target: ViewTarget) => EditorView | null
+  /** Whether the pane still shows this view and note generation. */
+  isLive: (target: ViewTarget) => boolean
 }
 
 const commands: Record<string, Command> = {
@@ -72,7 +74,7 @@ const commands: Record<string, Command> = {
 }
 
 let requests = 0
-const word = /[\p{L}\p{N}\p{M}_]/u
+const word = /^[\p{L}\p{N}\p{M}_]$/u
 
 /**
  * Obsidian's Editor over Hibi's source session. Reads take the canonical
@@ -89,6 +91,16 @@ export class Editor {
   private readonly host: EditorHost
   readonly target: ViewTarget
 
+  /**
+   * Hibi editors draw one selection range, so further ranges a plugin sets
+   * live here while the note and the drawn range are unchanged.
+   */
+  #multi: {
+    version: number
+    ranges: { anchor: number; head: number }[]
+    main: number
+  } | null = null
+
   constructor(host: EditorHost, target: ViewTarget) {
     this.host = host
     this.target = target
@@ -97,6 +109,12 @@ export class Editor {
   /** The pane's CodeMirror view, as `editor.cm` in Obsidian. */
   get cm(): EditorView | null {
     return this.host.viewOf(this.target)
+  }
+
+  /** An Editor whose pane moved to another note or view refuses, never retargets. */
+  #live() {
+    if (!this.host.isLive(this.target))
+      throw new Error('This editor is no longer open in its pane.')
   }
 
   #source() {
@@ -183,23 +201,32 @@ export class Editor {
     this.transaction({ changes: [{ text: replacement, from, to }] })
   }
 
-  #ranges(): { ranges: { anchor: number; head: number }[]; main: number } {
+  #drawn(): { anchor: number; head: number } {
+    this.#live()
     const cm = this.cm
-    if (cm)
-      return {
-        ranges: cm.state.selection.ranges.map(({ anchor, head }) => ({
-          anchor,
-          head,
-        })),
-        main: cm.state.selection.mainIndex,
-      }
-    const selection = this.host.hibi.editorViews.getSelection(this.target)
-    return {
-      ranges: selection.ok
-        ? [{ anchor: selection.value.anchor, head: selection.value.head }]
-        : [{ anchor: 0, head: 0 }],
-      main: 0,
+    if (cm) {
+      const { anchor, head } = cm.state.selection.main
+      return { anchor, head }
     }
+    const selection = this.host.hibi.editorViews.getSelection(this.target)
+    return selection.ok
+      ? { anchor: selection.value.anchor, head: selection.value.head }
+      : { anchor: 0, head: 0 }
+  }
+  #ranges(): { ranges: { anchor: number; head: number }[]; main: number } {
+    const drawn = this.#drawn()
+    const multi = this.#multi
+    const kept = multi?.ranges[multi.main]
+    if (
+      multi &&
+      kept &&
+      multi.version === this.#source().version &&
+      kept.anchor === drawn.anchor &&
+      kept.head === drawn.head
+    )
+      return multi
+    this.#multi = null
+    return { ranges: [drawn], main: 0 }
   }
   listSelections(): EditorSelectionRange[] {
     const text = this.#text()
@@ -239,25 +266,24 @@ export class Editor {
       head: text.posToOffset(head ?? anchor),
     }))
     if (!offsets.length) return
+    this.#live()
+    const index = Math.max(0, Math.min(main, offsets.length - 1))
+    const primary = offsets[index]!
     const cm = this.cm
-    if (cm) {
-      cm.dispatch({
-        selection: EditorSelection.create(
-          offsets.map(({ anchor, head }) =>
-            EditorSelection.range(anchor, head),
-          ),
-          Math.max(0, Math.min(main, offsets.length - 1)),
-        ),
+    if (cm) cm.dispatch({ selection: primary })
+    else {
+      const current = this.host.hibi.editorViews.getSelection(this.target)
+      if (!current.ok) throw new Error(current.message)
+      const result = this.host.hibi.editorViews.setSelection({
+        ...current.value,
+        ...primary,
       })
-      return
+      if (!result.ok) throw new Error(result.message)
     }
-    const current = this.host.hibi.editorViews.getSelection(this.target)
-    if (!current.ok) throw new Error(current.message)
-    const result = this.host.hibi.editorViews.setSelection({
-      ...current.value,
-      ...offsets[Math.max(0, Math.min(main, offsets.length - 1))]!,
-    })
-    if (!result.ok) throw new Error(result.message)
+    this.#multi =
+      offsets.length > 1
+        ? { version: this.#source().version, ranges: offsets, main: index }
+        : null
   }
   setSelection(anchor: EditorPosition, head?: EditorPosition) {
     this.setSelections([{ anchor, head: head ?? anchor }])
@@ -274,9 +300,22 @@ export class Editor {
     const text = this.#text()
     const line = text.getLine(position.line)
     let from = Math.max(0, Math.min(position.ch, line.length))
+    // Whole code points, so astral letters count and pairs never split.
+    if (from > 0 && /[\uDC00-\uDFFF]/.test(line[from] ?? '')) from--
     let to = from
-    while (from > 0 && word.test(line[from - 1]!)) from--
-    while (to < line.length && word.test(line[to]!)) to++
+    const before = (at: number) => {
+      const low = line.charCodeAt(at - 1)
+      return line.slice(
+        at > 1 && low >= 0xdc00 && low <= 0xdfff ? at - 2 : at - 1,
+        at,
+      )
+    }
+    while (from > 0 && word.test(before(from))) from -= before(from).length
+    while (to < line.length) {
+      const next = String.fromCodePoint(line.codePointAt(to)!)
+      if (!word.test(next)) break
+      to += next.length
+    }
     return from === to
       ? null
       : {
@@ -354,6 +393,7 @@ export class Editor {
 
   /** The pane's own history, not the focused pane's. */
   #history(direction: 'undo' | 'redo') {
+    this.#live()
     const cm = this.cm
     if (cm) {
       runSourceHistory(cm, direction)
@@ -376,6 +416,7 @@ export class Editor {
     if (command === 'undo') return this.undo()
     if (command === 'redo') return this.redo()
     const run = commands[command]
+    this.#live()
     const cm = this.cm
     if (run && cm) run(cm)
   }

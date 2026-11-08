@@ -100,17 +100,25 @@ function session(raw) {
     editorViews: {
       list: () => panes,
       getActive: () => panes[0],
-      getSelection: (view) => ({
-        ok: true,
-        value: {
-          view,
-          editor: 'source',
-          editorGeneration: 1,
-          contentVersion: state.version,
-          anchor: state.selection[0],
-          head: state.selection[1],
-        },
-      }),
+      getSelection: (view) =>
+        panes.some(
+          (pane) =>
+            pane.viewId === view.viewId &&
+            pane.viewGeneration === view.viewGeneration &&
+            pane.documentGeneration === view.documentGeneration,
+        )
+          ? {
+              ok: true,
+              value: {
+                view,
+                editor: 'source',
+                editorGeneration: 1,
+                contentVersion: state.version,
+                anchor: state.selection[0],
+                head: state.selection[1],
+              },
+            }
+          : { ok: false, code: 'stale', message: 'This editor view changed.' },
       setSelection(selection) {
         state.selection = [selection.anchor, selection.head]
         return { ok: true, value: undefined }
@@ -400,4 +408,83 @@ test('undo and redo act on the captured pane, never the focused one', async (t) 
   await Promise.resolve()
   assert.equal(commands, 1)
   assert.equal(state.raw, 'one\r\n')
+})
+
+test('an editor whose pane moved to another note refuses instead of retargeting', async (t) => {
+  const { hibi, state, panes } = session('first\r\n')
+  let commands = 0
+  hibi.editor.runCommand = async () => {
+    commands++
+    return true
+  }
+  const { commandEditor } = await host(t, hibi)
+  const { editor, view } = commandEditor(panes[0])
+  // The pane's mounted view, as Hibi's editor reports it.
+  const dispatched = []
+  const cm = {
+    state: EditorState.create({ doc: 'first\n' }),
+    dispatch: (spec) => dispatched.push(spec),
+  }
+  view.runtime.views.set('left:source', cm)
+  assert.equal(editor.cm, cm)
+
+  // The same pane now shows another note.
+  panes[0] = {
+    ...panes[0],
+    documentId: 'other',
+    viewGeneration: 2,
+    documentGeneration: 2,
+  }
+  assert.equal(editor.cm, null)
+  assert.throws(
+    () => editor.setCursor({ line: 0, ch: 1 }),
+    /no longer open in its pane/,
+  )
+  assert.throws(() => editor.undo(), /no longer open in its pane/)
+  assert.throws(() => editor.getCursor(), /no longer open in its pane/)
+  assert.deepEqual(dispatched, [])
+  assert.equal(commands, 0)
+  assert.equal(state.raw, 'first\r\n')
+})
+
+test('setSelections keeps every range for the editor api and edits them in one step', async (t) => {
+  const { hibi, state, requests, panes } = session('ab\r\ncd\r\nef\r\n')
+  const { commandEditor } = await host(t, hibi)
+  const { editor } = commandEditor(panes[0])
+  editor.setSelections(
+    [
+      { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
+      { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
+    ],
+    1,
+  )
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
+    { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
+  ])
+  // The drawn selection is the main range.
+  assert.equal(editor.getSelection(), 'e')
+  editor.replaceSelection('X')
+  assert.equal(requests.length, 1)
+  assert.equal(state.raw, 'Xb\r\ncd\r\nXf\r\n')
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 1 }, head: { line: 0, ch: 1 } },
+    { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
+  ])
+  // Moving the drawn selection elsewhere drops the extra ranges.
+  editor.setCursor({ line: 1, ch: 0 })
+  assert.equal(editor.listSelections().length, 1)
+})
+
+test('wordAt reads whole code points, including astral letters', async (t) => {
+  const { hibi, panes } = session('a 𠀀𠀁x b 😀 c\r\n')
+  const { commandEditor } = await host(t, hibi)
+  const { editor } = commandEditor(panes[0])
+  const word = { from: { line: 0, ch: 2 }, to: { line: 0, ch: 7 } }
+  assert.deepEqual(editor.wordAt({ line: 0, ch: 2 }), word)
+  // Inside a surrogate pair, and at its end.
+  assert.deepEqual(editor.wordAt({ line: 0, ch: 3 }), word)
+  assert.deepEqual(editor.wordAt({ line: 0, ch: 7 }), word)
+  // Emoji are not word characters, as in CodeMirror's word categories.
+  assert.equal(editor.wordAt({ line: 0, ch: 11 }), null)
 })

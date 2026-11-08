@@ -7217,6 +7217,7 @@
     "src/addons/dictionary/PackSettings.tsx"
   ],
   "ffa7aa26add4": [
+    "src/renderer/src/window-desktop.ts",
     "src/shared/document-journal.ts"
   ],
   "b0291a853226": [

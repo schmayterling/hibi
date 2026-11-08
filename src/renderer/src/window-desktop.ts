@@ -1,6 +1,7 @@
 import type { AddonWindowBridge } from '../../shared/addon-windows'
 import { admittedOperations } from '../../shared/admitted-operations.ts'
 import type { DesktopApi } from '../../shared/desktop'
+import type { SourceOperation } from '../../shared/source-operations'
 
 /**
  * Stand-in for `window.hibi` in an addon editor window. It holds no privileges:
@@ -8,7 +9,10 @@ import type { DesktopApi } from '../../shared/desktop'
  * read-only bridge, listeners never fire, and every other request rejects.
  */
 export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
-  const admitted = admittedOperations()
+  // A copy, without the parser's chunk on this lazy window's imports.
+  const admitted = admittedOperations((value) =>
+    structuredClone(value as SourceOperation),
+  )
   const unavailable = (name: string) => () =>
     Promise.reject(new Error(`${name} is not available in this window.`))
   const known: Partial<DesktopApi> = {

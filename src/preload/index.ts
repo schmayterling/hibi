@@ -43,6 +43,7 @@ import { MEDIA_CHANNELS } from '../shared/media'
 import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
+import { parseSourceOperation } from '../shared/source-operations'
 import type {
   SourceTransferChunk,
   SourceTransferRequest,
@@ -149,7 +150,10 @@ if (process.isMainFrame) {
       },
     },
   )
-  const admitted = admittedOperations(journal.assertCapacity)
+  const admitted = admittedOperations(
+    parseSourceOperation,
+    journal.assertCapacity,
+  )
   const invoke: typeof transport.invoke = (channel, ...args) =>
     journal.hasPending()
       ? journal.flush().then(() => transport.invoke(channel, ...args))

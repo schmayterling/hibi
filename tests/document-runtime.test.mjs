@@ -10,6 +10,7 @@ import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
 import { windowDesktop } from '../src/renderer/src/window-desktop.ts'
 import { admittedOperations } from '../src/shared/admitted-operations.ts'
 import { createDocumentJournal } from '../src/shared/document-journal.ts'
+import { parseSourceOperation } from '../src/shared/source-operations.ts'
 import { keptHistory } from '../src/shared/undo-history.ts'
 
 const document = (text, overrides = {}) => ({
@@ -809,7 +810,10 @@ test('an admitted edit crosses the preload bridge once', async () => {
     }
   })
   // Same journal wiring as the preload; contextBridge copies every argument.
-  const admitted = admittedOperations(journal.assertCapacity)
+  const admitted = admittedOperations(
+    parseSourceOperation,
+    journal.assertCapacity,
+  )
   const hibi = {
     appendSourceOperation: async (operation) =>
       journal.appendOperation(
@@ -867,12 +871,12 @@ test('admissions keep one per tab, refuse an id another tab holds and own their 
   const full = createDocumentJournal(async () => {}, { maximumBulkBytes: 300 })
   assert.throws(
     () =>
-      admittedOperations(full.assertCapacity).admit(
+      admittedOperations(parseSourceOperation, full.assertCapacity).admit(
         admission('one', 1, 'x'.repeat(100)),
       ),
     /recovery is full/,
   )
-  const admitted = admittedOperations()
+  const admitted = admittedOperations(parseSourceOperation)
   // A tab's next admission drops one whose edit never reached its append.
   admitted.admit(admission('one', 2, 'failed'))
   admitted.admit(admission('two', 1, 'two1'))

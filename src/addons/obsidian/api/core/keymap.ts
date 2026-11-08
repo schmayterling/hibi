@@ -1,4 +1,4 @@
-import { Platform } from './platform'
+import { Platform } from './platform.ts'
 
 type Modifier = 'Mod' | 'Ctrl' | 'Meta' | 'Alt' | 'Shift'
 type KeyHandler = {
@@ -13,7 +13,10 @@ type KeyHandler = {
 
 export class Scope {
   private handlers = new Set<KeyHandler>()
-  constructor(private parent?: Scope) {}
+  private parent: Scope | undefined
+  constructor(parent?: Scope) {
+    this.parent = parent
+  }
 
   register(
     modifiers: Modifier[] | null,

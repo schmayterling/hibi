@@ -16,7 +16,7 @@ import {
   selectAll,
 } from '@codemirror/commands'
 import { foldAll, foldCode, unfoldAll } from '@codemirror/language'
-import { EditorSelection } from '@codemirror/state'
+import { ChangeSet, EditorSelection } from '@codemirror/state'
 import { type Command, EditorView } from '@codemirror/view'
 import type {
   DocumentTarget,
@@ -336,22 +336,25 @@ export class Editor {
       ].sort((a, b) => a - b) as [number, number]
       edits.push({ from, to, insert: change.text })
     }
-    if (transaction.replaceSelection !== undefined)
-      for (const { anchor, head } of this.#ranges().ranges)
+    const selection = this.#ranges()
+    const replace = transaction.replaceSelection
+    if (replace !== undefined)
+      for (const { anchor, head } of selection.ranges)
         edits.push({
           from: Math.min(anchor, head),
           to: Math.max(anchor, head),
-          insert: transaction.replaceSelection,
+          insert: replace,
         })
     edits.sort((a, b) => a.from - b.from || a.to - b.to)
-    // Where each insert ends once all of them apply, in editor offsets.
-    const ends: number[] = []
-    let shift = 0
-    for (const edit of edits) {
-      const length = edit.insert.replace(/\r\n?/g, '\n').length
-      ends.push(edit.from + shift + length)
-      shift += length - (edit.to - edit.from)
-    }
+    // Throws on overlapping changes, before anything is written.
+    const mapping = ChangeSet.of(
+      edits.map(({ from, to, insert }) => ({
+        from,
+        to,
+        insert: insert.replace(/\r\n?/g, '\n'),
+      })),
+      text.length,
+    )
     if (edits.length) {
       const result = this.host.hibi.documents.applyEdits({
         requestId: `obsidian-editor-${++requests}`,
@@ -380,13 +383,22 @@ export class Editor {
       this.setSelections(
         selections.map(({ from, to }) => ({ anchor: from, head: to ?? from })),
       )
-    else if (transaction.replaceSelection !== undefined && ends.length) {
+    else if (replace !== undefined || selection.ranges.length > 1) {
+      // The same ranges, mapped through every change: a replaced range is a
+      // caret after its text, and other changes add no carets.
       const after = this.#text()
+      const at = (offset: number) => after.offsetToPos(offset)
       this.setSelections(
-        ends.map((end) => ({
-          anchor: after.offsetToPos(end),
-          head: after.offsetToPos(end),
-        })),
+        selection.ranges.map(({ anchor, head }) => {
+          if (replace === undefined)
+            return {
+              anchor: at(mapping.mapPos(anchor)),
+              head: at(mapping.mapPos(head)),
+            }
+          const end = at(mapping.mapPos(Math.max(anchor, head), 1))
+          return { anchor: end, head: end }
+        }),
+        selection.main,
       )
     }
   }

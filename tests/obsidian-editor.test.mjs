@@ -488,3 +488,35 @@ test('wordAt reads whole code points, including astral letters', async (t) => {
   // Emoji are not word characters, as in CodeMirror's word categories.
   assert.equal(editor.wordAt({ line: 0, ch: 11 }), null)
 })
+
+test('a transaction keeps its selection ranges: changes move them, never add carets', async (t) => {
+  const { hibi, state, requests, panes } = session('ab\r\ncd\r\nef\r\n')
+  const { commandEditor } = await host(t, hibi)
+  const { editor } = commandEditor(panes[0])
+  editor.setSelections(
+    [
+      { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
+      { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
+    ],
+    0,
+  )
+  editor.transaction({
+    replaceSelection: 'X',
+    changes: [{ from: { line: 1, ch: 0 }, text: '!' }],
+  })
+  assert.equal(requests.length, 1)
+  assert.equal(state.raw, 'Xb\r\n!cd\r\nXf\r\n')
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 1 }, head: { line: 0, ch: 1 } },
+    { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
+  ])
+  // The main range is still the first.
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 1 })
+
+  // Changes alone map the ranges through the edit.
+  editor.transaction({ changes: [{ from: { line: 0, ch: 0 }, text: '>> ' }] })
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 4 }, head: { line: 0, ch: 4 } },
+    { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
+  ])
+})

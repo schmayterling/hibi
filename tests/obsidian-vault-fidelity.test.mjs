@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -137,10 +138,27 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
     })
   }
 
-  async function scenario(name, operation, settings = {}) {
+  async function scenario(
+    name,
+    operation,
+    settings = {},
+    configDir = '.obsidian',
+    setup,
+  ) {
     await t.test(name, async () => {
       const root = join(folder, `vault-${observations.length}`)
       const capabilities = await fixtureVault(root, settings)
+      const configs = Array.isArray(configDir) ? configDir : [configDir]
+      if (configs[0] !== '.obsidian')
+        await rename(join(root, '.obsidian'), join(root, configs[0]))
+      for (const config of configs.slice(1)) {
+        await mkdir(join(root, config))
+        await writeFile(
+          join(root, config, 'app.json'),
+          '{"attachmentFolderPath":"wrong"}',
+        )
+      }
+      if (setup) await setup(root)
       const before = await snapshotVault(root)
       const result = {
         name,
@@ -302,29 +320,351 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
     )
   }
 
-  for (const action of ['rename', 'move']) {
-    for (const alwaysUpdateLinks of [true, false]) {
+  await scenario(
+    'rename supported attachment updates wiki and markdown image targets',
+    async ({ before }) => {
+      await page.evaluate(() =>
+        window.hibi.workspaceAction({
+          action: 'rename',
+          path: 'attachments/pixel.svg',
+          destination: 'renamed.svg',
+        }),
+      )
+      const changes = {
+        'attachments/pixel.svg': null,
+        'attachments/renamed.svg': before.get('attachments/pixel.svg'),
+      }
+      for (const note of [
+        ...formats,
+        ...formats.map((path) => 'editable-' + path),
+      ])
+        changes[note] = {
+          kind: 'file',
+          bytes: Buffer.from(
+            before
+              .get(note)
+              .bytes.toString()
+              .replaceAll('attachments/pixel.svg', 'attachments/renamed.svg'),
+          ),
+        }
+      return changes
+    },
+  )
+  await scenario(
+    'trash supported attachment follows local trash policy',
+    async ({ before }) => {
+      await page.evaluate(() =>
+        window.hibi.workspaceAction({
+          action: 'delete',
+          path: 'attachments/pixel.svg',
+        }),
+      )
+      return {
+        'attachments/pixel.svg': null,
+        '.trash': { kind: 'directory' },
+        '.trash/pixel.svg': before.get('attachments/pixel.svg'),
+      }
+    },
+  )
+
+  await scenario(
+    'binary files copy rename and trash without changing their bytes',
+    async ({ before }) => {
+      await page.evaluate(async () => {
+        await window.hibi.workspaceAction({
+          action: 'copy',
+          path: 'attachments/binary.bin',
+          destination: 'moved/binary.bin',
+        })
+        await window.hibi.workspaceAction({
+          action: 'rename',
+          path: 'moved/binary.bin',
+          destination: 'renamed.bin',
+        })
+        await window.hibi.workspaceAction({
+          action: 'delete',
+          path: 'moved/renamed.bin',
+        })
+      })
+      return {
+        '.trash': { kind: 'directory' },
+        '.trash/renamed.bin': before.get('attachments/binary.bin'),
+      }
+    },
+  )
+
+  if (process.platform !== 'win32') {
+    await scenario(
+      'nonregular paths never reach trash',
+      async () => {
+        await app.evaluate(({ shell }) => {
+          shell.trashItem = async () => {
+            throw new Error('nonregular path reached trash')
+          }
+        })
+        const message = await page.evaluate(() =>
+          window.hibi
+            .workspaceAction({
+              action: 'delete',
+              path: 'pipe.md',
+            })
+            .then(
+              () => '',
+              (error) => error.message,
+            ),
+        )
+        assert.match(message, /regular file or folder/)
+        return {}
+      },
+      { trashOption: 'system' },
+      '.obsidian',
+      (root) => {
+        execFileSync('mkfifo', [join(root, 'pipe.md')])
+      },
+    )
+  }
+
+  for (const title of [false, true]) {
+    await scenario(
+      'case-only rename through ' + (title ? 'document title' : 'explorer'),
+      async ({ before }) => {
+        if (title) {
+          await openNote('case/Case.md', 'source')
+          await page.evaluate(() => window.hibi.renameDocument('CASE.md'))
+        } else {
+          await page.evaluate(() =>
+            window.hibi.workspaceAction({
+              action: 'rename',
+              path: 'case/Case.md',
+              destination: 'CASE.md',
+            }),
+          )
+        }
+        return {
+          'case/Case.md': null,
+          'case/CASE.md': before.get('case/Case.md'),
+        }
+      },
+    )
+  }
+
+  await scenario(
+    'save-as cannot overwrite obsidian configuration',
+    async ({ root }) => {
+      await openNote('syntax.md', 'source')
+      await app.evaluate(
+        ({ dialog }, path) => {
+          dialog.showSaveDialog = async () => ({
+            canceled: false,
+            filePath: path,
+          })
+        },
+        join(root, '.obsidian/app.json'),
+      )
+      const message = await page.evaluate(() =>
+        window.hibi.saveDocument(true).then(
+          () => '',
+          (error) => error.message,
+        ),
+      )
+      assert.match(message, /configuration is read-only/)
+      return {}
+    },
+  )
+
+  async function selectParagraph(mode) {
+    await page.evaluate(
+      ({ mode, paragraph }) => {
+        const editor = document.querySelector(
+          mode === 'source'
+            ? '.source-pane .cm-content'
+            : '.rich-pane .cm-content',
+        )
+        const view = editor.cmTile.root.view
+        const from = view.state.doc.toString().indexOf(paragraph)
+        view.dispatch({
+          selection: { anchor: from, head: from + paragraph.length },
+        })
+        view.focus()
+      },
+      { mode, paragraph },
+    )
+  }
+  for (const mode of ['source', 'formatted']) {
+    await scenario(
+      'pasted image follows vault policy in ' + mode,
+      async ({ before }) => {
+        const note = mode === 'source' ? 'crlf.md' : 'editable-bom.md'
+        await openNote(note, mode)
+        await selectParagraph(mode)
+        const bytes = before.get('attachments/pixel.svg').bytes
+        const markup =
+          mode === 'source'
+            ? '![[images/deep/pasted.svg|pasted]]'
+            : '![pasted](/attachments/pasted.svg)'
+        await page.evaluate(
+          ({ bytes, mode }) => {
+            const data = new DataTransfer()
+            data.items.add(
+              new File([new Uint8Array(bytes)], 'pasted.svg', {
+                type: 'image/svg+xml',
+              }),
+            )
+            const editor = document.querySelector(
+              mode === 'source'
+                ? '.source-pane .cm-content'
+                : '.rich-pane .cm-content',
+            )
+            editor.dispatchEvent(
+              new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: data,
+              }),
+            )
+          },
+          { bytes: [...bytes], mode },
+        )
+        await waitForAsync(
+          page,
+          async (markup) =>
+            (await window.hibi.getDocument()).markdown.includes(markup),
+          markup,
+        )
+        await clickMenu(app, 'Save')
+        await waitForAsync(
+          page,
+          async () => !(await window.hibi.getDocument()).dirty,
+        )
+        return {
+          [note]: replaceBytes(before, note, paragraph, markup),
+          ...(mode === 'source'
+            ? {
+                images: { kind: 'directory' },
+                'images/deep': { kind: 'directory' },
+                'images/deep/pasted.svg': { kind: 'file', bytes },
+              }
+            : { 'attachments/pasted.svg': { kind: 'file', bytes } }),
+        }
+      },
+      {
+        attachmentFolderPath:
+          mode === 'source' ? './images/deep' : 'attachments',
+        useMarkdownLinks: mode !== 'source',
+        newLinkFormat: mode === 'source' ? 'relative' : 'absolute',
+      },
+      mode === 'source' ? '.profile-日本語' : '.obsidian',
+    )
+  }
+
+  await scenario(
+    'inserted note link follows wiki/absolute settings',
+    async ({ before }) => {
+      await openNote('editable-bom.md', 'formatted')
+      await selectParagraph('formatted')
+      await page
+        .locator('.editor-toolbar [data-toolbar-id="format.link"]')
+        .click()
+      const dialog = page.getByRole('dialog', {
+        name: 'Insert link',
+        exact: true,
+      })
+      await dialog
+        .getByLabel('Link destination', { exact: true })
+        .fill('unicode/café.md#Heading')
+      await dialog.getByRole('button', { name: 'Insert', exact: true }).click()
+      const markup = '[[unicode/café#Heading|' + paragraph + ']]'
+      await waitForAsync(
+        page,
+        async (markup) =>
+          (await window.hibi.getDocument()).markdown.includes(markup),
+        markup,
+      )
+      await clickMenu(app, 'Save')
+      await waitForAsync(
+        page,
+        async () => !(await window.hibi.getDocument()).dirty,
+      )
+      return {
+        'editable-bom.md': replaceBytes(
+          before,
+          'editable-bom.md',
+          paragraph,
+          markup,
+        ),
+      }
+    },
+    { useMarkdownLinks: false, newLinkFormat: 'absolute' },
+  )
+
+  await scenario(
+    'ambiguous profiles show notice and use safe defaults',
+    async ({ root, before }) => {
+      await page
+        .getByText(/Multiple Obsidian configuration folders found/)
+        .waitFor()
+      await openNote('syntax.md', 'source')
+      const bytes = before.get('attachments/pixel.svg').bytes
+      const media = join(folder, 'ambiguous.svg')
+      await writeFile(media, bytes)
+      await app.evaluate(({ dialog }, path) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [path],
+        })
+      }, media)
+      const result = await page.evaluate(async () =>
+        window.hibi.attachMedia(
+          null,
+          (await window.hibi.getDocument()).revision,
+        ),
+      )
+      assert.equal(
+        result.attachments[0].markdown,
+        '![[ambiguous.svg|ambiguous]]',
+      )
+      assert.deepEqual(await readFile(join(root, 'ambiguous.svg')), bytes)
+      return { 'ambiguous.svg': { kind: 'file', bytes } }
+    },
+    {},
+    ['.profile-one', '.profile-two'],
+  )
+
+  for (const action of ['rename', 'move', 'title']) {
+    for (const policy of [true, false, 'ask']) {
+      const alwaysUpdateLinks = policy === true
       await scenario(
-        `${action}: alwaysUpdateLinks=${alwaysUpdateLinks}`,
+        `${action}: alwaysUpdateLinks=${policy}`,
         async ({ before, result }) => {
+          await app.evaluate(({ dialog }, accept) => {
+            globalThis.fidelityLinkPrompts = []
+            dialog.showMessageBox = async (_window, options) => {
+              globalThis.fidelityLinkPrompts.push(options.message)
+              return { response: accept ? 0 : 1 }
+            }
+          }, policy === 'ask')
           const destination =
-            action === 'rename' ? 'Renamed.md' : 'moved/Target.md'
-          const path = action === 'rename' ? 'nested/Renamed.md' : destination
+            action !== 'move' ? 'Renamed.md' : 'moved/Target.md'
+          const path = action !== 'move' ? 'nested/Renamed.md' : destination
+          if (action === 'title') await openNote('nested/Target.md', 'source')
           result.reply = await page.evaluate(
             ({ action, destination }) =>
-              window.hibi.workspaceAction({
-                action,
-                path: 'nested/Target.md',
-                destination,
-              }),
+              action === 'title'
+                ? window.hibi.renameDocument(destination)
+                : window.hibi.workspaceAction({
+                    action,
+                    path: 'nested/Target.md',
+                    destination,
+                  }),
             { action, destination },
           )
-          assert.equal(result.reply.path, path)
+          if (action !== 'title') assert.equal(result.reply.path, path)
+          else assert.equal(result.reply.name, 'Renamed.md')
           const changes = {
             'nested/Target.md': null,
             [path]: before.get('nested/Target.md'),
           }
-          if (alwaysUpdateLinks) {
+          if (policy !== false) {
             for (const note of [
               ...formats,
               ...formats.map((path) => `editable-${path}`),
@@ -335,7 +675,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
                   before
                     .get(note)
                     .bytes.toString()
-                    .replaceAll('nested/Target', path),
+                    .replaceAll('nested/Target', path.slice(0, -3)),
                 ),
               }
             const referrer = before.get('nested/Referrer.md').bytes.toString()
@@ -346,11 +686,18 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
                   .slice(0, referrer.indexOf('`'))
                   .replace(
                     /(\[\[|\]\()Target/g,
-                    `$1${action === 'rename' ? 'Renamed' : '../moved/Target'}`,
+                    `$1${action !== 'move' ? 'Renamed' : '../moved/Target'}`,
                   ) + referrer.slice(referrer.indexOf('`')),
               ),
             }
           }
+          const prompts = await app.evaluate(
+            () => globalThis.fidelityLinkPrompts,
+          )
+          assert.equal(
+            prompts.includes('Update links to this file?'),
+            !alwaysUpdateLinks,
+          )
           return changes
         },
         { alwaysUpdateLinks },

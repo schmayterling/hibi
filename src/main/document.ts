@@ -6,7 +6,6 @@ import {
   lstat,
   readFile,
   realpath,
-  rename,
   stat,
   unlink,
 } from 'node:fs/promises'
@@ -60,6 +59,7 @@ function advanceRevision() {
   revision = ++highestRevision
 }
 let untitledName = 'untitled.md'
+let newNoteOrigin: string | null = null
 let draftId = randomUUID()
 let back: string[] = []
 let forward: string[] = []
@@ -290,6 +290,7 @@ function snapshot() {
     saved,
     path,
     pendingPath,
+    newNoteOrigin,
     untitledName,
     draftId,
   }
@@ -320,7 +321,8 @@ function activateTab(id: string) {
   if (!draft) throw new Error('This tab is no longer open.')
   if (draft.source !== source) releaseMaintenance()
   activeTab = id
-  ;({ source, saved, path, pendingPath, untitledName, draftId } = draft)
+  ;({ source, saved, path, pendingPath, newNoteOrigin, untitledName, draftId } =
+    draft)
   // Prompts activate tabs briefly; a retained tab keeps its revision.
   revision = source.snapshot().document.revision
 }
@@ -1012,6 +1014,15 @@ const heldNote = (error: unknown): never => {
   )
 }
 
+async function assertWritableNote(file: string) {
+  const root = (await import('./workspace')).workspaceRoot()
+  if (root)
+    await (await import('./workspace-obsidian')).assertObsidianContentPath(
+      root,
+      file,
+    )
+}
+
 export async function saveDocument(
   window: BrowserWindow,
   saveAs = false,
@@ -1032,9 +1043,16 @@ export async function saveDocument(
     content = saving
   if (!destination || saveAs) {
     if (automatic) return null
+    const { workspaceRoot } = await import('./workspace')
+    const { obsidianNewNotePath } = await import('./workspace-obsidian')
+    const root = workspaceRoot()
+    const suggested =
+      !destination && root
+        ? await obsidianNewNotePath(root, newNoteOrigin, untitledName)
+        : null
     const result = await runFileDialog(() =>
       dialog.showSaveDialog(window, {
-        defaultPath: destination ?? defaultPath ?? untitledName,
+        defaultPath: destination ?? suggested ?? defaultPath ?? untitledName,
         filters: [
           {
             name: 'Documents',
@@ -1050,6 +1068,8 @@ export async function saveDocument(
     )
     if (result.canceled || !result.filePath) return null
     destination = result.filePath
+    if (root && destination === suggested)
+      await obsidianNewNotePath(root, newNoteOrigin, untitledName, true)
   }
   const chosen = destination
   destination = await realpath(chosen).catch(
@@ -1113,6 +1133,7 @@ export async function saveDocument(
           : previous !== null && (await sameSource(shown, previous))
     }
   }
+  await assertWritableNote(destination)
   await sayingWhenHeld(window, destination, (refused) =>
     writeMarkdown(
       destination,
@@ -1190,6 +1211,7 @@ export async function autosaveDocument(
     !canContinue()
   )
     return { status: 'skipped', document: null }
+  await assertWritableNote(destination)
   await writeMarkdown(destination, content, false, canContinue)
   if (id === activeTab) saved = saving
   else {
@@ -1353,9 +1375,12 @@ async function saveRetained(window: BrowserWindow) {
 export async function newDocument(
   window: BrowserWindow,
 ): Promise<DocumentState | null> {
+  const origin = getDocumentPath()
   rememberLocation()
   if (!(await startTab(window))) return null
-  return clearDocument(window, false)
+  clearDocument(window, false)
+  newNoteOrigin = origin
+  return getDocument()
 }
 
 export function clearDocument(
@@ -1369,6 +1394,7 @@ export function clearDocument(
   path = null
   pendingPath = null
   untitledName = 'untitled.md'
+  newNoteOrigin = null
   advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()
@@ -1407,7 +1433,10 @@ export function relocateDocument(from: string, to: string): void {
   activateTab(activeTab)
 }
 
-export async function renameDocument(value: unknown): Promise<DocumentState> {
+export async function renameDocument(
+  value: unknown,
+  window?: BrowserWindow,
+): Promise<DocumentState> {
   if (typeof value !== 'string') throw new Error('Enter a file name.')
   let name = value.trim()
   if (
@@ -1451,11 +1480,31 @@ export async function renameDocument(value: unknown): Promise<DocumentState> {
   if (destination === path) return getDocument()
   if (isOpenInOtherTab(destination))
     throw new Error('A file with that name is open. Choose a different name.')
+  const root = (await import('./workspace')).workspaceRoot()
+  const updates =
+    root && isPathInside(root, path) && isPathInside(root, destination)
+      ? await (
+          await import('./workspace-obsidian-links')
+        ).prepareObsidianLinkUpdates(
+          root,
+          relative(root, path).split(sep).join('/'),
+          relative(root, destination).split(sep).join('/'),
+          getOpenDocuments,
+          window,
+        )
+      : null
+  await updates?.verify()
   const existing = await lstat(destination).catch(missingFile)
   if (existing) {
     if (!existing.isSymbolicLink() && (await realpath(destination)) === path) {
-      await rename(path, destination)
+      await (await import('./workspace-case-rename')).renameCaseOnly(
+        path,
+        destination,
+      )
       relocateDocument(path, destination)
+      const changed = await updates?.apply()
+      if (changed?.length)
+        await (await import('./workspace')).notifyWorkspaceContent(changed)
       return getDocument()
     }
     throw new Error('A file with that name exists. Choose a different name.')
@@ -1480,6 +1529,9 @@ export async function renameDocument(value: unknown): Promise<DocumentState> {
     )
   }
   relocateDocument(path, destination)
+  const changed = await updates?.apply()
+  if (changed?.length)
+    await (await import('./workspace')).notifyWorkspaceContent(changed)
   return getDocument()
 }
 

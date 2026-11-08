@@ -208,24 +208,32 @@ export class Vault extends Events {
   refresh(paths?: readonly string[]) {
     const result = this.#refresh.then(async () => {
       const info = await this.info()
-      if (paths) {
+      if (
+        paths &&
+        paths.every((path) => this.#files.get(path) instanceof TFile)
+      ) {
+        const updates: [TFile, VaultEntry][] = []
         for (const path of new Set(paths)) {
-          const file = this.#files.get(path)
-          if (!file) continue
-          const entry = await this.#query<VaultEntry | null>('vaultStat', {
+          const item = await this.#query<VaultEntry | null>('vaultStat', {
             path,
           })
           this.#assert()
-          if (!entry) continue
-          const changed =
-            file.stat.ctime !== entry.stat.ctime ||
-            file.stat.mtime !== entry.stat.mtime ||
-            file.stat.size !== entry.stat.size
-          file.stat = { ...entry.stat }
-          this.#identities.set(file, entry.identity)
-          if (changed) this.trigger('modify', file)
+          const file = this.#files.get(path)
+          if (!item || item.kind !== 'file' || !(file instanceof TFile)) break
+          updates.push([file, item])
         }
-        return
+        if (updates.length === new Set(paths).size) {
+          for (const [file, item] of updates) {
+            const changed =
+              file.stat.ctime !== item.stat.ctime ||
+              file.stat.mtime !== item.stat.mtime ||
+              file.stat.size !== item.stat.size
+            file.stat = { ...item.stat }
+            this.#identities.set(file, item.identity)
+            if (changed) this.trigger('modify', file)
+          }
+          return
+        }
       }
       const root = await this.#query<VaultEntry | null>('vaultStat', {
         path: '',
@@ -497,17 +505,22 @@ export class Vault extends Events {
       else await this.create(path, data)
     },
     list: async (path: string) => {
-      await this.refresh()
-      const folder = this.getFolderByPath(path)
-      if (!folder) throw new Error('This vault folder is unavailable.')
-      return {
-        files: folder.children
-          .filter((file) => file instanceof TFile)
-          .map((file) => file.path),
-        folders: folder.children
-          .filter((file) => file instanceof TFolder)
-          .map((file) => file.path),
-      }
+      path = vaultPath(path, this.configDir, true)
+      const info = await this.info()
+      const result = { files: [] as string[], folders: [] as string[] }
+      let cursor: string | null = null
+      do {
+        const page: VaultPage = await this.#query('vaultList', {
+          path,
+          recursive: false,
+          sequence: info.sequence,
+          ...(cursor ? { cursor } : {}),
+        })
+        for (const item of page.entries)
+          (item.kind === 'file' ? result.files : result.folders).push(item.path)
+        cursor = page.nextCursor
+      } while (cursor)
+      return result
     },
   }
 }

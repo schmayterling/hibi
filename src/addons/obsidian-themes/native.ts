@@ -7,18 +7,24 @@ import {
   checkSnippet,
   checkTheme,
   configPath,
+  copiedSettings,
   installedThemes,
   installSnippet,
   installTheme,
+  pruneCopies,
   readAppearance,
   readSelection,
   readVault,
   removeTheme,
   type Selection,
+  type StoredSelection,
   snippetCss,
+  styleValues,
   themeCss,
+  themeHash,
   writeSelection,
 } from './store'
+import { styleSettingsCss } from './style-settings'
 
 const data = () => app.getPath('userData')
 const root = () => join(data(), 'obsidian-themes')
@@ -36,6 +42,22 @@ async function vaultThemeFolder(vault: string, name: string) {
   if (!folder) throw new Error('This vault has no Obsidian settings folder.')
   return folder
 }
+// Style Settings sections of a kept theme and its snippets, in that order.
+async function sectionsFor(selection: StoredSelection) {
+  return [
+    ...(selection.theme
+      ? await copiedSettings(root(), 'theme', selection.theme)
+      : []),
+    ...(
+      await Promise.all(
+        selection.snippets.map((name) => {
+          const hash = selection.snippetHashes[name]
+          return hash ? copiedSettings(root(), 'snippet', hash) : []
+        }),
+      )
+    ).flat(),
+  ]
+}
 const strings = (value: unknown) =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -49,6 +71,7 @@ async function state(context: NativeAddonContext) {
   const found = await readVault(vault)
   const stored = await readSelection(data(), vault)
   let selection: Selection & { preselected: boolean }
+  const styleSettings = stored ? await sectionsFor(stored) : []
   if (stored) selection = { ...stored, preselected: false }
   else {
     // Start from what the vault uses in Obsidian.
@@ -66,7 +89,57 @@ async function state(context: NativeAddonContext) {
       preselected: true,
     }
   }
-  return { disabled: disabled(), vault: found, installed, selection }
+  return {
+    disabled: disabled(),
+    vault: found,
+    installed,
+    selection,
+    styleSettings,
+  }
+}
+
+// When Obsidian (or anything else) has changed a kept vault theme or snippet,
+// copy it again. Only the kept files are read; the vault is never written.
+async function recopy(
+  vault: string,
+  stored: StoredSelection,
+  context: NativeAddonContext,
+): Promise<StoredSelection> {
+  let theme = stored.theme
+  const snippetHashes = { ...stored.snippetHashes }
+  let changed = false
+  const record = theme
+    ? (await installedThemes(root())).find((item) => item.id === theme)
+    : undefined
+  if (record?.source === 'vault') {
+    try {
+      const folder = await vaultThemeFolder(
+        vault,
+        record.folder ?? record.manifest.name,
+      )
+      if ((await themeHash(folder)) !== record.hash) {
+        theme = (await installTheme(root(), folder, 'vault')).id
+        changed = true
+      }
+    } catch {
+      /* A theme gone from the vault keeps its last copy. */
+    }
+  }
+  for (const name of stored.snippets)
+    try {
+      const { hash } = await checkSnippet(vault, name)
+      if (hash !== snippetHashes[name]) {
+        snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
+        changed = true
+      }
+    } catch {
+      /* A snippet gone from the vault keeps its last copy. */
+    }
+  if (!changed || !context.isCurrent()) return stored
+  const next = { ...stored, theme, snippetHashes }
+  await writeSelection(data(), vault, next)
+  await pruneCopies(root(), data())
+  return next
 }
 
 // Checked CSS for a theme reference: an installed ID or `vault:<name>`.
@@ -99,8 +172,9 @@ export default {
     async active(_input, context) {
       const vault = context.workspace.directory()
       if (disabled() || !vault) return { disabled: disabled(), css: null }
-      const stored = await readSelection(data(), vault)
-      if (!stored) return { disabled: false, css: null }
+      const kept = await readSelection(data(), vault)
+      if (!kept) return { disabled: false, css: null }
+      const stored = await recopy(vault, kept, context)
       const parts = [
         stored.theme
           ? await themeCss(root(), stored.theme).catch(() => '')
@@ -110,9 +184,16 @@ export default {
         const hash = stored.snippetHashes[name]
         if (hash) parts.push(await snippetCss(root(), hash).catch(() => ''))
       }
+      const settings = await sectionsFor(stored)
+      const style = styleSettingsCss(settings, stored.styleValues ?? {})
+      parts.push(style.css)
       return {
         disabled: false,
-        css: parts.join('\n'),
+        // Nothing kept is no theme at all, not an empty one.
+        css: parts.join('\n').trim() || null,
+        classes: settings.length
+          ? ['css-settings-manager', ...style.classes]
+          : [],
         appearance: await readAppearance(vault),
       }
     },
@@ -160,7 +241,27 @@ export default {
       for (const name of snippets)
         snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
       if (!context.isCurrent()) return null
-      await writeSelection(data(), vault, { theme, snippets, snippetHashes })
+      // Options chosen earlier stay with the vault when the theme changes.
+      const styleValues =
+        (await readSelection(data(), vault))?.styleValues ?? {}
+      await writeSelection(data(), vault, {
+        theme,
+        snippets,
+        snippetHashes,
+        styleValues,
+      })
+      await pruneCopies(root(), data())
+      return state(context)
+    },
+    /** Save Style Settings values for this vault's kept theme and snippets. */
+    async setStyleValues(input, context) {
+      const vault = context.workspace.directory()
+      if (!vault) throw new Error('Open an Obsidian vault first.')
+      const stored = await readSelection(data(), vault)
+      if (!stored) throw new Error('Apply a theme first.')
+      const values = styleValues((input as { values?: unknown } | null)?.values)
+      if (!context.isCurrent()) return null
+      await writeSelection(data(), vault, { ...stored, styleValues: values })
       return state(context)
     },
     /** Add a theme from a folder outside the vault. */

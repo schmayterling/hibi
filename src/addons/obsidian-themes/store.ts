@@ -24,6 +24,11 @@ import {
   SANITIZER_VERSION,
   sanitizeCss,
 } from './sanitize.ts'
+import {
+  readStyleSettings,
+  type StyleSection,
+  type StyleValues,
+} from './style-settings.ts'
 
 export type VaultAppearance = {
   cssTheme: string | null
@@ -57,10 +62,14 @@ export type InstalledTheme = {
   id: string
   manifest: ThemeManifest
   source: 'vault' | 'folder'
+  /** The theme's name in the vault's themes folder, for vault themes. */
+  folder?: string
   hash: string
   assets: Record<string, string>
   sanitizerVersion: number
   dropped: DroppedRule[]
+  /** Options the theme describes for the Style Settings plugin. */
+  settings?: StyleSection[]
 }
 export type Selection = {
   theme: string | null
@@ -150,6 +159,12 @@ export async function readAppearance(vault: string): Promise<VaultAppearance> {
 }
 
 async function readThemeFolder(folder: string) {
+  // Obsidian before 0.16 kept each theme as one file in the themes folder.
+  if ((await lstat(folder)).isFile() && folder.endsWith('.css'))
+    return {
+      manifest: { name: basename(folder).slice(0, -4) } as ThemeManifest,
+      css: await readRegular(folder, MAX_THEME_BYTES),
+    }
   let manifest: ThemeManifest = { name: basename(folder) }
   try {
     const raw: unknown = JSON.parse(
@@ -196,7 +211,10 @@ export async function readVault(vault: string): Promise<Vault> {
   const themeRoot = await configPath(vault, 'themes')
   for (const entry of await entries(themeRoot)) {
     try {
-      if (entry.isDirectory()) {
+      if (
+        entry.isDirectory() ||
+        (entry.isFile() && entry.name.endsWith('.css'))
+      ) {
         const { manifest, css } = await readThemeFolder(
           join(themeRoot as string, entry.name),
         )
@@ -282,7 +300,6 @@ async function writeFolder(target: string, files: Record<string, string>) {
   }
 }
 
-/** Copy a theme folder into Hibi's data with its hash, manifest and checked CSS. */
 /** A theme folder's checked CSS, with its own assets inlined. Reads only. */
 export async function checkTheme(folder: string) {
   const { manifest, css } = await readThemeFolder(folder)
@@ -290,31 +307,65 @@ export async function checkTheme(folder: string) {
   const first = sanitizeCss(original)
   const assets = await inlineAssets(folder, first.assets)
   const result = sanitizeCss(original, { assets: assets.data })
-  return { manifest, original, result, assets, hash: sha256(css) }
+  return {
+    manifest,
+    original,
+    result,
+    assets,
+    hash: sha256(css),
+    settings: readStyleSettings(original).sections,
+  }
 }
 
+/** Hash of a theme's CSS as it is now, without checking it. Reads only. */
+export async function themeHash(folder: string) {
+  return sha256((await readThemeFolder(folder)).css)
+}
+
+/** Copy a theme folder into Hibi's data with its hash, manifest and checked CSS. */
 export async function installTheme(
   root: string,
   folder: string,
   source: InstalledTheme['source'],
 ): Promise<InstalledTheme> {
-  const { manifest, original, result, assets, hash } = await checkTheme(folder)
+  const { manifest, original, result, assets, hash, settings } =
+    await checkTheme(folder)
   const id = `${slug(manifest.name)}-${hash.slice(0, 12)}`
   const record: InstalledTheme = {
     id,
     manifest,
     source,
+    ...(source === 'vault' ? { folder: basename(folder) } : {}),
     hash,
     assets: assets.hashes,
     sanitizerVersion: SANITIZER_VERSION,
     dropped: result.dropped,
+    settings,
   }
   await writeFolder(join(root, 'themes', id), {
     'theme.css': original,
     'checked.css': result.css,
     'hibi-theme.json': JSON.stringify(record, null, 2),
+    // Kept so a newer sanitizer can check the original again.
+    'assets.json': JSON.stringify(Object.fromEntries(assets.data)),
   })
   return record
+}
+
+async function replaceFile(path: string, text: string) {
+  const temporary = `${path}.${randomUUID()}.tmp`
+  await writeFile(temporary, text)
+  await rename(temporary, path)
+}
+const current = async (path: string) => {
+  try {
+    return (
+      JSON.parse(await readFile(path, 'utf8')).sanitizerVersion ===
+      SANITIZER_VERSION
+    )
+  } catch {
+    return false
+  }
 }
 
 export async function installedThemes(root: string): Promise<InstalledTheme[]> {
@@ -347,8 +398,40 @@ export async function removeTheme(root: string, id: unknown) {
   await rm(join(root, 'themes', themeId(id)), { recursive: true, force: true })
 }
 
+/** A copy's checked CSS, checked again from its original when the sanitizer has changed. */
 export async function themeCss(root: string, id: unknown) {
-  return readFile(join(root, 'themes', themeId(id), 'checked.css'), 'utf8')
+  const folder = join(root, 'themes', themeId(id))
+  const recordPath = join(folder, 'hibi-theme.json')
+  if (await current(recordPath))
+    return readFile(join(folder, 'checked.css'), 'utf8')
+  const record: InstalledTheme = JSON.parse(await readFile(recordPath, 'utf8'))
+  const original = await readFile(join(folder, 'theme.css'), 'utf8')
+  let assets = new Map<string, string>()
+  try {
+    assets = new Map(
+      Object.entries(
+        JSON.parse(await readFile(join(folder, 'assets.json'), 'utf8')),
+      ),
+    )
+  } catch {
+    /* Copies from before assets were kept lose their local images. */
+  }
+  const result = sanitizeCss(original, { assets })
+  await replaceFile(join(folder, 'checked.css'), result.css)
+  await replaceFile(
+    recordPath,
+    JSON.stringify(
+      {
+        ...record,
+        sanitizerVersion: SANITIZER_VERSION,
+        dropped: result.dropped,
+        settings: readStyleSettings(original).sections,
+      },
+      null,
+      2,
+    ),
+  )
+  return result.css
 }
 
 /** Copy one snippet into Hibi's data, keyed by its content. */
@@ -359,10 +442,12 @@ export async function checkSnippet(vault: string, name: string) {
   const path = await configPath(vault, 'snippets', `${name}.css`)
   if (!path) throw new Error('This vault has no Obsidian settings folder.')
   const css = await readRegular(path, MAX_SNIPPET_BYTES)
+  const text = css.toString('utf8')
   return {
     css,
     hash: sha256(css),
-    result: sanitizeCss(css.toString('utf8'), { maxBytes: MAX_SNIPPET_BYTES }),
+    result: sanitizeCss(text, { maxBytes: MAX_SNIPPET_BYTES }),
+    settings: readStyleSettings(text).sections,
   }
 }
 
@@ -371,7 +456,7 @@ export async function installSnippet(
   root: string,
   name: string,
 ) {
-  const { css, hash, result } = await checkSnippet(vault, name)
+  const { css, hash, result, settings } = await checkSnippet(vault, name)
   const folder = join(root, 'snippets', hash)
   await writeFolder(folder, {
     'snippet.css': css.toString('utf8'),
@@ -382,6 +467,7 @@ export async function installSnippet(
         hash,
         sanitizerVersion: SANITIZER_VERSION,
         dropped: result.dropped,
+        settings,
       },
       null,
       2,
@@ -392,7 +478,49 @@ export async function installSnippet(
 
 export async function snippetCss(root: string, hash: string) {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('Unknown snippet.')
-  return readFile(join(root, 'snippets', hash, 'checked.css'), 'utf8')
+  const folder = join(root, 'snippets', hash)
+  const recordPath = join(folder, 'hibi-snippet.json')
+  if (await current(recordPath))
+    return readFile(join(folder, 'checked.css'), 'utf8')
+  const record = JSON.parse(await readFile(recordPath, 'utf8'))
+  const original = await readFile(join(folder, 'snippet.css'), 'utf8')
+  const result = sanitizeCss(original, { maxBytes: MAX_SNIPPET_BYTES })
+  await replaceFile(join(folder, 'checked.css'), result.css)
+  await replaceFile(
+    recordPath,
+    JSON.stringify(
+      {
+        ...record,
+        sanitizerVersion: SANITIZER_VERSION,
+        dropped: result.dropped,
+        settings: readStyleSettings(original).sections,
+      },
+      null,
+      2,
+    ),
+  )
+  return result.css
+}
+
+/** Style Settings sections kept with an installed theme or snippet copy. */
+export async function copiedSettings(
+  root: string,
+  kind: 'theme' | 'snippet',
+  id: string,
+): Promise<StyleSection[]> {
+  const path =
+    kind === 'theme'
+      ? join(root, 'themes', themeId(id), 'hibi-theme.json')
+      : /^[a-f0-9]{64}$/.test(id)
+        ? join(root, 'snippets', id, 'hibi-snippet.json')
+        : null
+  if (!path) return []
+  try {
+    const record = JSON.parse(await readFile(path, 'utf8'))
+    return Array.isArray(record.settings) ? record.settings : []
+  } catch {
+    return []
+  }
 }
 
 // Choices live in the vault's overlay in Hibi's data, never in the vault.
@@ -402,6 +530,23 @@ const selectionPath = async (data: string, vault: string) =>
 export type StoredSelection = Selection & {
   /** Snippet name → content hash of the copy in Hibi's data. */
   snippetHashes: Record<string, string>
+  /** Style Settings values keyed `section@@setting`, as the plugin keys them. */
+  styleValues?: StyleValues
+}
+
+/** Keep only well-formed values: they come from the renderer. */
+export function styleValues(input: unknown): StyleValues {
+  const values: StyleValues = {}
+  if (!input || typeof input !== 'object') return values
+  for (const [key, value] of Object.entries(input).slice(0, 5000))
+    if (
+      /^[\w-]{1,100}@@[\w-]{1,100}(?:@@(?:light|dark))?$/.test(key) &&
+      (typeof value === 'boolean' ||
+        (typeof value === 'number' && Number.isFinite(value)) ||
+        (typeof value === 'string' && value.length <= 500))
+    )
+      values[key] = value
+  return values
 }
 
 export async function readSelection(
@@ -421,6 +566,7 @@ export async function readSelection(
         value.snippetHashes && typeof value.snippetHashes === 'object'
           ? value.snippetHashes
           : {},
+      styleValues: styleValues(value.styleValues),
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -435,7 +581,76 @@ export async function writeSelection(
 ) {
   const target = await selectionPath(data, vault)
   await mkdir(dirname(target), { recursive: true })
+  // The copies chosen before stay for a while, so a change can be undone.
+  let previous: unknown
+  try {
+    const old = JSON.parse(await readFile(target, 'utf8'))
+    const same =
+      old.theme === selection.theme &&
+      JSON.stringify(old.snippetHashes ?? {}) ===
+        JSON.stringify(selection.snippetHashes)
+    previous = same
+      ? old.previous
+      : { theme: old.theme ?? null, snippetHashes: old.snippetHashes ?? {} }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
   const temporary = `${target}.${randomUUID()}.tmp`
-  await writeFile(temporary, JSON.stringify(selection))
+  await writeFile(temporary, JSON.stringify({ ...selection, previous }))
   await rename(temporary, target)
+}
+
+/**
+ * Remove vault theme and snippet copies that no vault keeps or kept just
+ * before. Themes added from a folder stay until removed. Only Hibi's data
+ * folder is touched.
+ */
+export async function pruneCopies(root: string, data: string) {
+  const themes = new Set<string>()
+  const snippets = new Set<string>()
+  const keep = (choice: unknown) => {
+    if (!choice || typeof choice !== 'object') return
+    const { theme, snippetHashes } = choice as Record<string, unknown>
+    if (typeof theme === 'string') themes.add(theme)
+    if (snippetHashes && typeof snippetHashes === 'object')
+      for (const hash of Object.values(snippetHashes))
+        if (typeof hash === 'string') snippets.add(hash)
+  }
+  for (const entry of await entries(join(data, 'obsidian-vaults'))) {
+    if (!entry.isDirectory()) continue
+    let value: Record<string, unknown>
+    try {
+      value = JSON.parse(
+        await readFile(
+          join(data, 'obsidian-vaults', entry.name, 'themes.json'),
+          'utf8',
+        ),
+      )
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      // An unreadable choice might name any copy: keep them all.
+      return []
+    }
+    keep(value)
+    keep(value.previous)
+  }
+  const removed: string[] = []
+  for (const theme of await installedThemes(root))
+    if (theme.source === 'vault' && !themes.has(theme.id)) {
+      await rm(join(root, 'themes', theme.id), { recursive: true, force: true })
+      removed.push(`themes/${theme.id}`)
+    }
+  for (const entry of await entries(join(root, 'snippets')))
+    if (
+      entry.isDirectory() &&
+      /^[a-f0-9]{64}$/.test(entry.name) &&
+      !snippets.has(entry.name)
+    ) {
+      await rm(join(root, 'snippets', entry.name), {
+        recursive: true,
+        force: true,
+      })
+      removed.push(`snippets/${entry.name}`)
+    }
+  return removed
 }

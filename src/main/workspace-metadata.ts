@@ -18,10 +18,11 @@ const legacyNames = {
 }
 type MetadataFile = keyof typeof legacyNames | typeof WORKSPACE_LAYOUT
 
-async function metadataRoot(root: string) {
+async function metadataRoot(root: string, dataDirectory?: string) {
   if (!(await obsidianConfiguration(root))) return root
-  const { app } = await import('electron')
-  return obsidianDataPath(root, app.getPath('userData'))
+  const data =
+    dataDirectory ?? (await import('electron')).app.getPath('userData')
+  return obsidianDataPath(root, data)
 }
 
 async function metadataDirectory(root: string, create = false) {
@@ -60,8 +61,9 @@ async function readText(root: string, name: string, limit = 65536) {
 export async function readWorkspaceText(
   root: string,
   name: keyof typeof legacyNames,
+  dataDirectory?: string,
 ) {
-  const storage = await metadataRoot(root)
+  const storage = await metadataRoot(root, dataDirectory)
   const overlay =
     storage !== root && (await metadataDirectory(storage))
       ? await readText(storage, name)
@@ -147,8 +149,10 @@ export async function workspaceMetadata(root: string) {
     ignore: rules,
   }
 }
-export async function workspaceIgnore(root: string) {
-  return ignore().add(await readWorkspaceText(root, WORKSPACE_IGNORE))
+export async function workspaceIgnore(root: string, dataDirectory?: string) {
+  return ignore().add(
+    await readWorkspaceText(root, WORKSPACE_IGNORE, dataDirectory),
+  )
 }
 export async function writeWorkspaceText(
   root: string,

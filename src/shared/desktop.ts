@@ -261,6 +261,10 @@ export type DesktopApi = {
     files: File[] | null,
     revision: number,
   ) => Promise<import('./media').AttachmentResult | null>
+  formatDocumentLink: (
+    href: string,
+    label: string,
+  ) => Promise<{ url: string; markdown: string } | null>
   readDocumentMedia: (
     source: string,
     revision: number,

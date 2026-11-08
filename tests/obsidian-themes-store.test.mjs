@@ -13,12 +13,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { SANITIZER_VERSION } from '../src/addons/obsidian-themes/sanitize.ts'
 import {
   checkSnippet,
   checkTheme,
   installedThemes,
   installSnippet,
   installTheme,
+  pruneCopies,
   readSelection,
   readVault,
   removeTheme,
@@ -73,7 +75,9 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
     [
       ['heavy-grid', 'Heavy Grid'],
       ['legacy-ink', 'legacy-ink'],
+      ['Old Flat.css', 'Old Flat'],
       ['paper-lantern', 'Paper Lantern'],
+      ['settings-garden', 'Settings Garden'],
     ],
   )
   assert.deepEqual(
@@ -106,6 +110,15 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
     snippetHashes: { 'accent-tags': snippet.hash },
   })
   await removeTheme(store, legacy.id)
+  // A one-file theme from before Obsidian 0.16 installs like a folder.
+  const flat = await installTheme(
+    store,
+    join(vault, '.obsidian', 'themes', 'Old Flat.css'),
+    'vault',
+  )
+  assert.equal(flat.manifest.name, 'Old Flat')
+  assert.match(await themeCss(store, flat.id), /--background-primary: #0d0f12/)
+  await removeTheme(store, flat.id)
   assert.deepEqual(await snapshot(vault), before)
 
   // Hibi's copy keeps the original, its hash, manifest and attribution.
@@ -134,7 +147,13 @@ test('discovering, previewing and installing themes leaves the vault byte-identi
     theme: heavy.id,
     snippets: ['accent-tags'],
     snippetHashes: { 'accent-tags': snippet.hash },
+    styleValues: {},
   })
+  // The copy keeps the theme's Style Settings description.
+  assert.deepEqual(
+    heavy.settings.map((section) => section.settings.map((item) => item.id)),
+    [['grid-accent']],
+  )
   // Choices live in the vault's overlay in Hibi's data.
   const overlays = await readdir(join(data, 'obsidian-vaults'))
   assert.equal(overlays.length, 1)
@@ -190,6 +209,111 @@ test('a renamed Obsidian settings folder is found; links and outside files are n
   await assert.rejects(checkSnippet(vault, 'linked'))
   await assert.rejects(themeCss(store, '../../etc'))
   assert.equal(await readSelection(data, vault), null)
+  assert.deepEqual(await snapshot(vault), before)
+})
+
+test('copies checked by an older sanitizer are checked again from their original', async (t) => {
+  const { vault, store } = await fixtureVault(t)
+  const theme = await installTheme(
+    store,
+    join(vault, '.obsidian', 'themes', 'heavy-grid'),
+    'vault',
+  )
+  const folder = join(store, 'themes', theme.id)
+  // What an older, weaker sanitizer might have let through.
+  await writeFile(
+    join(folder, 'checked.css'),
+    'body { background: url(https://evil.test/old.png); }',
+  )
+  const record = JSON.parse(
+    await readFile(join(folder, 'hibi-theme.json'), 'utf8'),
+  )
+  await writeFile(
+    join(folder, 'hibi-theme.json'),
+    JSON.stringify({ ...record, sanitizerVersion: 1 }),
+  )
+  const css = await themeCss(store, theme.id)
+  assert.doesNotMatch(css, /evil/)
+  // The theme's own images survive, from the kept assets.
+  assert.match(css, /url\("data:image\/png;base64,/)
+  assert.equal(await readFile(join(folder, 'checked.css'), 'utf8'), css)
+  assert.equal(
+    JSON.parse(await readFile(join(folder, 'hibi-theme.json'), 'utf8'))
+      .sanitizerVersion,
+    SANITIZER_VERSION,
+  )
+})
+
+test('copies no vault keeps, or kept just before, are pruned from Hibi data only', async (t) => {
+  const { vault, data, store } = await fixtureVault(t)
+  const before = await snapshot(vault)
+  const themes = join(vault, '.obsidian', 'themes')
+  const install = (name) => installTheme(store, join(themes, name), 'vault')
+  const paper = await install('paper-lantern')
+  const heavy = await install('heavy-grid')
+  const garden = await install('settings-garden')
+  const flat = await install('Old Flat.css')
+  const library = await installTheme(
+    store,
+    join(themes, 'legacy-ink'),
+    'folder',
+  )
+  const tags = await installSnippet(vault, store, 'accent-tags')
+  const wide = await installSnippet(vault, store, 'wide-lines')
+  const hostile = await installSnippet(vault, store, 'hostile')
+  const choose = (theme, snippetHashes) =>
+    writeSelection(data, vault, {
+      theme,
+      snippets: Object.keys(snippetHashes),
+      snippetHashes,
+    })
+  await choose(paper.id, { hostile: hostile.hash })
+  await choose(heavy.id, { 'accent-tags': tags.hash })
+  // Changing only Style Settings values keeps the previous choice as it was.
+  await writeSelection(data, vault, {
+    theme: heavy.id,
+    snippets: ['accent-tags'],
+    snippetHashes: { 'accent-tags': tags.hash },
+    styleValues: { 'heavy-grid@@grid-accent': '#000000' },
+  })
+  // A second vault keeps the one-file theme.
+  const other = join(vault, '..', 'other-vault')
+  await mkdir(join(other, '.obsidian'), { recursive: true })
+  await writeSelection(data, other, {
+    theme: flat.id,
+    snippets: [],
+    snippetHashes: {},
+  })
+  const removed = await pruneCopies(store, data)
+  assert.deepEqual(removed.sort(), [
+    `snippets/${wide.hash}`,
+    `themes/${garden.id}`,
+  ])
+  assert.deepEqual(
+    (await installedThemes(store)).map((theme) => theme.id).sort(),
+    [heavy.id, library.id, flat.id, paper.id].sort(),
+  )
+  assert.deepEqual(
+    (await readdir(join(store, 'snippets'))).sort(),
+    [hostile.hash, tags.hash].sort(),
+  )
+  // One more change drops what is now two choices back.
+  await choose(heavy.id, {})
+  assert.deepEqual((await pruneCopies(store, data)).sort(), [
+    `snippets/${hostile.hash}`,
+    `themes/${paper.id}`,
+  ])
+  // A choice file that can't be read keeps every copy.
+  await writeFile(
+    join(
+      data,
+      'obsidian-vaults',
+      (await readdir(join(data, 'obsidian-vaults')))[0],
+      'themes.json',
+    ),
+    '{',
+  )
+  assert.deepEqual(await pruneCopies(store, data), [])
   assert.deepEqual(await snapshot(vault), before)
 })
 

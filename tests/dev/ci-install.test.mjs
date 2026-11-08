@@ -83,7 +83,11 @@ test('successful installs and ordinary failures settle once with their exit code
 })
 
 test('dependency download failures retry once and preserve the final exit code', async (t) => {
-  for (const message of ['TypeError: fetch failed', 'npm error code EAI_AGAIN'])
+  for (const message of [
+    'TypeError: fetch failed',
+    'npm error code EAI_AGAIN',
+    'HTTPError: Response code 504 (Gateway Timeout)',
+  ])
     for (const repeated of [false, true]) {
       const install = fixture(
         t,

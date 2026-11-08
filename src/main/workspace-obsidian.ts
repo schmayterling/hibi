@@ -46,15 +46,27 @@ export async function obsidianConfiguration(root: string) {
       ['.hibi', '.trash', '.git'].includes(entry.name)
     )
       continue
-    for (const name of ['app.json', 'appearance.json']) {
-      try {
-        if (await jsonFile(join(root, entry.name, name))) {
-          folders.push(entry.name)
-          break
-        }
-      } catch {
-        // Invalid unrelated dotfolders are not evidence of an Obsidian vault.
+    // Custom config names are instance-local. Require app.json plus an Obsidian
+    // companion, so ordinary .tool/app.json folders do not change workspace mode.
+    try {
+      if (!(await jsonFile(join(root, entry.name, 'app.json')))) continue
+      for (const name of [
+        'appearance.json',
+        'workspace.json',
+        'workspace-mobile.json',
+        'core-plugins.json',
+        'community-plugins.json',
+      ]) {
+        const path = join(root, entry.name, name)
+        const info = await lstat(path).catch(() => null)
+        if (!info?.isFile() || info.isSymbolicLink() || info.size > 65536)
+          continue
+        JSON.parse(await readFile(path, 'utf8'))
+        folders.push(entry.name)
+        break
       }
+    } catch {
+      // Invalid unrelated dotfolders are not evidence of an Obsidian vault.
     }
   }
   folders.sort()
@@ -110,6 +122,8 @@ export async function obsidianSettings(root: string) {
 }
 
 async function vaultDirectory(root: string, folder: string, create: boolean) {
+  // Obsidian's leading slash means the vault root, not a filesystem root.
+  folder = folder.replace(/^\/+/, '')
   if (
     isAbsolute(folder) ||
     folder.includes('\\') ||
@@ -178,10 +192,13 @@ export async function assertObsidianContentPath(root: string, file: string) {
   if (!isPathInside(root, file)) return
   const first = relative(root, file).split(sep)[0] ?? ''
   if (!first.startsWith('.')) return
-  let protectedFolder = first === '.obsidian'
+  const fold = (name: string) => name.normalize('NFC').toLowerCase()
+  let protectedFolder = fold(first) === '.obsidian'
   const config = await obsidianConfiguration(root)
   if (config) {
-    protectedFolder ||= config.folders.includes(first)
+    protectedFolder ||= config.folders.some(
+      (folder) => fold(folder) === fold(first),
+    )
     for (const name of ['app.json', 'appearance.json']) {
       try {
         protectedFolder ||= !!(await jsonFile(join(root, first, name)))
@@ -198,11 +215,15 @@ const notices = new Map<string, string>()
 export async function obsidianVault(root: string) {
   const settings = await obsidianSettings(root)
   if (!settings) return undefined
-  if (settings.notice && notices.get(root) !== settings.notice) {
-    notices.set(root, settings.notice)
+  const recovery = await (
+    await import('./workspace-obsidian-transaction.ts')
+  ).recoverObsidianRename(root)
+  const notice = [settings.notice, recovery].filter(Boolean).join(' ')
+  if (notice && notices.get(root) !== notice) {
+    notices.set(root, notice)
     const { BrowserWindow } = await import('electron')
     for (const window of BrowserWindow.getAllWindows())
-      window.webContents.send('document:notice', settings.notice)
+      window.webContents.send('document:notice', notice)
   }
   let externalAddons = false
   if (settings.directory) {
@@ -214,7 +235,8 @@ export async function obsidianVault(root: string) {
           info.size > 65536 ? [true] : JSON.parse(await readFile(path, 'utf8'))
         externalAddons = Array.isArray(enabled) && enabled.length > 0
       } catch {
-        // A malformed plugin list grants no permission to run vault code.
+        // An oversized list is treated as enabled for the compatibility notice;
+        // malformed JSON does not enable addons. This flag never grants code execution.
       }
     }
   }

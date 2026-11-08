@@ -1,4 +1,4 @@
-import { lstat, mkdir } from 'node:fs/promises'
+import { lstat, mkdir, realpath } from 'node:fs/promises'
 import {
   basename,
   dirname,
@@ -186,7 +186,13 @@ export async function workspaceAction(
     const draft =
       typeof path === 'string' &&
       getOpenDocuments().find((draft) => draft.pendingPath === join(base, path))
-    const source = await resolveWorkspaceEntry(base, path, Boolean(draft))
+    const resolvedSource = await resolveWorkspaceEntry(
+      base,
+      path,
+      Boolean(draft),
+    )
+    const source =
+      vault && !draft ? await realpath(resolvedSource) : resolvedSource
     sourcePath = source
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
@@ -264,50 +270,74 @@ export async function workspaceAction(
           getOpenDocuments,
           window,
         )
-        await updates.verify()
-        const moved = await renameWithTableLayout(
-          () =>
-            caseOnly
-              ? renameCaseOnly(source, resultPath).then(() => ({
-                  sourceRemoved: true,
-                }))
-              : moveEntry(source, resultPath, folder, async () => {
-                  await resolveWorkspaceEntry(base, path)
-                  await resolveWorkspaceEntry(
-                    base,
-                    relative(base, resultPath).split(sep).join('/'),
-                    true,
-                  )
-                  return !getOpenDocuments().some(
-                    (draft) => draft.file === resultPath,
-                  )
-                }).catch((error: unknown) =>
-                  rethrowPartialCopy(error, base, source, resultPath),
-                ),
-          (moved) =>
-            moved.sourceRemoved
-              ? [
-                  base,
+        changedLinks = await updates.run(
+          async () => {
+            const moved = await renameWithTableLayout(
+              () =>
+                caseOnly
+                  ? renameCaseOnly(source, resultPath).then(() => ({
+                      sourceRemoved: true,
+                    }))
+                  : moveEntry(source, resultPath, folder, async () => {
+                      await resolveWorkspaceEntry(base, path)
+                      await resolveWorkspaceEntry(
+                        base,
+                        relative(base, resultPath).split(sep).join('/'),
+                        true,
+                      )
+                      return !getOpenDocuments().some(
+                        (draft) => draft.file === resultPath,
+                      )
+                    }).catch((error: unknown) =>
+                      rethrowPartialCopy(error, base, source, resultPath),
+                    ),
+              (moved) =>
+                moved.sourceRemoved
+                  ? [
+                      base,
+                      relative(base, source).split(sep).join('/'),
+                      relative(base, resultPath).split(sep).join('/'),
+                    ]
+                  : null,
+            )
+            if (!moved.sourceRemoved) {
+              try {
+                await refreshWorkspace([
                   relative(base, source).split(sep).join('/'),
                   relative(base, resultPath).split(sep).join('/'),
-                ]
-              : null,
+                ])
+              } catch (error) {
+                console.error(
+                  'workspace refresh after partial move failed:',
+                  error,
+                )
+              }
+              throw new Error(
+                'Destination was created, but the original could not be removed. Both files may exist.',
+              )
+            }
+          },
+          async () => {
+            await renameWithTableLayout(
+              async () => {
+                if (caseOnly) await renameCaseOnly(resultPath, source)
+                else if (
+                  !(await moveEntry(resultPath, source, folder, () => true))
+                    .sourceRemoved
+                )
+                  throw new Error(
+                    'Could not restore the original file or folder.',
+                  )
+              },
+              () => [
+                base,
+                relative(base, resultPath).split(sep).join('/'),
+                relative(base, source).split(sep).join('/'),
+              ],
+            )
+          },
         )
-        if (!moved.sourceRemoved) {
-          try {
-            await refreshWorkspace([
-              relative(base, source).split(sep).join('/'),
-              relative(base, resultPath).split(sep).join('/'),
-            ])
-          } catch (error) {
-            console.error('workspace refresh after partial move failed:', error)
-          }
-          throw new Error(
-            'Destination was created, but the original could not be removed. Both files may exist.',
-          )
-        }
         relocateDocument(source, resultPath)
-        changedLinks = await updates.apply()
         const active = getDocument()
         if (
           changedLinks.includes(

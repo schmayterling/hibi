@@ -119,9 +119,6 @@
   "5a897082f8b6": [
     "src/renderer/src/recovery-offer.tsx"
   ],
-  "72e3366cf43b": [
-    "src/main/workspace-obsidian-links.ts"
-  ],
   "eab4b9331e40": [
     "src/shared/markdown-source-model.ts"
   ],
@@ -383,6 +380,9 @@
   ],
   "8a1ac2cf470c": [
     "src/shared/source-parser.ts"
+  ],
+  "4851cf42df7b": [
+    "src/main/workspace-obsidian-transaction.ts"
   ],
   "480347cad7e2": [
     "src/main/sideload.ts"
@@ -872,11 +872,17 @@
   "7aa5420c9afa": [
     "src/main/workspace-actions.ts"
   ],
+  "249216d1e821": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
   "b05315dde820": [
     "src/main/workspace-entry-transfer.ts"
   ],
   "c5e6dc6d1789": [
     "src/main/workspace-entry-transfer.ts"
+  ],
+  "49e941de96d7": [
+    "src/main/workspace-obsidian-transaction.ts"
   ],
   "2735080e33d5": [
     "src/main/workspace-obsidian.ts"
@@ -1627,6 +1633,15 @@
   ],
   "c9379c9895e4": [
     "src/renderer/src/main.tsx"
+  ],
+  "36447afda2f7": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
+  "25b87c2622bf": [
+    "src/main/workspace-actions.ts"
+  ],
+  "0c46763f2e9c": [
+    "src/main/document.ts"
   ],
   "5dc1e07e8c69": [
     "src/renderer/src/main.tsx"
@@ -3528,6 +3543,9 @@
   ],
   "e0d30e96afde": [
     "src/shared/source-references.ts"
+  ],
+  "4e134353242c": [
+    "src/main/workspace-obsidian-transaction.ts"
   ],
   "152b3cdea888": [
     "src/addons/documentation/saved-options.ts"
@@ -5493,9 +5511,6 @@
   "ac752922d909": [
     "src/renderer/src/AutosaveSettings.tsx"
   ],
-  "02085961545a": [
-    "src/main/workspace-obsidian-links.ts"
-  ],
   "73c583fedbc0": [
     "src/main/addons.ts"
   ],
@@ -5977,6 +5992,9 @@
   "afdf8989956d": [
     "src/addons/git/Panel.tsx"
   ],
+  "3a66bda44690": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
   "ef6691545d2c": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
@@ -6349,6 +6367,9 @@
   "8a4ff1954358": [
     "src/main/addon-trust.ts"
   ],
+  "50698b350cc8": [
+    "src/main/workspace-obsidian-links.ts"
+  ],
   "2ea18168d79b": [
     "src/renderer/src/addons.ts"
   ],
@@ -6552,8 +6573,14 @@
   "a22ad77d6876": [
     "src/renderer/src/document-target-edits.ts"
   ],
+  "5b8f485e5b00": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
   "60dbdf909175": [
     "src/main/files.ts"
+  ],
+  "f1a7a34f2ec0": [
+    "src/main/workspace-obsidian-transaction.ts"
   ],
   "92c0abac5f21": [
     "src/renderer/src/ImageViewer.tsx"
@@ -6602,6 +6629,12 @@
   "93989d9c45f8": [
     "src/renderer/src/mounted-document-edits.ts"
   ],
+  "fc5533251946": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
+  "b2ea818ac11a": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
   "5b9df36cc43f": [
     "src/shared/document-journal.ts"
   ],
@@ -6613,6 +6646,9 @@
   ],
   "2469fb10d7a2": [
     "src/renderer/src/history-points.ts"
+  ],
+  "6b6d6a8eb3e5": [
+    "src/main/workspace-obsidian-transaction.ts"
   ],
   "fd7ebf9c6839": [
     "src/main/workspace-case-rename.ts"
@@ -6653,6 +6689,9 @@
   "3d98bbef1b29": [
     "src/main/recovery-journal.ts"
   ],
+  "cf49f739ab5e": [
+    "src/main/workspace-obsidian-transaction.ts"
+  ],
   "511ec6df64c2": [
     "src/main/addon-repository.ts"
   ],
@@ -6688,6 +6727,9 @@
   ],
   "5307fb030e7f": [
     "src/main/addon-trust-crypto.ts"
+  ],
+  "623874811dc1": [
+    "src/main/workspace-obsidian-transaction.ts"
   ],
   "75f8344e99c3": [
     "src/renderer/src/source-session.ts"
@@ -8290,6 +8332,9 @@
   ],
   "b2d69362d754": [
     "src/addons/rst/hibi-addon.json"
+  ],
+  "4fed3970dcc0": [
+    "src/main/workspace-obsidian-links.ts"
   ],
   "043a718774c5": [
     "src/addons/diagnostics/Settings.tsx"

@@ -1480,58 +1480,82 @@ export async function renameDocument(
   if (destination === path) return getDocument()
   if (isOpenInOtherTab(destination))
     throw new Error('A file with that name is open. Choose a different name.')
+  const sourcePath = path
+  const existing = await lstat(destination).catch(missingFile)
+  const caseOnly =
+    !!existing &&
+    !existing.isSymbolicLink() &&
+    (await realpath(destination)) === sourcePath
+  if (existing && !caseOnly)
+    throw new Error('A file with that name exists. Choose a different name.')
   const root = (await import('./workspace')).workspaceRoot()
   const updates =
-    root && isPathInside(root, path) && isPathInside(root, destination)
+    root && isPathInside(root, sourcePath) && isPathInside(root, destination)
       ? await (
           await import('./workspace-obsidian-links')
         ).prepareObsidianLinkUpdates(
           root,
-          relative(root, path).split(sep).join('/'),
+          relative(root, sourcePath).split(sep).join('/'),
           relative(root, destination).split(sep).join('/'),
           getOpenDocuments,
           window,
         )
       : null
-  await updates?.verify()
-  const existing = await lstat(destination).catch(missingFile)
-  if (existing) {
-    if (!existing.isSymbolicLink() && (await realpath(destination)) === path) {
+  const move = async () => {
+    if (caseOnly) {
       await (await import('./workspace-case-rename')).renameCaseOnly(
-        path,
+        sourcePath,
         destination,
       )
-      relocateDocument(path, destination)
-      const changed = await updates?.apply()
-      if (changed?.length)
-        await (await import('./workspace')).notifyWorkspaceContent(changed)
-      return getDocument()
+      return
     }
-    throw new Error('A file with that name exists. Choose a different name.')
-  }
-  // Linking creates the new name atomically without replacing another file.
-  try {
-    await link(path, destination)
-  } catch (error) {
-    if (
-      !['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV'].includes(
-        (error as NodeJS.ErrnoException).code ?? '',
+    // Linking creates the new name atomically without replacing another file.
+    try {
+      await link(sourcePath, destination)
+    } catch (error) {
+      if (
+        !['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV'].includes(
+          (error as NodeJS.ErrnoException).code ?? '',
+        )
       )
-    )
-      throw error
-    await copyFile(path, destination, constants.COPYFILE_EXCL)
+        throw error
+      await copyFile(sourcePath, destination, constants.COPYFILE_EXCL)
+    }
+    try {
+      await unlink(sourcePath)
+    } catch (cause) {
+      throw new Error(
+        `Created ${name}, but could not remove the original file. Check both files before trying again.`,
+        { cause },
+      )
+    }
   }
-  try {
-    await unlink(path)
-  } catch {
-    throw new Error(
-      `Created ${name}, but could not remove the original file. Check both files before trying again.`,
+  const changed = updates
+    ? await updates.run(move, async () => {
+        if (caseOnly)
+          await (await import('./workspace-case-rename')).renameCaseOnly(
+            destination,
+            sourcePath,
+          )
+        else if (
+          !(
+            await (
+              await import('./workspace-entry-transfer')
+            ).moveEntry(destination, sourcePath, false, () => true)
+          ).sourceRemoved
+        )
+          throw new Error('Could not restore the original file.')
+      })
+    : await move().then(() => [])
+  relocateDocument(sourcePath, destination)
+  if (changed.length && root) {
+    if (
+      window &&
+      changed.includes(relative(root, destination).split(sep).join('/'))
     )
-  }
-  relocateDocument(path, destination)
-  const changed = await updates?.apply()
-  if (changed?.length)
+      await selectDocumentTab(window, activeTab, false, true)
     await (await import('./workspace')).notifyWorkspaceContent(changed)
+  }
   return getDocument()
 }
 

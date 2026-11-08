@@ -657,8 +657,8 @@ test('link normalization preserves root, encoded filenames and wiki heading sema
     ['next', 'docs/next.md'],
     [' /root#heading ', 'root.md'],
     ['#heading', 'docs/from.md'],
-    ['../root', null],
-    ['./next', null],
+    ['../root', 'root.md'],
+    ['./next', 'docs/next.md'],
     ['/', '.md'],
   ])
     assert.equal(wikiTarget('docs/from.md', href, paths), expected)

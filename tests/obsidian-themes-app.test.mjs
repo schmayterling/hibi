@@ -221,8 +221,12 @@ test('applying an Obsidian theme changes colours, follows appearance, and turnin
   )
   // Hibi's copies and choices live in its own data; the vault is untouched.
   assert.deepEqual(await snapshot(vault), before)
-  assert.ok(
-    (await readdir(join(profile, 'obsidian-themes', 'themes'))).length >= 2,
+  // Only the theme kept just before stays, so the change can be undone.
+  assert.deepEqual(
+    (await readdir(join(profile, 'obsidian-themes', 'themes'))).map((id) =>
+      id.replace(/-[a-f0-9]{12}$/, ''),
+    ),
+    ['heavy-grid'],
   )
 })
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { appendFileSync } from 'node:fs' // table-budget-diag
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -3468,7 +3469,8 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
 test('cell keys and changes while a table waits for a reparse land where they would after it', {
   timeout: 120000,
 }, async (t) => {
-  const tail = '\n\nparagraph'.repeat(2000)
+  const tail = '\n\nparagraph'.repeat(Number(process.env.HIBI_TABLE_TAIL) || 2000) // table-budget-diag-tail
+  const stamp = (row) => { if (!process.env.HIBI_TABLE_PHASES) return; try { appendFileSync(process.env.HIBI_TABLE_PHASES, `${JSON.stringify({ arm: process.env.HIBI_TABLE_ARM, ...row })}\n`) } catch { try { process.stderr.write('hibi-table-stamp-fault\n') } catch {} } } // table-budget-diag
   const doc = `before\n\n| a | b |\n| - | - |\n| c | d |\n| e |\n\nafter${tail}`
   const full = doc.replace('| e |', '| e | f |')
   const last = `before\n\n| a | b |\n| - | - |\n| c | d |${tail}`
@@ -3514,6 +3516,8 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   // Stale: whether the table shows the keys' text before it draws again.
   const run = async (note, start, keys, stale, drawn) => {
     let cells = null
+    const marks = [['start', performance.now()]] // table-budget-diag
+    const mark = (name) => marks.push([name, performance.now()]) // table-budget-diag
     await harness.evaluate(
       (doc) =>
         window.tables.mount(
@@ -3527,6 +3531,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     )
     await harness.waitForFunction(() => !window.tables.settling())
     // The last row is virtualized; a source selection brings it into view.
+    mark('mounted') // table-budget-diag
     if (note === atEnd)
       await harness.evaluate(() => {
         const view = window.tables.view()
@@ -3544,6 +3549,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       .click()
     await harness.keyboard.press('End')
     if (stale) await hold()
+    mark('clicked') // table-budget-diag
     try {
       for (const key of keys) {
         await (typeof key === 'string' ? harness.keyboard.press(key) : key())
@@ -3557,9 +3563,13 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     } finally {
       if (stale) await harness.evaluate(() => window.releaseIdle())
     }
+    mark('keys') // table-budget-diag
     await harness.waitForFunction(() => !window.tables.settling())
     await harness.evaluate(() => window.tables.settle())
+    mark('settled') // table-budget-diag
     const { doc, cell, editor, head } = await state()
+    mark('read') // table-budget-diag
+    stamp({ stale, keys: keys.length, marks }) // table-budget-diag
     // The note's tail only slows the parse.
     return {
       doc: doc.replace(tail, '').replace(endRows, ''),

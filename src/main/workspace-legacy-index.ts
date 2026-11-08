@@ -21,6 +21,8 @@ export function checkLegacyIndexBytes(
 export type LegacyIndexSource = {
   id: string
   version: string
+  /** Lower bound on UTF-8 text bytes, without reading or materializing it. */
+  minimumBytes?: number
   read: (maximumBytes: number) => Promise<string> | string
 }
 
@@ -70,11 +72,12 @@ export class LegacyWorkspaceIndex {
       }
     }
     let bytes = 0
+    let minimumBytes = 0
     const charge = (amount: number) => {
       bytes += amount
-      if (bytes > MAX_LEGACY_INDEX_BYTES) {
+      if (bytes + minimumBytes > MAX_LEGACY_INDEX_BYTES) {
         if (current()) this.cached = undefined
-        checkLegacyIndexBytes(bytes)
+        checkLegacyIndexBytes(bytes + minimumBytes)
       }
     }
     // Count escaped UTF-8 in bounded pieces without a second full-page JSON string.
@@ -116,6 +119,7 @@ export class LegacyWorkspaceIndex {
     const files = new Map<string, CachedPage>()
     const pages: WorkspacePage[] = []
     const entries: WorkspaceEntry[] = []
+    const sources: [string, LegacyIndexSource][] = []
     const dirty = new Set<string>()
     const pending = new Map<string, WorkspaceEntry>()
     const additions = new Map<string, WorkspaceEntry[]>()
@@ -193,7 +197,30 @@ export class LegacyWorkspaceIndex {
           options.drafts.get(entry.path) ?? (await options.resolve(entry.path))
         // Resolve includes stat; a stale request must never start a Markdown read.
         if (!current()) return null
-        const old = previous?.get(entry.path)
+        // Refuse a certainly oversized reply before starting any text reads.
+        minimumBytes +=
+          (source.minimumBytes ?? 0) +
+          Buffer.byteLength(
+            JSON.stringify({ id: source.id, path: entry.path, markdown: '' }),
+          ) +
+          Number(sources.length > 0)
+        charge(0)
+        sources.push([entry.path, source])
+      } catch (error) {
+        if (!current()) return null
+        // Concurrent rename/delete is reconciled by the next watcher revision.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          this.cached = undefined
+          throw error
+        }
+      }
+    }
+    minimumBytes = 0
+    for (const [path, source] of sources) {
+      await tick()
+      if (!current()) return null
+      try {
+        const old = previous?.get(path)
         let cached: CachedPage
         if (old?.version === source.version && old.page.id === source.id) {
           cached = old
@@ -202,7 +229,7 @@ export class LegacyWorkspaceIndex {
           if (!current()) return null
           const markdown = await source.read(MAX_LEGACY_INDEX_BYTES - bytes)
           if (!current()) return null
-          const page = { id: source.id, path: entry.path, markdown }
+          const page = { id: source.id, path, markdown }
           const before = bytes
           chargeJson({ ...page, markdown: '' })
           // Empty quotes were already charged by the envelope.
@@ -213,10 +240,9 @@ export class LegacyWorkspaceIndex {
         }
         charge(Number(pages.length > 0))
         pages.push(cached.page)
-        files.set(entry.path, cached)
+        files.set(path, cached)
       } catch (error) {
         if (!current()) return null
-        // Concurrent rename/delete is reconciled by the next watcher revision.
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           this.cached = undefined
           throw error

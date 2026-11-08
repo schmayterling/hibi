@@ -1,0 +1,9 @@
+{
+  "id": "host-smoke",
+  "name": "Host smoke",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Deterministic local plugin host fixture.",
+  "author": "Hibi tests",
+  "isDesktopOnly": false
+}

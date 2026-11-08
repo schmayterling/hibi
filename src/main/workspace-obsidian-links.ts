@@ -1,11 +1,15 @@
 import { constants } from 'node:fs'
 import { open, readdir } from 'node:fs/promises'
-import { basename, join, posix, relative, sep } from 'node:path'
+import { join, posix, relative, sep } from 'node:path'
 import { GFM, parser } from '@lezer/markdown'
 import type { BrowserWindow } from 'electron'
 import { boundarySyntax } from '../shared/markdown-boundary-syntax.ts'
-import { markdownLiteral } from '../shared/markdown-literal.ts'
 import { localTarget, wikiTarget } from '../shared/note-links.ts'
+import {
+  encodeObsidianPath as encodedPath,
+  obsidianLinkText,
+  shortestObsidianPath as shortestPath,
+} from '../shared/obsidian-links.ts'
 import { runFileDialog } from './file-operation-dialog.ts'
 import { replaceExistingText } from './workspace-atomic-update.ts'
 import { obsidianSettings } from './workspace-obsidian.ts'
@@ -23,16 +27,6 @@ function escaped(source: string, at: number) {
   while (source.charAt(--at) === '\\') slashes++
   return slashes % 2 === 1
 }
-const encodedPath = (path: string) =>
-  path
-    .split('/')
-    .map((part) =>
-      encodeURIComponent(part).replace(
-        /[!'()*]/g,
-        (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-      ),
-    )
-    .join('/')
 
 function resolved(
   from: string,
@@ -305,20 +299,6 @@ export async function prepareObsidianLinkUpdates(
   }
 }
 
-function shortestPath(target: string, paths: ReadonlySet<string>) {
-  const parts = target.split('/')
-  for (let count = 1; count <= parts.length; count++) {
-    const suffix = parts.slice(-count).join('/')
-    if (
-      [...paths].filter(
-        (path) => path === suffix || path.endsWith('/' + suffix),
-      ).length === 1
-    )
-      return suffix
-  }
-  return '/' + target
-}
-
 export async function createdObsidianLink(
   root: string,
   note: string,
@@ -334,35 +314,17 @@ export async function createdObsidianLink(
   const path = relative(root, target).split(sep).join('/')
   await resolveWorkspaceEntry(root, path)
   const paths = await obsidianVaultPaths(root)
-  let name =
-    settings.newLinkFormat === 'relative'
-      ? posix.relative(posix.dirname(from), path)
-      : settings.newLinkFormat === 'absolute'
-        ? path
-        : shortestPath(path, paths)
-  const markdownStyle = settings.useMarkdownLinks || /[[\]|#]/.test(name)
-  let text: string
-  if (markdownStyle) {
-    if (settings.newLinkFormat === 'absolute') name = '/' + name
-    text =
-      (embed ? '!' : '') +
-      '[' +
-      markdownLiteral(label || basename(target)) +
-      '](' +
-      encodedPath(name) +
-      suffix +
-      ')'
-  } else {
-    if (name.toLowerCase().endsWith('.md')) name = name.slice(0, -3)
-    const alias = label
-      ? '|' +
-        label.replace(/[|\]\r\n]/g, (char) => '&#' + char.charCodeAt(0) + ';')
-      : ''
-    text = (embed ? '!' : '') + '[[' + name + suffix + alias + ']]'
-  }
   return {
     url: encodedPath(posix.relative(posix.dirname(from), path)) + suffix,
-    markdown: text,
+    markdown: obsidianLinkText(
+      settings,
+      from,
+      path,
+      paths,
+      label,
+      embed,
+      suffix,
+    ),
   }
 }
 

@@ -866,6 +866,9 @@
   "45d0812782b3": [
     "src/renderer/src/History.tsx"
   ],
+  "7aa5420c9afa": [
+    "src/main/workspace-actions.ts"
+  ],
   "b05315dde820": [
     "src/main/workspace-entry-transfer.ts"
   ],
@@ -4327,6 +4330,9 @@
   ],
   "6358e3a74155": [
     "src/addons/obsidian/api/registry.ts"
+  ],
+  "4e304a5409d2": [
+    "src/main/workspace-obsidian.ts"
   ],
   "df5f9f81b472": [
     "src/main/workspace-obsidian.ts"

@@ -97,6 +97,7 @@ const {
   notifyWorkspaceContent,
   refreshWorkspace,
   workspaceMetadataPages,
+  workspaceMetadataFile,
   workspaceMetadataDelta,
   WorkspaceReferenceIndex,
   workspaceSyntax,
@@ -160,6 +161,30 @@ const links = Array.from(
   { length: 256 },
   (_, i) => `[link](missing-${i}.md)`,
 ).join('\n')
+
+test('one requested worker metadata file reuses its cache without scanning other notes', async (t) => {
+  const { notes } = await fixture(t)
+  await writeFile(join(notes, 'y.md'), '#other')
+  await refreshWorkspace(['y.md'])
+  host.reads = []
+  const retained = await workspaceMetadataFile('x.md', syntax, () => true)
+  assert.equal(retained.path, 'x.md')
+  assert.deepEqual(
+    host.reads,
+    [],
+    'unmodified file reuses the existing metadata page',
+  )
+  const first = await workspaceMetadataFile('y.md', syntax, () => true)
+  assert.equal(first.path, 'y.md')
+  assert.deepEqual(first.metadata.tags, ['other'])
+  assert.deepEqual(host.reads, ['y.md'])
+  assert.equal(await workspaceMetadataFile('y.md', syntax, () => false), null)
+  assert.deepEqual(
+    host.reads,
+    ['y.md'],
+    'cancelled calls do no further parsing',
+  )
+})
 
 test('canceling a delta apply leaves its external edit dirty for the next refresh', async (t) => {
   const { notes, index, target, setTurn } = await fixture(t)

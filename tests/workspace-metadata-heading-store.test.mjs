@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
+  chmod,
+  mkdir,
   mkdtemp,
   open,
   readdir,
@@ -17,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
+import { diskIndexVersion } from '../src/main/workspace-index-cache.ts'
 import {
   HeadingStoreWriter,
   headingPageBytes,
@@ -645,6 +648,94 @@ await import(${JSON.stringify(entry.href)})
     ),
     null,
   )
+})
+
+test('a cache that refuses heading files keeps a many-heading note complete until it accepts them again', async (t) => {
+  const path = await directory(t)
+  const cache = join(path, 'cache')
+  const refuse = join(path, 'refuse')
+  const refusals = join(path, 'refusals')
+  const bundle = join(path, 'refused-headings.mjs')
+  // Windows directory modes do not stop file creation, so a flag refuses the
+  // cache's heading files the way a read-only folder or an access rule would.
+  await writeFile(
+    bundle,
+    `
+import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+import { dirname } from 'node:path'
+const { appendFileSync, existsSync, openSync, statSync } = fs
+const inCache = (path) => {
+  const [parent, cache] = [dirname(path), ${JSON.stringify(cache)}].map((path) => statSync(path, { bigint: true }))
+  return parent.dev === cache.dev && parent.ino === cache.ino
+}
+fs.openSync = (path, ...args) => {
+  if (existsSync(${JSON.stringify(refuse)}) && /\\.(?:hidx|hdat)\\.tmp$/.test(String(path)) && inCache(String(path))) {
+    appendFileSync(${JSON.stringify(refusals)}, 'refused\\n')
+    throw Object.assign(new Error('heading fixture'), { code: 'EPERM' })
+  }
+  return openSync(path, ...args)
+}
+syncBuiltinESMExports()
+await import(${JSON.stringify(entry.href)})
+`,
+  )
+  const nativePath = join(path, 'many.md')
+  await writeFile(nativePath, `${stored('first')}[[target]] #work`)
+  const version = diskIndexVersion(await stat(nativePath, { bigint: true }))
+  const note = { ...input, nativePath, version, expectedVersion: version }
+  const saved = { ...request, version }
+  const count = inlineHeadingCount + 1
+  const parsers = []
+  const create = () => {
+    const parser = new WorkspaceMetadataParser(() => ({
+      entry: bundle,
+      cacheDirectory: cache,
+      appVersion: 'fixture',
+    }))
+    parsers.push(parser)
+    return parser
+  }
+  t.after(async () => {
+    for (const parser of parsers) await parser.close()
+  })
+  for (const mode of process.platform === 'win32'
+    ? ['EPERM']
+    : ['read-only', 'EPERM']) {
+    await rm(cache, { recursive: true, force: true })
+    await mkdir(cache, { mode: 0o700 })
+    let parser = create()
+    if (mode === 'read-only') await chmod(cache, 0o500)
+    else await writeFile(refuse, '')
+    try {
+      const page = await parser.parseFile(note, current)
+      assert.equal(page?.metadata.headings.count, count, mode)
+      assert.equal(page.metadata.headings.complete, true)
+      assert.deepEqual(page.metadata.tags, ['work'])
+      assert.deepEqual(page.metadata.references.wikilinks, ['target'])
+      const headings = await parser.readHeadings(saved, 0, 1000, current)
+      assert.equal(headings.items.length, count)
+      assert.equal(headings.complete, true)
+      assert.deepEqual(await readdir(cache), [])
+      assert.equal((await readdir(parser.headingDirectory)).length, 2)
+    } finally {
+      if (mode === 'read-only') await chmod(cache, 0o700)
+      else await rm(refuse)
+    }
+    if (mode === 'EPERM')
+      assert.ok((await readFile(refusals, 'utf8')).includes('refused'))
+    // The next parse saves the note and drops its temporary heading files.
+    const repaired = await parser.parseFile(note, current)
+    assert.equal(repaired.metadata.headings.count, count)
+    assert.deepEqual(await readdir(parser.headingDirectory), [])
+    await parser.close()
+    parser = create()
+    assert.deepEqual(await parser.request(saved, current), repaired)
+    assert.equal(
+      (await parser.readHeadings(saved, 0, 1000, current)).items.length,
+      count,
+    )
+  }
 })
 
 test('watchdog respawn cleans partial heading files, retransfers sources, and preserves recoverable metadata', async (t) => {

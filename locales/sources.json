@@ -848,6 +848,7 @@
     "src/main/licenses.ts"
   ],
   "0eb12ba71160": [
+    "src/addons/obsidian/api/vault/native.ts",
     "src/addons/obsidian/api/vault/paths.ts"
   ],
   "45d0812782b3": [
@@ -930,6 +931,9 @@
   ],
   "471562a8660b": [
     "src/shared/updates.ts"
+  ],
+  "8607818debfd": [
+    "src/addons/obsidian/api/vault/native.ts"
   ],
   "b24e887ece6e": [
     "src/main/media.ts"
@@ -3542,6 +3546,9 @@
   ],
   "45f6b281a9a1": [
     "src/main/undo-history.ts"
+  ],
+  "1342cffa70a6": [
+    "src/addons/obsidian/api/vault/native.ts"
   ],
   "48c32379de34": [
     "src/addons/obsidian/api/vault/native.ts"
@@ -7133,6 +7140,9 @@
   "dd8dcbe75100": [
     "src/main/document.ts"
   ],
+  "d3130d41e4e4": [
+    "src/addons/obsidian/api/vault/native.ts"
+  ],
   "a8509d324773": [
     "src/main/workspace-paths.ts"
   ],
@@ -7223,14 +7233,17 @@
     "src/addons/obsidian/api/vault/index.ts",
     "src/addons/obsidian/api/workspace/index.ts"
   ],
-  "c6212dc98712": [
-    "src/addons/obsidian/api/vault/index.ts"
-  ],
   "a7bcb47b5203": [
     "src/addons/obsidian-themes/native.ts",
     "src/addons/obsidian-themes/store.ts"
   ],
   "19ce16760ea7": [
+    "src/addons/obsidian/api/vault/native.ts"
+  ],
+  "b62fa50213f6": [
+    "src/addons/obsidian/api/vault/native.ts"
+  ],
+  "6fa3359806a8": [
     "src/addons/obsidian/api/vault/native.ts"
   ],
   "118e5f47a496": [

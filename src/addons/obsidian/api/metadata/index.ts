@@ -2,6 +2,7 @@ import { isMarkdownDocument } from '../../../../shared/document-types'
 import type { WorkspaceTarget } from '../../../../shared/foundation-contracts'
 import { readFrontmatter } from '../../../../shared/frontmatter'
 import {
+  localTargetPath,
   noteBasenames,
   resolveLocalTarget,
   resolveWikiTarget,
@@ -124,6 +125,18 @@ export class MetadataCache extends Events {
   getFirstLinkpathDest(linkpath: string, sourcePath: string): TFile | null {
     if (this.disposed || (sourcePath !== '' && !validMetadataPath(sourcePath)))
       return null
+    const relative = linkpath.split('#', 1)[0]?.trim() ?? ''
+    if (/^\.\.?\//.test(relative)) {
+      const path = localTargetPath(
+        sourcePath,
+        relative.split('/').map(encodeURIComponent).join('/'),
+      )
+      const resolved =
+        path && validMetadataPath(path)
+          ? resolveLocalTarget(path, this.paths())
+          : null
+      return resolved ? this.file(resolved) : null
+    }
     const name = wikiTargetName(linkpath)
     if (name === null || (name && !validMetadataPath(name.replace(/^\//, ''))))
       return null

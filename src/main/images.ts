@@ -164,7 +164,8 @@ export async function resolveDocumentMediaPath(
       ? [resolve(workspacePath, decoded)]
       : []
   if (workspacePath && !source.startsWith('/')) {
-    const config = await obsidianConfiguration(workspacePath)
+    // An unreadable workspace root has no settings to apply either.
+    const config = await obsidianConfiguration(workspacePath).catch(() => null)
     if (config) {
       for (const folder of config.folders)
         paths?.add(resolve(workspacePath, folder, 'app.json'))

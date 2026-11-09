@@ -175,6 +175,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // schema learned from a refused write, adds 40 (#937).
   // Applying an edit at every line of a large selection, such as Tab over a
   // megabyte of code, in one pass over the source tree adds 1,207 (#964).
+  // Default-on autosave and resting from each attempt's end, for at most five
+  // minutes, adds 227 (#883).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -219,7 +221,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         894 +
         97 +
         40 +
-        1207,
+        1207 +
+        227,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

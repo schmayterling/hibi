@@ -5,7 +5,12 @@ import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { createMetadataNative } from './api/metadata/native'
 import {
+  mintPluginRequestCapability,
+  type PluginRequestScope,
+} from './api/network/capabilities'
+import {
   cancelRequestUrl,
+  releaseRequestUrl,
   requestUrlNative,
   stopRequestUrls,
 } from './api/network/native'
@@ -209,7 +214,10 @@ async function trustPackage(
 }
 
 /** Called only by the lazy app-protocol route after addon activation checks. */
-export async function obsidianPluginAsset(request: Request) {
+export async function obsidianPluginAsset(
+  request: Request,
+  scope: PluginRequestScope,
+) {
   const url = new URL(request.url)
   const match =
     /^\/obsidian-plugins\/(global)\/([a-z0-9][a-z0-9_-]{0,63})\/([a-f0-9]{64})\/(main\.js|styles\.css)$/.exec(
@@ -218,7 +226,7 @@ export async function obsidianPluginAsset(request: Request) {
   if (
     request.method !== 'GET' ||
     url.protocol !== 'app:' ||
-    url.host !== 'hibi' ||
+    !['hibi', 'obsidian-plugins'].includes(url.host) ||
     url.search ||
     url.hash ||
     !match
@@ -226,13 +234,19 @@ export async function obsidianPluginAsset(request: Request) {
     return null
   const [, identity, id, hash, name] = match
   if (!id || !hash) return null
+  // The script origin is outside renderer connect-src, so fetch cannot read its capability.
+  if (url.host !== (name === 'main.js' ? 'obsidian-plugins' : 'hibi'))
+    return null
+  if (!scope.isCurrent()) return null
   const place = await obsidianGlobalStore()
   const source = await place.store.enabledPackage(id, hash)
+  if (!scope.isCurrent()) return null
   return name === 'main.js'
     ? {
         body: wrapObsidianPlugin(
           source.main.toString('utf8'),
           `${identity}:${id}:${hash}`,
+          mintPluginRequestCapability(id, hash, scope),
         ),
         type: 'text/javascript; charset=utf-8',
       }
@@ -273,7 +287,7 @@ export default {
   queries: {
     async nextObsidianProtocol(input, context) {
       addonCheck(context)
-      return nextObsidianProtocol(input)
+      return nextObsidianProtocol(input, context.isCurrent)
     },
     vaultInfo: vaultQuery('vaultInfo'),
     vaultStat: vaultQuery('vaultStat'),
@@ -319,17 +333,33 @@ export default {
   profileMethods: {
     async requestUrl(input, context) {
       const check = addonCheck(context)
-      return requestUrlNative(input, async (id) => {
-        const { store } = await obsidianGlobalStore()
-        const plugins = await store.list()
-        check()
-        if (
-          !plugins.some((plugin) => plugin.manifest.id === id && plugin.enabled)
-        )
-          throw new Error('This plugin is disabled or uninstalled.')
-      })
+      return requestUrlNative(
+        input,
+        async (id, hash) => {
+          const { store } = await obsidianGlobalStore()
+          const plugins = await store.list()
+          check()
+          if (
+            !plugins.some(
+              (plugin) =>
+                plugin.manifest.id === id &&
+                plugin.hash === hash &&
+                plugin.enabled,
+            )
+          )
+            throw new Error('This plugin is disabled or uninstalled.')
+        },
+        context.senderId,
+      )
     },
-    cancelRequestUrl,
+    async cancelRequestUrl(input, context) {
+      addonCheck(context)
+      return cancelRequestUrl(input, context.senderId)
+    },
+    async releaseRequestUrl(input, context) {
+      addonCheck(context)
+      return releaseRequestUrl(input, context.senderId)
+    },
     cancelObsidianProtocol,
     async downloadCommunity(input, context) {
       const place = await globalPlace(input, context)

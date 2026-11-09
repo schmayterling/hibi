@@ -575,7 +575,14 @@ addonStorage.subscribe((change) => {
     mainWindow.webContents.send(ADDON_STORAGE_CHANNELS.changed, change)
 })
 function resetAddonSessions(): void {
+  const obsidianActive = getAddonActivationGeneration('obsidian') !== null
   invalidateAddonActivations()
+  if (obsidianActive)
+    void import('../addons/obsidian/api/network/capabilities')
+      .then(({ revokeStalePluginRequestCapabilities }) =>
+        revokeStalePluginRequestCapabilities(),
+      )
+      .catch(console.error)
   hostNetwork.stopWindow(networkWindowKey)
   hostCredentials.stopWindow(networkWindowKey)
   networkWindowKey = {}
@@ -643,14 +650,34 @@ const loadAddonHotkeys = () => {
 let pendingGlobalShortcut: { id: string; accelerator: string } | null = null
 const externalFiles: string[] = []
 const gardenRequests: AddonGardenRequest[] = []
+const earlyObsidianLinks: { value: string; receivedAt: number }[] = []
+let addonPreferencesLoaded = false
+function queueObsidianOsLink(value: string, receivedAt: number) {
+  const generation = getAddonActivationGeneration('obsidian')
+  if (generation === null) return
+  void import('../addons/obsidian/api/protocol/native').then(
+    ({ queueObsidianProtocol }) => {
+      if (
+        queueObsidianProtocol(
+          value,
+          () => getAddonActivationGeneration('obsidian') === generation,
+          receivedAt,
+        ) &&
+        app.isReady()
+      )
+        showMainWindow()
+    },
+  )
+}
 function queueAddonLinks(values: readonly string[]) {
   for (const value of values) {
     if (/^hibi:\/\/obsidian\//i.test(value)) {
-      void import('../addons/obsidian/api/protocol/native').then(
-        ({ queueObsidianProtocol }) => {
-          if (queueObsidianProtocol(value) && app.isReady()) showMainWindow()
-        },
-      )
+      const receivedAt = Date.now()
+      if (addonPreferencesLoaded) queueObsidianOsLink(value, receivedAt)
+      else {
+        if (earlyObsidianLinks.length === 32) earlyObsidianLinks.shift()
+        earlyObsidianLinks.push({ value, receivedAt })
+      }
       continue
     }
     const request = parseAddonGardenLink(value)
@@ -952,19 +979,29 @@ async function serveAssetResponse(request: Request): Promise<Response> {
             manualFetch,
           )
     if (
-      parsed.hostname === 'hibi' &&
+      ['hibi', 'obsidian-plugins'].includes(parsed.hostname) &&
       parsed.pathname.startsWith('/obsidian-plugins/')
     ) {
       const generation = getAddonActivationGeneration('obsidian')
       if (generation === null) return new Response(null, { status: 403 })
       const { obsidianPluginAsset } = await import('../addons/obsidian/native')
-      const asset = await obsidianPluginAsset(request)
+      const senderId = mainWindow?.webContents.id
+      if (senderId === undefined) return new Response(null, { status: 403 })
+      const asset = await obsidianPluginAsset(request, {
+        senderId,
+        isCurrent: () =>
+          getAddonActivationGeneration('obsidian') === generation &&
+          !!mainWindow &&
+          !mainWindow.isDestroyed() &&
+          mainWindow.webContents.id === senderId,
+      })
       if (generation !== getAddonActivationGeneration('obsidian'))
         return new Response(null, { status: 403 })
       return asset
         ? new Response(asset.body, {
             headers: {
               'Content-Type': asset.type,
+              'Cache-Control': 'no-store',
               'Content-Security-Policy': CONTENT_SECURITY_POLICY,
               'X-Content-Type-Options': 'nosniff',
               'Access-Control-Allow-Origin': devUrl
@@ -1587,6 +1624,14 @@ if (!app.requestSingleInstanceLock()) {
       void sweepSiteScratch(app.getPath('userData')).catch(console.error)
       const hotkeysReady = startupSpan('hotkeys', loadHotkeys)
       const addonsReady = startupSpan('addons', loadAddons)
+      void addonsReady
+        .then(() => {
+          // Before preferences load, no renderer can change the persisted activation.
+          addonPreferencesLoaded = true
+          for (const link of earlyObsidianLinks.splice(0))
+            queueObsidianOsLink(link.value, link.receivedAt)
+        })
+        .catch(console.error)
       const documentReady = startupSpan(
         'document-preferences',
         loadDocumentPreferences,

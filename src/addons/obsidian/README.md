@@ -75,8 +75,12 @@ Following Obsidian's public declaration, HTTP statuses of 400 or greater throw
 unless `throw: false` is supplied. Redirect responses below 400 do not throw.
 
 Requests allow 64 MiB bodies, 128 MiB responses, twenty redirects, five minutes,
-and thirty-two concurrent requests. Unloading a plugin cancels its requests.
-Only enabled, trusted plugins can use this native transport. `window.fetch`
+thirty-two concurrent requests per plugin, and 128 across all plugins. Unloading a plugin cancels its requests.
+Only enabled, trusted plugins can use this native transport. Main issues a
+capability for each plugin load, bound to its package and renderer; unload
+revokes it. Direct renderer calls without this capability are refused.
+Localhost and LAN destinations are allowed, like Obsidian; TLS verification
+remains enabled for HTTPS. `window.fetch`
 remains the renderer's fetch, subject to CORS and Hibi's
 `connect-src 'self' app://hibi` policy. Use `requestUrl` for arbitrary origins.
 
@@ -88,13 +92,16 @@ plugin unload restores the previous global property.
 
 `registerObsidianProtocolHandler(action, handler)` handles decoded
 `obsidian://action?key=value` links inside Hibi, including rendered Markdown
-and plugin UI. Empty query flags become the string `true`; `params.action`
+and plugin UI. Bare query flags become the string `true`; explicit empty values stay empty, and `params.action`
 always contains the actual action. Registrations disappear on plugin unload.
 Hibi's existing OS scheme also accepts
 `hibi://obsidian/action?key=value`, including links received at launch.
+Queued links expire after 60 seconds and are delivered only to the Obsidian
+addon activation that was enabled when they arrived.
 Hibi does not register as the OS handler for `obsidian://`.
 
-The built-in `open` action opens `file` in the current vault. The `new` action
+The built-in `open` action opens `file` in the current vault, or activates the
+current vault when no file is specified. The `new` action
 creates and opens a Markdown note from `file` or `name` and optional `content`.
 A `vault` parameter must name the currently open vault. Hibi has no vault-wide
 search interface equivalent to Obsidian's `search` action, so that action

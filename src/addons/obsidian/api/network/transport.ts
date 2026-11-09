@@ -83,7 +83,7 @@ export function validateRequest(
   return {
     options: {
       url: httpUrl(input.url),
-      method: method.toUpperCase(),
+      method,
       headers,
       redirect: 'manual',
     },

@@ -289,12 +289,27 @@ test('global native operations install and serve without any folder and keep act
   await native.methods.enable({ ...input, enabled: true }, f.context)
   f.state.folder = null
   f.state.identity = null
-  const url = `app://hibi/obsidian-plugins/global/host-smoke/${installed.hash}/main.js`
-  const asset = await f.obsidianPluginAsset(new Request(url))
+  const url = `app://obsidian-plugins/obsidian-plugins/global/host-smoke/${installed.hash}/main.js`
+  const scope = { senderId: 1, isCurrent: () => true }
+  const scriptRequest = () =>
+    new Request(url, { headers: { 'sec-fetch-dest': 'script' } })
+  const asset = await f.obsidianPluginAsset(scriptRequest(), scope)
   assert.match(asset.body, new RegExp(`global:host-smoke:${installed.hash}`))
   assert.equal(asset.type, 'text/javascript; charset=utf-8')
+  assert.equal(
+    await f.obsidianPluginAsset(
+      new Request(url.replace('app://obsidian-plugins/', 'app://hibi/')),
+      scope,
+    ),
+    null,
+  )
   const css = await f.obsidianPluginAsset(
-    new Request(url.replace('main.js', 'styles.css')),
+    new Request(
+      url
+        .replace('app://obsidian-plugins/', 'app://hibi/')
+        .replace('main.js', 'styles.css'),
+    ),
+    scope,
   )
   assert.equal(css.body, '.fixture { color: red }')
   assert.equal(css.type, 'text/css; charset=utf-8')
@@ -305,16 +320,19 @@ test('global native operations install and serve without any folder and keep act
     url.replace(installed.hash, 'b'.repeat(64)),
   ]) {
     const result = await f
-      .obsidianPluginAsset(new Request(invalid))
+      .obsidianPluginAsset(new Request(invalid), scope)
       .catch(() => null)
     assert.equal(result, null)
   }
   assert.equal(
-    await f.obsidianPluginAsset(new Request(url, { method: 'POST' })),
+    await f.obsidianPluginAsset(new Request(url, { method: 'POST' }), scope),
     null,
   )
   await native.methods.enable({ ...input, enabled: false }, f.context)
-  await assert.rejects(f.obsidianPluginAsset(new Request(url)), /disabled/)
+  await assert.rejects(
+    f.obsidianPluginAsset(scriptRequest(), scope),
+    /disabled/,
+  )
   f.state.confirm = async () => {
     f.state.current = false
     return { response: 1 }

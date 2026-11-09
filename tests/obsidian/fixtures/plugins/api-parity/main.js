@@ -39,6 +39,7 @@ module.exports = class extends Plugin {
       this.app,
       '[Rendered protocol](obsidian://parity-fixture?from=markdown)\n' +
         '[Hibi protocol](hibi://obsidian/parity-fixture?from=hibi)\n' +
+        '[Other Hibi](hibi://addons/install?id=fixture)\n' +
         '[Unsafe protocol](javascript:alert(1))\n<span style="position:fixed">No styles</span>',
       root,
       '',

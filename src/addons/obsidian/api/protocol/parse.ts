@@ -16,14 +16,19 @@ export function parseObsidianProtocol(
       url.protocol === 'obsidian:' &&
       (url.pathname === '' || url.pathname === '/')
     )
-      action = url.hostname
+      action = decodeURIComponent(url.hostname)
     else if (url.protocol === 'hibi:' && url.hostname === 'obsidian')
       action = decodeURIComponent(url.pathname.slice(1).replace(/\/$/, ''))
     else return null
-    if (!/^[a-z0-9][a-z0-9_-]*$/i.test(action)) return null
+    if (!action) return null
+    const query = url.search
+      .slice(1)
+      .split('&')
+      .map((part) => (part && !part.includes('=') ? part + '=true' : part))
+      .join('&')
     // Object.fromEntries creates own data properties even for "__proto__".
     return Object.fromEntries([
-      ...[...url.searchParams].map(([key, value]) => [key, value || 'true']),
+      ...new URLSearchParams('?' + query),
       ['action', action],
     ]) as ObsidianProtocolData
   } catch {

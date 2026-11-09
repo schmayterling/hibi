@@ -15,11 +15,19 @@ export function createRequestUrl(
     method: string,
     input: unknown,
   ) => Promise<unknown> = invokeObsidianProfile,
+  capability: () => string | undefined = () => undefined,
 ) {
   const pending = new Set<() => void>()
   owner.register(() => {
     for (const cancel of pending) cancel()
     pending.clear()
+    const token = capability()
+    if (token)
+      void invoke('releaseRequestUrl', { id, capability: token }).catch(
+        (error: unknown) => {
+          if (!owner.isUnloaded) reportError(error)
+        },
+      )
   })
   return (request: RequestUrlParam | string): RequestUrlResponsePromise => {
     const input = typeof request === 'string' ? { url: request } : request
@@ -31,14 +39,21 @@ export function createRequestUrl(
       const requestId = crypto.randomUUID()
       const cancel = () => {
         reject(new Error('This plugin request was cancelled on unload.'))
-        void invoke('cancelRequestUrl', { id, requestId }).catch(
-          (error: unknown) => {
-            if (!owner.isUnloaded) reportError(error)
-          },
-        )
+        void invoke('cancelRequestUrl', {
+          id,
+          requestId,
+          capability: capability(),
+        }).catch((error: unknown) => {
+          if (!owner.isUnloaded) reportError(error)
+        })
       }
       pending.add(cancel)
-      void invoke('requestUrl', { id, requestId, request: input })
+      void invoke('requestUrl', {
+        id,
+        requestId,
+        request: input,
+        capability: capability(),
+      })
         .then((value) => {
           const response = value as RequestUrlBytes
           if (owner.isUnloaded) return

@@ -20,6 +20,7 @@ import type {
 } from './api/types'
 
 interface ScriptBridge {
+  activate: (capability: string) => void
   require: (name: string) => unknown
   loaded: (exports: unknown) => void
   failed: (error: unknown) => void
@@ -65,6 +66,7 @@ function loadScript(
   identity: string,
   api: ApiModule,
   url: string,
+  activate: (capability: string) => void,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (owner.isUnloaded) {
@@ -76,6 +78,7 @@ function loadScript(
     script.dataset.obsidianPlugin = identity
     let loaded = false
     scripts.set(identity, {
+      activate,
       require: (name) =>
         name === 'obsidian' ? api : requireObsidianHostModule(name),
       loaded: (value) => {
@@ -216,6 +219,7 @@ export class ObsidianHost {
       await prepareMoment()
       if (this.stopped || owner.isUnloaded)
         throw new Error('This plugin host has stopped.')
+      let capability: string | undefined
       const api = createCoreApi(
         {
           hibi: this.hibi,
@@ -227,6 +231,7 @@ export class ObsidianHost {
         },
         this.app,
         manifest,
+        () => capability,
       )
       for (const contribution of this.contributions)
         Object.assign(api, contribution.exports)
@@ -238,7 +243,15 @@ export class ObsidianHost {
         document.head.append(style)
         owner.register(() => style.remove())
       }
-      const exports = await loadScript(owner, identity, api, `${base}/main.js`)
+      const exports = await loadScript(
+        owner,
+        identity,
+        api,
+        `${base.replace('app://hibi/', 'app://obsidian-plugins/')}/main.js`,
+        (token) => {
+          capability = token
+        },
+      )
       if (this.stopped) throw new Error('This plugin host has stopped.')
       const Constructor =
         typeof exports === 'function'

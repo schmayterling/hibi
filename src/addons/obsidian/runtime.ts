@@ -4,6 +4,8 @@ import { createCoreApi } from './api/core'
 import { Component } from './api/core/component'
 import { Keymap, Scope } from './api/core/keymap'
 import type { Plugin } from './api/core/plugin'
+import { prepareMoment } from './api/moment'
+import { acquireObsidianProtocols } from './api/protocol'
 import {
   createObsidianContributions,
   pluginResourcePrefix,
@@ -158,6 +160,7 @@ export class ObsidianHost {
     })
     if (this.stopped) return
     await this.refresh()
+    if (!this.stopped) acquireObsidianProtocols(this.hibi, this.app, this.owner)
   }
 
   refresh(): Promise<void> {
@@ -208,6 +211,9 @@ export class ObsidianHost {
     try {
       // Host resource IDs stay stable across package upgrades without exposing native paths.
       const namespace = await pluginResourcePrefix(manifest.id)
+      if (this.stopped || owner.isUnloaded)
+        throw new Error('This plugin host has stopped.')
+      await prepareMoment()
       if (this.stopped || owner.isUnloaded)
         throw new Error('This plugin host has stopped.')
       const api = createCoreApi(

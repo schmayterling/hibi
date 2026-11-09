@@ -1,0 +1,9 @@
+{
+  "id": "api-parity",
+  "name": "API parity",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Handwritten fixture for networking, dates and protocol links.",
+  "author": "Hibi fixtures",
+  "isDesktopOnly": false
+}

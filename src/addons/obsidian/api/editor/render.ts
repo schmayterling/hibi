@@ -230,6 +230,9 @@ export class MarkdownRenderer extends MarkdownRenderChild {
     el.append(
       DOMPurify.sanitize(html, {
         ...renderedHtmlOptions,
+        // Preserve safe app links alongside DOMPurify's existing URI whitelist.
+        ALLOWED_URI_REGEXP:
+          /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|(?:obsidian|hibi):\/\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
         // Inline styles in a note could cover or restyle the app around it.
         FORBID_ATTR: [...(renderedHtmlOptions.FORBID_ATTR ?? []), 'style'],
         RETURN_DOM_FRAGMENT: true,

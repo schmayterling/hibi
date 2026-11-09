@@ -645,6 +645,14 @@ const externalFiles: string[] = []
 const gardenRequests: AddonGardenRequest[] = []
 function queueAddonLinks(values: readonly string[]) {
   for (const value of values) {
+    if (/^hibi:\/\/obsidian\//i.test(value)) {
+      void import('../addons/obsidian/api/protocol/native').then(
+        ({ queueObsidianProtocol }) => {
+          if (queueObsidianProtocol(value) && app.isReady()) showMainWindow()
+        },
+      )
+      continue
+    }
     const request = parseAddonGardenLink(value)
     if (!request) continue
     if (

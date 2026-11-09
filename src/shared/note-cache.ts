@@ -1,0 +1,53 @@
+/** Raw source coordinates: zero-based lines/UTF-16 columns and exclusive ends. */
+export type Loc = { line: number; col: number; offset: number }
+export type Pos = { start: Loc; end: Loc }
+export type NoteLoc = Loc
+export type NotePosition = Pos
+export type NoteCacheHeading = { depth: number; text: string; position: Pos }
+export type NoteCacheLink = {
+  link: string
+  original: string
+  displayText?: string
+  position: Pos
+}
+export type NoteCacheTag = { tag: string; position: Pos }
+export type NoteCacheListItem = {
+  position: Pos
+  /** Parent item's zero-based source line, or -1 for a root item. */
+  parent: number
+  task?: string
+  id?: string
+}
+export type NoteCacheSection = {
+  type:
+    | 'paragraph'
+    | 'heading'
+    | 'list'
+    | 'code'
+    | 'blockquote'
+    | 'table'
+    | 'callout'
+  position: Pos
+  id?: string
+}
+export type NoteCacheBlock = { id: string; position: Pos }
+export type NoteCacheFrontmatter = {
+  values: Record<string, unknown>
+  position: Pos
+}
+export type NoteCacheFrontmatterLink = NoteCacheLink & { key: string }
+
+export type NoteCacheValues = {
+  heading: NoteCacheHeading
+  link: NoteCacheLink
+  embed: NoteCacheLink
+  tag: NoteCacheTag
+  listItem: NoteCacheListItem
+  section: NoteCacheSection
+  block: NoteCacheBlock
+  frontmatter: NoteCacheFrontmatter
+  frontmatterLink: NoteCacheFrontmatterLink
+}
+export type NoteCacheEntry = {
+  [Kind in keyof NoteCacheValues]: { kind: Kind; value: NoteCacheValues[Kind] }
+}[keyof NoteCacheValues]

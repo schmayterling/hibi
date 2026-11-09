@@ -227,10 +227,10 @@ test('notes outside the workspace, and workspaces with a linked .hibi, keep imag
   const host = await setup(t)
   const outside = { ...host.place, note: join(host.root, 'loose.md') }
   assert.deepEqual(await host.draw(SOURCE, outside), drawn('first'))
-  assert.deepEqual(await readdir(join(host.place.data, 'image-cache')), [
-    NAME,
-    `${NAME}.json`,
-  ])
+  assert.deepEqual(
+    (await readdir(join(host.place.data, 'image-cache'))).sort(),
+    [NAME, `${NAME}.json`],
+  )
   const draft = { ...host.place, note: null }
   assert.deepEqual(await host.draw(SOURCE, draft), drawn('first'))
   assert.equal(host.requests.length, 1)
@@ -271,10 +271,10 @@ test("a workspace cache folder Hibi can't write to, such as in a shared folder, 
   assert.deepEqual(await host.draw(), drawn('first'))
   assert.equal(host.requests.length, 1)
   assert.deepEqual(await readdir(images), [])
-  assert.deepEqual(await readdir(join(host.place.data, 'image-cache')), [
-    NAME,
-    `${NAME}.json`,
-  ])
+  assert.deepEqual(
+    (await readdir(join(host.place.data, 'image-cache'))).sort(),
+    [NAME, `${NAME}.json`],
+  )
 })
 
 test('draws at once share one download, and a refresh downloads again without validators', async (t) => {
@@ -316,57 +316,55 @@ test('a host trickling bytes holds back neither the kept copy nor a refresh, whi
   const host = await setup(t)
   assert.deepEqual(await host.draw(), drawn('first'))
   await host.age(25)
-  // A byte at a time, each well within the quiet time.
-  let ended = false
-  t.after(() => {
-    ended = true
-  })
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
+  let body,
+    pulls = 0
+  t.after(() => body?.close())
   host.answer = () =>
     new Response(
       new ReadableStream({
-        async pull(controller) {
-          await delay(200)
-          if (ended) controller.close()
-          else controller.enqueue(new Uint8Array([0]))
+        start(controller) {
+          body = controller
+        },
+        pull() {
+          pulls++
         },
       }),
       { headers: { 'Content-Type': 'image/png' } },
     )
-  const settled = (work) =>
-    Promise.race([work, delay(10_000).then(() => 'still waiting')])
-  assert.deepEqual(await settled(host.draw()), drawn('first'))
+  const drawing = host.draw()
+  await waitFor(() => host.requests.length === 2 && pulls > 0)
+  // Each consumed byte arrives before the quiet deadline; the shared stale deadline still wins.
+  for (let piece = 0; piece < 16; piece++) {
+    const before = pulls
+    t.mock.timers.tick(200)
+    body.enqueue(new Uint8Array([0]))
+    await waitFor(() => pulls > before)
+  }
+  assert.deepEqual(await drawing, drawn('first'))
   assert.equal(host.requests.length, 2)
-  // A draw that comes later, as after a reload, shares the check's deadline,
-  // which has passed, so it shows the copy at once. With time stopped, only
-  // timers already due run: a deadline of its own would never come, and the
-  // draw could only end with the check.
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  let later
-  let checking
+  let later, checking
   host.draw().then((drawing) => {
     later = drawing
     checking = !host.requests[1].init.signal.aborted
   })
-  while (!later) {
+  await waitFor(() => {
     t.mock.timers.tick(0)
-    await new Promise(setImmediate)
-  }
-  t.mock.timers.reset()
+    return later
+  })
   assert.deepEqual(later, drawn('first'))
   assert.equal(checking, true, 'the draw waited for the check to end')
   assert.equal(host.requests.length, 2)
   host.answer = () =>
     new Response(png('second'), { headers: { 'Content-Type': 'image/png' } })
-  assert.equal(
-    await settled(refreshRemoteImage(SOURCE, host.place, host.fetch)),
-    undefined,
-  )
+  await refreshRemoteImage(SOURCE, host.place, host.fetch)
   assert.ok(host.requests[1].init.signal.aborted)
   assert.deepEqual(await host.draw(), drawn('second'))
 })
 
 test("a refresh during an image's first download keeps that download, so its draws don't fail", async (t) => {
   const host = await setup(t)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
   let release
   const held = new Promise((resolve) => {
     release = resolve
@@ -375,9 +373,26 @@ test("a refresh during an image's first download keeps that download, so its dra
   host.answer = () => held.then(answer)
   const draw = host.draw()
   await waitFor(() => host.requests.length === 1)
+  const inspected = Promise.withResolvers()
+  const read = fs.readFile
+  t.mock.method(fs, 'readFile', async (...args) => {
+    try {
+      return await read(...args)
+    } finally {
+      if (args[0] === `${host.kept}.json`) inspected.resolve()
+    }
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    // Syncing builtins also rebinds timers/promises imports; restore the real clock first.
+    t.mock.timers.reset()
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
   const refreshed = refreshRemoteImage(SOURCE, host.place, host.fetch)
-  // Long enough for a refresh to stop the download, as it would a check.
-  await delay(100)
+  await inspected.promise
+  await new Promise(setImmediate)
+  assert.equal(host.requests[0].init.signal.aborted, false)
   release()
   assert.deepEqual(await draw, drawn('first'))
   await refreshed
@@ -389,38 +404,33 @@ test("a refresh restarts an image's first download that a host has held past the
   timeout: 30_000,
 }, async (t) => {
   const host = await setup(t)
-  // A byte at a time, so the first download never ends on its own.
-  let ended = false
-  t.after(() => {
-    ended = true
-  })
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
+  let body,
+    pulls = 0
+  t.after(() => body?.close())
   host.answer = () =>
     new Response(
       new ReadableStream({
-        async pull(controller) {
-          await delay(200)
-          if (ended) controller.close()
-          else controller.enqueue(new Uint8Array([0]))
+        start(controller) {
+          body = controller
+        },
+        pull() {
+          pulls++
         },
       }),
       { headers: { 'Content-Type': 'image/png' } },
     )
   const draw = host.draw()
-  await waitFor(() => host.requests.length === 1)
-  // Past the deadline, without waiting for it.
-  const now = Date.now()
-  t.mock.method(Date, 'now', () => now + 4000)
+  await waitFor(() => host.requests.length === 1 && pulls > 0)
+  const before = pulls
+  body.enqueue(new Uint8Array([0]))
+  await waitFor(() => pulls > before)
+  // Expire the first download's age without firing its quiet timer.
+  t.mock.timers.setTime(Date.now() + 4000)
   host.answer = () =>
     new Response(png('second'), { headers: { 'Content-Type': 'image/png' } })
-  assert.equal(
-    await Promise.race([
-      refreshRemoteImage(SOURCE, host.place, host.fetch),
-      delay(10_000).then(() => 'still waiting'),
-    ]),
-    undefined,
-  )
+  await refreshRemoteImage(SOURCE, host.place, host.fetch)
   assert.ok(host.requests[0].init.signal.aborted)
-  // The stopped download's draw had nothing to show; the next has the refresh.
   assert.equal((await draw).status, 404)
   assert.deepEqual(await host.draw(), drawn('second'))
 })
@@ -462,9 +472,36 @@ test('downloads that take a folder past its size delete the images checked longe
   const time = new Date(Date.now() - 2 * 60 * 60 * 1000)
   await utimes(`${old}.json`, time, time)
   const draft = { ...host.place, note: null }
-  // Under the folder's size, the first download keeps everything.
+  // Wait for the real folder scan before checking its negative eviction decision.
+  const scanned = Promise.withResolvers()
+  const entries = new Set([
+    old,
+    `${old}.json`,
+    join(folder, NAME),
+    join(folder, `${NAME}.json`),
+  ])
+  const lstat = fs.lstat,
+    remove = fs.rm,
+    removals = []
+  t.mock.method(fs, 'lstat', async (...args) => {
+    const info = await lstat(...args)
+    entries.delete(String(args[0]))
+    if (!entries.size) scanned.resolve()
+    return info
+  })
+  t.mock.method(fs, 'rm', async (path, ...args) => {
+    if (path === old || path === `${old}.json`) removals.push(path)
+    return remove(path, ...args)
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
   await host.draw(SOURCE, draft)
-  await delay(100)
+  await scanned.promise
+  await new Promise(setImmediate)
+  assert.deepEqual(removals, [])
   assert.ok((await readdir(folder)).includes('a'.repeat(64)))
   // The next one passes it within the same hour.
   host.answer = () =>
@@ -617,17 +654,45 @@ test('a paused remote image consumer keeps disk reads bounded and cancellation c
     }),
   )
   const open = fs.open
-  let file
+  let file,
+    stream,
+    activeReads = 0,
+    overrun
   let readBytes = 0
+  const quiescent = Promise.withResolvers()
+  const check = () => {
+    if (overrun) quiescent.reject(overrun)
+    else if (
+      stream?.isPaused() &&
+      activeReads === 0 &&
+      stream.readableLength >= stream.readableHighWaterMark
+    )
+      quiescent.resolve()
+  }
   t.mock.method(fs, 'open', async (...args) => {
     const opened = await open(...args)
     if (args[0] === host.kept) {
       file = opened
+      const createStream = opened.createReadStream.bind(opened)
+      t.mock.method(opened, 'createReadStream', (...args) => {
+        stream = createStream(...args)
+        stream.on('pause', () => setImmediate(check))
+        stream.on('error', quiescent.reject)
+        return stream
+      })
       const read = opened.read.bind(opened)
       t.mock.method(opened, 'read', async (...args) => {
-        const result = await read(...args)
-        readBytes += result.bytesRead
-        return result
+        activeReads++
+        try {
+          const result = await read(...args)
+          readBytes += result.bytesRead
+          if (readBytes > 3 * 64 * 1024)
+            overrun = new Error(`Read ${readBytes} bytes without a consumer.`)
+          return result
+        } finally {
+          activeReads--
+          setImmediate(check)
+        }
       })
     }
     return opened
@@ -639,9 +704,9 @@ test('a paused remote image consumer keeps disk reads bounded and cancellation c
   })
   const response = await remoteImageResponse(SOURCE, host.place, host.fetch)
   try {
-    await waitFor(() => readBytes > 0)
-    // Give a missing backpressure strategy time to read ahead.
-    await delay(50)
+    await quiescent.promise
+    assert.equal(activeReads, 0)
+    assert.equal(overrun, undefined)
     assert.ok(
       readBytes <= 3 * 64 * 1024,
       `Read ${readBytes} bytes without a consumer.`,

@@ -148,7 +148,14 @@ export function formattedFindViewport(view: EditorView): FindRange {
     const visible = visibleRange(view.contentDOM, (node, offset) =>
       view.posAtDOM(node, offset),
     )
-    shown = visible ? findWindow(visible, view.state.doc.length) : view.viewport
+    // Off screen, as while its pane slides in, the view draws the text near
+    // its scroll; its viewport can be a whole long line.
+    const drawn = view.visibleRanges
+    shown = visible
+      ? findWindow(visible, view.state.doc.length)
+      : drawn.length
+        ? { from: drawn[0]!.from, to: drawn.at(-1)!.to }
+        : view.viewport
   }
   // Layout can still describe the previous document during an edit.
   const length = view.state.doc.length
@@ -198,6 +205,14 @@ export const formattedFindWindow = [
       passive: true,
     })
     window.addEventListener('resize', schedule)
+    // A pane sliding in, as from the source view's side, changes no size or
+    // scroll: what it shows is measured once it is in place, or snaps there
+    // when its slide is cancelled, as when motion is reduced.
+    const slid = (event: Event) => {
+      if ((event.target as Node).contains(view.dom)) schedule()
+    }
+    document.addEventListener('transitionend', slid, true)
+    document.addEventListener('transitioncancel', slid, true)
     return {
       update(update) {
         if (update.docChanged || update.selectionSet || update.viewportChanged)
@@ -208,6 +223,8 @@ export const formattedFindWindow = [
         resize.disconnect()
         document.removeEventListener('scroll', schedule, { capture: true })
         window.removeEventListener('resize', schedule)
+        document.removeEventListener('transitionend', slid, true)
+        document.removeEventListener('transitioncancel', slid, true)
       },
     }
   }),

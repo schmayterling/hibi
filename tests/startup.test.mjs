@@ -76,8 +76,10 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   )
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await pressShortcut(app, `${mod}+Shift+]`)
+  await page.locator('.editor-panes.mode-markdown').waitFor()
   assert.equal(await welcome().isVisible(), true)
   await pressShortcut(app, `${mod}+Shift+[`)
+  await page.locator('.editor-panes.mode-normal').waitFor()
   await rich.press('a')
   await welcome().waitFor({ state: 'hidden' })
   assert.deepEqual(

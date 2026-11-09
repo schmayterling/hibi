@@ -30,7 +30,7 @@ function inlineParser(state: EditorState) {
 }
 
 /** Retain at most one small source window, shared by syntax proof and projection. */
-function previewBudget(state: EditorState): SelectionBudget {
+export function previewBudget(state: EditorState): SelectionBudget {
   const doc = new DocInput(state.doc),
     pages = new Map<number, string>(),
     exhausted = Symbol(),

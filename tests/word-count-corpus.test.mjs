@@ -499,6 +499,7 @@ async function openCorpus(config) {
                 worker,
                 streamId: data.head.streamId,
                 tabId: data.head.tabId,
+                revision: data.head.revision,
               })
             return post(data, ...rest)
           }
@@ -565,7 +566,7 @@ async function openCorpus(config) {
       )
     }
     let opened = false
-    return { page, errors, open, close }
+    return { app, page, errors, open, close }
   } catch (error) {
     await close()
     throw error
@@ -580,8 +581,10 @@ async function openCorpus(config) {
 const formattedCount = async ({ source, text }) => {
   const shell = await window.hibi.getDocument()
   if (shell?.markdown !== source) return null
+  // A note opened into an empty tab keeps its tab id and version 0; only the
+  // revision tells its stream from the empty tab's.
   const open = window.countOpens.findLast(
-    (entry) => entry.tabId === shell.tabId,
+    (entry) => entry.tabId === shell.tabId && entry.revision === shell.revision,
   )
   const reply = window.countReplies.findLast(
     (entry) =>
@@ -616,6 +619,36 @@ const formattedCount = async ({ source, text }) => {
     },
   }
 }
+
+test('formatted count of a note opened into an empty tab waits for its own stream', async (t) => {
+  const { app, page, open, close } = await openCorpus(corpus.configs[0])
+  t.after(close)
+  await waitForAsync(page, formattedCount, { source: '', text: '' })
+  // A slow window: main has opened the note, the window still shows the
+  // empty tab and its count.
+  await app.evaluate(({ ipcMain }) => {
+    const original = ipcMain._invokeHandlers.get('document:open')
+    const held = new Promise((resolve) => {
+      globalThis.releaseOpen = resolve
+    })
+    ipcMain._invokeHandlers.set('document:open', async (...args) => {
+      const reply = await original(...args)
+      await held
+      return reply
+    })
+  })
+  const source = 'plain words'
+  const arg = { source, text: source }
+  try {
+    await open('held.md', source)
+    assert.equal(await page.evaluate(formattedCount, arg), null)
+  } finally {
+    await app.evaluate(() => globalThis.releaseOpen())
+  }
+  await waitForAsync(page, formattedCount, arg)
+  const { result, want } = await page.evaluate(formattedCount, arg)
+  assert.deepEqual({ words: result.words, characters: result.characters }, want)
+})
 
 test('canonical path keeps native word-count syntax choices', {
   timeout: 120000,

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -155,7 +155,7 @@ test('failed rich module reaches draft recovery and reload can retry it', {
     name: 'Document editor',
     exact: true,
   })
-  await editor.waitFor()
+  await waitForDocumentEditor(app, page)
   await editor.focus()
   await page.keyboard.insertText('recovered')
   await waitForAsync(

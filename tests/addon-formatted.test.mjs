@@ -245,7 +245,8 @@ for (const hook of ['decorate', 'layout', 'container']) {
         context.editor.registerFlavor({
           id: 'proof', name: 'Proof', kind: 'syntax', description: 'Proof', detect: () => true,
           syntax: { defineNodes: ['Proof', 'ProofMark'], parseInline: [{
-            name: 'Proof', parse(cx, next, pos) {
+            // Ahead of the built-in == highlight, which takes this text once it loads.
+            name: 'Proof', before: 'Escape', parse(cx, next, pos) {
               if (next !== 61 || cx.char(pos + 1) !== 61) return -1
               return cx.addDelimiter(delimiter, pos, pos + 2, true, true)
             }
@@ -324,7 +325,11 @@ test('installed flavor state stays current in static and editable table cells', 
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-cell-state-'))
   const profile = join(folder, 'profile')
   const file = join(folder, 'note.md')
-  const source = '# Title\n\n**body**\n\n| **head** |\n| --- |\n| **a\\|b** |\n'
+  // A note ending in a table opens editing its last cell, once its font has
+  // loaded, which can be after the caret moves below. The paragraph after it
+  // keeps the cells static until the test edits one.
+  const source =
+    '# Title\n\n**body**\n\n| **head** |\n| --- |\n| **a\\|b** |\n\ntail\n'
   await writeFile(file, source)
   await install(
     profile,

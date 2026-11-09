@@ -46,10 +46,12 @@ export async function lookUpSide(
         cached(provider, cachedOnly),
       )) ?? null,
   )
-  // Online answers do not replace a pack: offer every missing one.
+  // Online answers do not replace a pack: offer every missing one. A pack
+  // that cannot say whether it is installed is not offered.
   const installable: Lang[] = []
   for (const lang of langs)
-    if (await registry.installable(lang)) installable.push(lang)
+    if (await registry.installable(lang).catch(() => false))
+      installable.push(lang)
   return {
     definitions: { ...definitions, installable },
     thesaurus: { ...thesaurus, installable },

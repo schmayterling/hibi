@@ -10,6 +10,7 @@ import {
   waitForFormattedEditor,
 } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('settings registrations use addon ownership and clean up without collisions', () => {
   const Content = () => null
@@ -96,14 +97,13 @@ test('reopening settings cancels a pending Back close', {
       if (command === 'settings') window.settingsCommandCount++
     })
   })
-  const requests = async (count) =>
-    app.evaluate(async (_electron, expected) => {
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if (globalThis.recordingOffRequests === expected) return
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      throw new Error('Recording shutdown request did not arrive.')
-    }, count)
+  const requests = (count) =>
+    waitForAsync(
+      app,
+      (_electron, expected) => globalThis.recordingOffRequests === expected,
+      count,
+      { label: `recording shutdown request ${count} arrives` },
+    )
   await clickMenu(app, 'Settings')
   const settings = page.getByRole('main', { name: /^settings$/i })
   const back = page.getByRole('button', { name: /^back to app$/i })

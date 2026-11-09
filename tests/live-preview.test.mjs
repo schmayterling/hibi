@@ -3072,3 +3072,323 @@ test('selecting the whole note includes the hidden fences at its ends', {
     assert.equal(result.caret, doc.indexOf('\n```', metadata.length), metadata)
   }
 })
+
+test('pending parse updates do not remap unchanged visible lines', {
+  timeout: 60000,
+}, async () => {
+  await harness.evaluate(() =>
+    window.livePreview.mount(
+      '## heading\n\nparagraph **bold**\n\n'.repeat(2000),
+      { width: 800, height: 600 },
+      { slice: 0 },
+    ),
+  )
+  await harness.waitForFunction(() => {
+    const preview = window.livePreview
+    const { viewport } = preview.view()
+    return preview.covered(viewport.from, viewport.to) && !preview.settling()
+  })
+  const work = await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const request = window.requestIdleCallback
+    const held = []
+    window.requestIdleCallback = (callback) => held.push(callback)
+    // Count actual position work, independent of how many idle slices a busy
+    // machine grants. Empty updates must not walk every drawn blank line.
+    const mapping = Object.getPrototypeOf(
+      Object.getPrototypeOf(view.state.changes([])),
+    )
+    const map = mapping.mapPos
+    let maps = 0
+    try {
+      view.dispatch({ changes: { from: 5, insert: 'x' } })
+      const settling = preview.settling()
+      const before = view.contentDOM.querySelectorAll('.hibi-lp-strong').length
+      mapping.mapPos = function (...args) {
+        if (this.empty) maps++
+        return map.apply(this, args)
+      }
+      for (let update = 0; update < 20; update++) view.dispatch({})
+      return {
+        settling,
+        before,
+        after: view.contentDOM.querySelectorAll('.hibi-lp-strong').length,
+        maps,
+      }
+    } finally {
+      mapping.mapPos = map
+      window.requestIdleCallback = request
+      for (const callback of held) request(callback)
+    }
+  })
+  assert.ok(work.settling, JSON.stringify(work))
+  assert.ok(work.before > 0, JSON.stringify(work))
+  assert.equal(work.after, work.before)
+  assert.ok(work.maps <= 80, JSON.stringify(work))
+  await harness.waitForFunction(() => !window.livePreview.settling())
+})
+
+test('updates without text changes still reveal, resolve and draw newly visible formatting', {
+  timeout: 60000,
+}, async () => {
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const doc =
+    '**one**\n\n[ref]\n\n**two**\n\nend' + '\n\nparagraph **far**'.repeat(2000)
+  try {
+    await harness.evaluate(async (doc) => {
+      const preview = window.livePreview
+      document.querySelector('.rich-pane').scrollTop = 0
+      preview.references.defined = new Set(['ref'])
+      preview.references.titles = { ref: 'Resolved title' }
+      await preview.mount(
+        doc,
+        { width: 800, height: 600 },
+        {
+          editable: true,
+          references: true,
+        },
+      )
+    }, doc)
+    // The async reference answer redraws through a refresh effect, without
+    // changing source text.
+    await harness.locator('.hibi-lp-link[title="Resolved title"]').waitFor()
+    await harness.evaluate(() => {
+      const view = window.livePreview.view()
+      view.focus()
+      view.dispatch({ selection: { anchor: 3 } })
+    })
+    await harness.waitForFunction(() =>
+      [...document.querySelectorAll('.cm-line')].some(
+        (line) => line.textContent === '**one**',
+      ),
+    )
+    await harness.evaluate(() => {
+      const view = window.livePreview.view()
+      view.dispatch({
+        selection: { anchor: view.state.doc.toString().indexOf('two') + 1 },
+      })
+    })
+    await harness.waitForFunction(() => {
+      const lines = [...document.querySelectorAll('.cm-line')].map(
+        (line) => line.textContent,
+      )
+      return lines.includes('one') && lines.includes('**two**')
+    })
+    await harness.evaluate(() => window.livePreview.view().contentDOM.blur())
+    await harness.waitForFunction(() =>
+      [...document.querySelectorAll('.cm-line')].some(
+        (line) => line.textContent === 'two',
+      ),
+    )
+    await harness.evaluate(() => {
+      const preview = window.livePreview
+      preview.scrollTo(preview.view().state.doc.length - 5)
+    })
+    await harness.waitForFunction(() =>
+      [...document.querySelectorAll('.hibi-lp-strong')].some(
+        (node) => node.textContent === 'far',
+      ),
+    )
+    assert.equal(
+      await harness.evaluate(() =>
+        window.livePreview.view().state.doc.toString(),
+      ),
+      doc,
+    )
+  } finally {
+    await session.detach()
+  }
+})
+
+test('a far viewport reached during an edit reparse becomes formatted when idle work resumes', {
+  timeout: 60000,
+}, async () => {
+  const unit = '# heading\n\nparagraph **bold**\n\n'
+  await harness.evaluate(async (unit) => {
+    const preview = window.livePreview
+    document.querySelector('.rich-pane').scrollTop = 0
+    await preview.mount(
+      unit.repeat(Math.ceil((1024 * 1024) / unit.length)),
+      { width: 800, height: 600 },
+      { slice: 0 },
+    )
+  }, unit)
+  await harness.waitForFunction(() => {
+    const preview = window.livePreview
+    const { viewport } = preview.view()
+    return preview.covered(viewport.from, viewport.to) && !preview.settling()
+  })
+  const pending = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const request = window.requestIdleCallback
+    const held = []
+    window.requestIdleCallback = (callback) => held.push(callback)
+    window.releaseScrollParse = () => {
+      window.requestIdleCallback = request
+      for (const callback of held) request(callback)
+    }
+    view.dispatch({ changes: { from: 5, insert: 'x' } })
+    const editing = preview.settling()
+    const target = view.state.doc.lineAt(
+      Math.floor(view.state.doc.length / 2),
+    ).from
+    preview.scrollTo(target)
+    await preview.settle()
+    await preview.settle()
+    return {
+      editing,
+      settling: preview.settling(),
+      target,
+      viewport: view.viewport,
+      strong: [...document.querySelectorAll('.hibi-lp-strong')].filter(
+        (node) => Math.abs(view.posAtDOM(node) - target) < 20000,
+      ).length,
+    }
+  })
+  try {
+    assert.ok(pending.editing && pending.settling, JSON.stringify(pending))
+    assert.ok(pending.viewport.from > 256 * 1024, JSON.stringify(pending))
+    assert.equal(pending.strong, 0, JSON.stringify(pending))
+  } finally {
+    await harness.evaluate(() => window.releaseScrollParse())
+  }
+  await harness.waitForFunction(
+    (target) => {
+      const preview = window.livePreview
+      return (
+        !preview.settling() &&
+        [...document.querySelectorAll('.hibi-lp-strong')].some(
+          (node) => Math.abs(preview.view().posAtDOM(node) - target) < 20000,
+        )
+      )
+    },
+    pending.target,
+    { timeout: 150000 },
+  )
+})
+
+test('multi-line input over select-all keeps the first block of a note not parsed yet', {
+  timeout: 120000,
+}, async () => {
+  const tail = 'old tail paragraph\n\n'.repeat(120000)
+  const notes = [
+    ['paragraph', 'first\n\n' + tail],
+    ['heading', '## first\n\n' + tail],
+    ['list', '- first\n- second\n\n' + tail],
+    ['quote', '> first\n\n' + tail],
+    ['fence', '```js\nconst a = 1\n```\n\n' + tail],
+    ['crlf', 'first\r\n\r\n' + tail.replaceAll('\n', '\r\n')],
+  ]
+  // Hidden metadata and a byte order mark keep what the parsed note gives.
+  const kept = [
+    ['frontmatter', '---\ntitle: a\n---\nfirst\n\n' + tail, true],
+    ['bom', '\uFEFFfirst\n\n' + tail],
+  ]
+  // The input as the editor's own multi-line input runs it: the handlers,
+  // then the default insert. Held, the view keeps the snapshot it opened with.
+  const input = (held) =>
+    harness.evaluate(
+      async ({ doc, frontmatter, held }) => {
+        const preview = window.livePreview
+        const setTimer = window.setTimeout
+        const idle = window.requestIdleCallback
+        const waiting = []
+        if (held) {
+          window.setTimeout = (run, delay, ...args) =>
+            delay
+              ? setTimer(run, delay, ...args)
+              : waiting.push(() => run(...args)) && 0
+          window.requestIdleCallback = (run) =>
+            waiting.push(() =>
+              run({ timeRemaining: () => 0, didTimeout: true }),
+            ) && 0
+        }
+        try {
+          await preview.mount(
+            doc,
+            { width: 800, height: 600 },
+            { slice: 0, editable: true, frontmatter },
+          )
+          if (!held)
+            await new Promise(function wait(resolve) {
+              if (preview.covered(0, 1)) resolve()
+              else setTimer(() => wait(resolve), 16)
+            })
+          const view = preview.view()
+          const covered = preview.covered(0, 1)
+          view.dispatch({
+            selection: { anchor: 0, head: view.state.doc.length },
+          })
+          const before = view.state.doc
+          const changes = []
+          const dispatch = view.dispatch.bind(view)
+          view.dispatch = (...specs) => {
+            const transaction = specs[0]?.startState
+              ? specs[0]
+              : view.state.update(...specs)
+            changes.push(transaction.changes)
+            return dispatch(transaction)
+          }
+          const { from, to } = view.state.selection.main
+          const insert = () =>
+            view.state.update(view.state.replaceSelection('x\ny'))
+          const handled = view.state
+            .facet(view.constructor.inputHandler)
+            .some((handler) => handler(view, from, to, 'x\ny', insert))
+          if (!handled) dispatch(insert())
+          view.dispatch = dispatch
+          const ranges = []
+          for (const change of changes)
+            change.iterChanges((fromA, toA) => ranges.push([fromA, toA]))
+          return {
+            covered,
+            handled,
+            length: before.length,
+            ranges,
+            text: view.state.doc.toString(),
+          }
+        } finally {
+          window.setTimeout = setTimer
+          window.requestIdleCallback = idle
+          for (const run of waiting) run()
+        }
+      },
+      {
+        doc: held.doc,
+        frontmatter: held.frontmatter ?? false,
+        held: held.held,
+      },
+    )
+  const results = {}
+  for (const [name, doc, frontmatter] of notes) {
+    const opened = await input({ doc, frontmatter, held: true })
+    results[name] = opened.text
+    // The view opened with the note's start not parsed, as a large note does.
+    assert.equal(opened.covered, false, name)
+    const parsed = await input({ doc, frontmatter, held: false })
+    assert.equal(parsed.covered, true, name)
+    // The same blocks as once the parse has read the start.
+    assert.equal(opened.text, parsed.text, name)
+    assert.equal(opened.handled, true, name)
+    // One change replaces the whole note.
+    assert.deepEqual(opened.ranges, [[0, opened.length]], name)
+  }
+  assert.equal(results.paragraph, 'x\n\ny')
+  for (const [name, doc, frontmatter] of kept) {
+    const opened = await input({ doc, frontmatter, held: true })
+    const parsed = await input({ doc, frontmatter, held: false })
+    assert.equal(opened.text, parsed.text, name)
+  }
+  // A first block the preview's budget cannot finish keeps the default insert.
+  const fence = await input({
+    doc: '```js\n' + 'old tail line\n'.repeat(120000) + '```\n',
+    held: true,
+  })
+  assert.deepEqual(
+    { covered: fence.covered, handled: fence.handled, text: fence.text },
+    { covered: false, handled: false, text: 'x\ny' },
+  )
+})

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, type Dir } from 'node:fs'
+import { type BigIntStats, constants, type Dir } from 'node:fs'
 import {
   type FileHandle,
   lstat,
@@ -7,11 +7,13 @@ import {
   open,
   opendir,
   rename,
+  stat,
   unlink,
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 import { sameFileIdentity } from '../shared/file-identity.ts'
+import type { NoteHeading } from '../shared/note-metadata.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 import {
   parseWorkspaceMetadata,
@@ -23,6 +25,8 @@ import {
   HeadingStoreWriter,
   headingDirectoryAvailable,
   headingStorePattern,
+  inlineHeadingCount,
+  inlineHeadingLength,
   readHeadingStore,
   validHeadingStore,
 } from './workspace-metadata-heading-store.ts'
@@ -66,10 +70,19 @@ type CacheRecord = {
   fingerprint: string
   page: WorkspaceMetadataPage
   headings?: HeadingStoreRecord
+  inlineHeadings?: NoteHeading[]
 }
 const idPattern = /^[a-f0-9]{64}$/
 const recordPattern = /^[a-f0-9]{64}\.json$/
 const temporaryPattern = /^\.[a-f0-9]{64}-[a-f0-9-]{36}(?:\.hidx|\.hdat)?\.tmp$/
+// Cache paths reach the checked folder itself, not its name, so a folder
+// renamed and replaced with a link after the check keeps every write. macOS
+// finds it by volume and file id, Linux through the open descriptor. Windows
+// has neither: there a new file must be in the checked folder before it gets
+// a byte, and each removal checks the path again.
+let pinned:
+  | { base: string; dev: bigint; ino: bigint; handle?: FileHandle }
+  | undefined
 let pruning: Dir | undefined
 let parsing:
   | {
@@ -138,21 +151,111 @@ function valid(page: WorkspaceMetadataPage): boolean {
   )
 }
 
-async function cacheAvailable(): Promise<boolean> {
-  if (!cacheDirectory || !buildIdentity) return false
-  try {
-    const info = await lstat(cacheDirectory)
-    return info.isDirectory() && !info.isSymbolicLink()
-  } catch {
+function validInlineHeadings(
+  headings: unknown,
+  count: number | undefined,
+): boolean {
+  if (
+    !Array.isArray(headings) ||
+    headings.length !== count ||
+    headings.length > inlineHeadingCount
+  )
     return false
+  let length = 0
+  for (const heading of headings) {
+    // Heading pages return these objects as stored, so nothing else may ride along.
+    if (
+      Object.keys(heading).length !== 2 ||
+      !Number.isInteger(heading.depth) ||
+      heading.depth < 1 ||
+      heading.depth > 6 ||
+      typeof heading.text !== 'string'
+    )
+      return false
+    length += heading.text.length
+  }
+  return length <= inlineHeadingLength
+}
+
+/** The checked cache folder's path for cache files, or undefined. */
+async function cacheAvailable(create = false): Promise<string | undefined> {
+  if (!cacheDirectory || !buildIdentity) return undefined
+  try {
+    const info = await lstat(cacheDirectory, { bigint: true })
+    if (!info.isDirectory() || info.isSymbolicLink()) return undefined
+    if (!pinned || !sameFileIdentity(pinned, info)) await pin(info)
+    return pinned?.base
+  } catch (error) {
+    if (create && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      try {
+        await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
+      } catch {
+        return undefined
+      }
+      return cacheAvailable()
+    }
+    return undefined
   }
 }
 
-async function readRecord(id: string): Promise<CacheRecord | null> {
-  if (!cacheDirectory || !idPattern.test(id) || !(await cacheAvailable()))
-    return null
+async function pin(info: BigIntStats): Promise<void> {
+  await pinned?.handle?.close().catch(() => {})
+  pinned = undefined
+  const path = cacheDirectory as string
+  if (process.platform === 'win32') {
+    pinned = { base: path, dev: info.dev, ino: info.ino }
+    return
+  }
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  )
   try {
-    const path = join(cacheDirectory, `${id}.json`)
+    const opened = await handle.stat({ bigint: true })
+    const base =
+      process.platform === 'darwin'
+        ? `/.vol/${opened.dev}/${opened.ino}`
+        : `/proc/self/fd/${handle.fd}/`
+    if (
+      sameFileIdentity(opened, info) &&
+      sameFileIdentity(await stat(base, { bigint: true }), opened)
+    ) {
+      pinned = { base, dev: opened.dev, ino: opened.ino, handle }
+      return
+    }
+  } catch {
+    // Without such paths the cache stays off rather than following a name.
+  }
+  await handle.close()
+}
+
+async function created(
+  base: string,
+  path: string,
+  file: FileHandle,
+): Promise<boolean> {
+  const [opened, entry, folder] = await Promise.all([
+    file.stat({ bigint: true }),
+    lstat(path, { bigint: true }),
+    stat(base, { bigint: true }),
+  ])
+  return (
+    sameFileIdentity(opened, entry) &&
+    !!pinned &&
+    sameFileIdentity(folder, pinned)
+  )
+}
+
+async function removeEntry(base: string, name: string): Promise<void> {
+  if ((await cacheAvailable()) === base)
+    await unlink(join(base, name)).catch(() => {})
+}
+
+async function readRecord(id: string): Promise<CacheRecord | null> {
+  const base = idPattern.test(id) ? await cacheAvailable() : undefined
+  if (!base) return null
+  try {
+    const path = join(base, `${id}.json`)
     const info = await lstat(path, { bigint: true })
     if (!info.isFile() || info.isSymbolicLink()) return null
     // O_NOFOLLOW closes the lstat/open race; a fixed read also bounds file growth.
@@ -210,7 +313,7 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
         diskIndexVersion(opened) !== diskIndexVersion(after) ||
         diskIndexVersion(opened) !== diskIndexVersion(pathInfo) ||
         pathInfo.isSymbolicLink() ||
-        !(await cacheAvailable())
+        (await cacheAvailable()) !== base
       )
         return null
       const value = reader.finish() as CacheRecord
@@ -231,7 +334,14 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
                 version: page.version,
                 fingerprint: value.fingerprint,
               }))) &&
-        (page.metadata.headings.count === 0 || !!value.headings)
+        (!value.inlineHeadings ||
+          validInlineHeadings(
+            value.inlineHeadings,
+            page.metadata.headings.count,
+          )) &&
+        (page.metadata.headings.count === 0 ||
+          !!value.headings ||
+          !!value.inlineHeadings)
         ? value
         : null
     } finally {
@@ -290,15 +400,22 @@ async function readHeadings(
     return null
   const complete =
     record.page.metadata.headings.complete && record.page.syntax.complete
+  if (record.inlineHeadings) {
+    // Inline lists are far below a heading page's byte bound.
+    const items = record.inlineHeadings.slice(offset, offset + limit)
+    const nextOffset = offset + items.length
+    return {
+      items,
+      nextOffset,
+      hasMore: nextOffset < record.inlineHeadings.length,
+      complete,
+    }
+  }
   if (!record.headings)
     return { items: [], nextOffset: offset, hasMore: false, complete }
-  return readHeadingStore(
-    cacheDirectory as string,
-    record.headings,
-    offset,
-    limit,
-    complete,
-  )
+  const base = await cacheAvailable()
+  if (!base) return null
+  return readHeadingStore(base, record.headings, offset, limit, complete)
 }
 
 async function* resultPages(
@@ -340,21 +457,18 @@ async function remember(
   page: WorkspaceMetadataPage,
   fingerprint: string,
   headings?: HeadingStoreRecord,
+  inlineHeadings?: NoteHeading[],
 ): Promise<boolean> {
-  if (
-    !cacheDirectory ||
-    !buildIdentity ||
-    !page.id ||
-    !idPattern.test(page.id) ||
-    !page.version.startsWith('disk:')
-  )
+  if (!page.id || !idPattern.test(page.id) || !page.version.startsWith('disk:'))
     return false
-  const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
+  const base = await cacheAvailable(true)
+  if (!base) return false
+  const temporary = join(base, `.${page.id}-${randomUUID()}.tmp`)
+  let renamed = false
   try {
-    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
-    if (!(await cacheAvailable())) return false
     const file = await open(temporary, 'wx', 0o600)
     try {
+      if (!(await created(base, temporary, file))) return false
       const writer = new RecordWriter()
       const tokens = recordTokens({
         schema,
@@ -362,6 +476,7 @@ async function remember(
         fingerprint,
         page,
         headings,
+        inlineHeadings,
       })
       const write = async (slice: RecordToken[]) => {
         const buffer = Buffer.from(`${JSON.stringify(slice)}\n`)
@@ -380,14 +495,15 @@ async function remember(
     } finally {
       await file.close()
     }
-    if (await cacheAvailable()) {
-      await rename(temporary, join(cacheDirectory, `${page.id}.json`))
+    if ((await cacheAvailable()) === base) {
+      await rename(temporary, join(base, `${page.id}.json`))
+      renamed = true
       return true
     }
   } catch {
     // Cache writes are optional; the parsed page remains usable.
   } finally {
-    await unlink(temporary).catch(() => {})
+    if (!renamed) await unlink(temporary).catch(() => {})
   }
   return false
 }
@@ -423,12 +539,12 @@ async function clearPruning(): Promise<void> {
 }
 
 async function cleanupTemporaries(): Promise<void> {
-  if (!cacheDirectory || !(await cacheAvailable())) return
+  const base = await cacheAvailable()
+  if (!base) return
   try {
-    const directory = await opendir(cacheDirectory)
+    const directory = await opendir(base)
     for await (const entry of directory) {
-      if (temporaryPattern.test(entry.name) && (await cacheAvailable()))
-        await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+      if (temporaryPattern.test(entry.name)) await removeEntry(base, entry.name)
     }
   } catch {
     // Cache maintenance must not prevent indexing.
@@ -438,7 +554,8 @@ async function cleanupTemporaries(): Promise<void> {
 async function finishBuild(remove: readonly string[]) {
   if (remove.length > 64 || remove.some((name) => !recordPattern.test(name)))
     throw new RangeError('Invalid metadata cache names')
-  if (!cacheDirectory || !(await cacheAvailable())) {
+  const base = await cacheAvailable()
+  if (!base) {
     await clearPruning()
     return null
   }
@@ -447,13 +564,11 @@ async function finishBuild(remove: readonly string[]) {
       const record = await readRecord(name.slice(0, -5))
       if (record?.headings)
         for (const suffix of ['hidx', 'hdat'])
-          await unlink(
-            join(cacheDirectory, `${record.headings.key}.${suffix}`),
-          ).catch(() => {})
-      await unlink(join(cacheDirectory, name)).catch(() => {})
+          await removeEntry(base, `${record.headings.key}.${suffix}`)
+      await removeEntry(base, name)
       headingLocations.delete(name.slice(0, -5))
     }
-    pruning ??= await opendir(cacheDirectory)
+    pruning ??= await opendir(base)
     const names: string[] = []
     // Bound enumeration itself, including unrelated entries.
     for (let count = 0; count < 64; count++) {
@@ -473,9 +588,9 @@ async function finishBuild(remove: readonly string[]) {
           !record?.headings ||
           !entry.name.startsWith(`${record.headings.key}.`)
         )
-          await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+          await removeEntry(base, entry.name)
       } else if (temporaryPattern.test(entry.name))
-        await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+        await removeEntry(base, entry.name)
     }
     return { names, done: false }
   } catch {
@@ -549,28 +664,45 @@ async function derive(
   fallback = false,
   current: () => Promise<boolean> = async () => true,
 ) {
-  let directory = headingDirectory
-  if (
-    cacheDirectory &&
-    buildIdentity &&
-    idPattern.test(input.id) &&
-    input.version.startsWith('disk:')
-  ) {
-    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 }).catch(
-      () => {},
-    )
-    if (await cacheAvailable()) directory = cacheDirectory
-  }
+  let directory =
+    (idPattern.test(input.id) &&
+      input.version.startsWith('disk:') &&
+      (await cacheAvailable(true))) ||
+    headingDirectory
   if (!(await headingDirectoryAvailable(directory))) return null
   let writer: HeadingStoreWriter | undefined
-  const onHeading = (heading: Parameters<HeadingStoreWriter['add']>[0]) => {
-    writer ??= new HeadingStoreWriter(
-      directory,
+  const store = (into: string) =>
+    new HeadingStoreWriter(
+      into,
       idPattern.test(input.id)
         ? input.id
         : createHash('sha256').update(input.path).digest('hex'),
       headingIdentity(input),
     )
+  const inline: NoteHeading[] = []
+  let inlineLength = 0
+  const onHeading = (heading: NoteHeading) => {
+    if (
+      !writer &&
+      inline.length < inlineHeadingCount &&
+      inlineLength + heading.text.length <= inlineHeadingLength
+    ) {
+      inline.push(heading)
+      inlineLength += heading.text.length
+      return
+    }
+    if (!writer) {
+      try {
+        writer = store(directory)
+      } catch (error) {
+        // A cache that refuses heading files is not a note read failure:
+        // like an unsaved record's, the headings wait in a temporary file.
+        if (directory === headingDirectory) throw error
+        directory = headingDirectory
+        writer = store(directory)
+      }
+      for (const earlier of inline.splice(0)) writer.add(earlier)
+    }
     writer.add(heading)
   }
   let page: WorkspaceMetadataPage
@@ -596,6 +728,8 @@ async function derive(
       } catch (error) {
         writer?.abort()
         writer = undefined
+        inline.length = 0
+        inlineLength = 0
         if (readFailure(error)) throw error
         page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
       }
@@ -604,7 +738,7 @@ async function derive(
     page.metadata.headings = {
       items: [],
       complete: page.metadata.headings.complete,
-      count: headings?.count ?? 0,
+      count: headings?.count ?? inline.length,
       paged: true,
     }
     if (!(await headingDirectoryAvailable(directory)) || !(await current())) {
@@ -612,23 +746,42 @@ async function derive(
       return null
     }
     const previous = headingLocations.get(input.id)
-    headingLocations.set(input.id, {
+    const location = {
       version: input.version,
       fingerprint: input.fingerprint,
       path: input.path,
       directory,
       store: headings,
       complete: page.metadata.headings.complete && page.syntax.complete,
-    })
+    }
+    headingLocations.set(input.id, location)
     if (previous?.store && previous.directory === headingDirectory)
       for (const suffix of ['hidx', 'hdat'])
         await unlink(
           join(previous.directory, `${previous.store.key}.${suffix}`),
         ).catch(() => {})
     parentPort?.postMessage({ parsed: true })
-    if (directory === cacheDirectory || !headings) {
-      if (await remember(page, input.fingerprint, headings))
+    if (directory !== headingDirectory || !headings) {
+      if (
+        await remember(
+          page,
+          input.fingerprint,
+          headings,
+          inline.length ? inline : undefined,
+        )
+      )
         headingLocations.delete(input.id)
+      else if (inline.length) {
+        // Without a saved record, headings wait in a temporary heading file.
+        headingLocations.delete(input.id)
+        writer = store(headingDirectory)
+        for (const heading of inline) writer.add(heading)
+        headingLocations.set(input.id, {
+          ...location,
+          directory: headingDirectory,
+          store: writer.finish(),
+        })
+      }
     }
     return page
   } catch (error) {

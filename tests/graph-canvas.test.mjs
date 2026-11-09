@@ -188,42 +188,34 @@ test('hit-testing finds the closest dot or its label through the grid', () => {
   assert.equal(at(5000 + 200, 5000, 0.01), 2)
 })
 
-function run(graph, reduced, returnBuffers = true) {
-  return new Promise((resolve) => {
-    const frames = []
-    const layout = createLayout((frame) => {
-      frames.push(frame)
-      if (frame.settled) resolve({ frames, layout })
-      else if (returnBuffers)
-        setImmediate(() =>
-          layout.receive({ type: 'buffer', buffer: frame.positions.buffer }),
-        )
-    })
-    const topology = graphTopology(graph)
-    layout.receive({
-      type: 'graph',
-      version: 1,
-      edges: topology.edges,
-      positions: new Float32Array(topology.nodes.length * 2).fill(Number.NaN),
-      reduced,
-    })
-    if (!returnBuffers) setTimeout(() => resolve({ frames, layout }), 400)
+function run(tasks, graph, reduced, returnBuffers = true) {
+  const result = tasks.layout(undefined, returnBuffers)
+  const topology = graphTopology(graph)
+  result.layout.receive({
+    type: 'graph',
+    version: 1,
+    edges: topology.edges,
+    positions: new Float32Array(topology.nodes.length * 2).fill(Number.NaN),
+    reduced,
   })
+  tasks.until(() => !tasks.pending)
+  return result
 }
 
-test('layout steps off the page, settles, and never queues unreturned frames', async () => {
+test('layout steps off the page, settles, and never queues unreturned frames', (t) => {
+  const tasks = pacedTasks(t)
   const graph = denseGraph(300, 600)
-  const reduced = await run(graph, true)
+  const reduced = run(tasks, graph, true)
   const last = reduced.frames.at(-1)
   // Reduced motion keeps the existing 160-step settle and publishes only its result.
   assert.equal(last.ticks, 160)
   assert.ok(reduced.frames.length <= 2)
   assert.ok(last.positions.every(Number.isFinite))
-  const moving = await run(graph, false)
+  const moving = run(tasks, graph, false)
   assert.ok(moving.frames.at(-1).ticks >= 290)
   assert.ok(moving.frames.length > 50)
   // Two buffers in flight: an unresponsive page receives two frames, not hundreds.
-  const busy = await run(graph, false, false)
+  const busy = run(tasks, graph, false, false)
   busy.layout.stop()
   assert.equal(busy.frames.length, 2)
 })
@@ -267,12 +259,16 @@ function pacedTasks(t) {
         }
       }
     },
-    layout(pieces) {
+    get pending() {
+      return tasks.size
+    },
+    layout(pieces, returnBuffers = true) {
       const frames = []
       const layout = createLayout(
         (frame) => {
           frames.push({ ...frame, positions: frame.positions.slice() })
-          layout.receive({ type: 'buffer', buffer: frame.positions.buffer })
+          if (returnBuffers)
+            layout.receive({ type: 'buffer', buffer: frame.positions.buffer })
         },
         pieces ? 8 : undefined,
         pieces,
@@ -436,9 +432,10 @@ test('a page laying out 20,000 notes and 60,000 links runs one slice of work per
   assert.deepEqual(page.frames.at(-1), worker.frames.at(-1))
 })
 
-test('topology changes keep laid-out notes and seed new ones beside a neighbor', async () => {
+test('topology changes keep laid-out notes and seed new ones beside a neighbor', async (t) => {
+  const tasks = pacedTasks(t)
   const graph = denseGraph(60, 90)
-  const { frames, layout } = await run(graph, true)
+  const { frames, layout } = run(tasks, graph, true)
   const before = frames.at(-1).positions
   const next = graphTopology({
     nodes: [...graph.nodes, { id: 'new.md', label: 'new', degree: 1 }],

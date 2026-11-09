@@ -7,6 +7,7 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { diagnosticEvents } from '../src/shared/local-diagnostics.ts'
 import { electron, stopElectronTree } from './electron.mjs'
+import { waitForAsync } from './poll.mjs'
 
 async function launchFixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-diagnostic-native-'))
@@ -77,12 +78,11 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     text.split('\n').filter((line) => line.includes(`"code":"${code}"`)).length
   assert.equal(count(expected.report, 'COMPILER_PROCESS_FAILED'), 1)
   await app.evaluate(() => globalThis.diagnosticFixture.exception())
-  let captured
-  for (let i = 0; i < 100; i++) {
-    captured = await app.evaluate(() => globalThis.diagnosticFixture.report())
-    if (captured.text.includes('MAIN_EXCEPTION') && captured.dialogs) break
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
+  await waitForAsync(app, async () => {
+    const { text, dialogs } = await globalThis.diagnosticFixture.report()
+    return text.includes('MAIN_EXCEPTION') && dialogs
+  })
+  let captured = await app.evaluate(() => globalThis.diagnosticFixture.report())
   assert.equal(captured.dialogs, 1)
   assert.ok(captured.text.includes('MAIN_EXCEPTION'))
   assert.ok(captured.text.includes('"frames":[[1,'))

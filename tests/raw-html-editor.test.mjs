@@ -6,6 +6,7 @@ import test from 'node:test'
 import { marked } from 'marked'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -92,8 +93,7 @@ test('literal html stays inert through native body edits, source switches and cl
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   const saved = (expected) =>
     waitForAsync(
       page,
@@ -262,8 +262,7 @@ async function rawCMFixture(t) {
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   const saved = (expected) =>
     waitForAsync(
       page,

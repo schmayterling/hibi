@@ -73,6 +73,8 @@ function fixture(t, source = 'one two one') {
 }
 
 test('find uses channel tasks after real build steps and closes ports on completion, cancel and dispose', async (t) => {
+  let clock = 0
+  t.mock.method(performance, 'now', () => ++clock)
   const NativeChannel = MessageChannel,
     channels = []
   t.mock.method(
@@ -476,39 +478,26 @@ test('reference preparation yields to find, cancels and reacquires without parti
     '../src/shared/markdown-source-references.ts'
   )
   const update = MarkdownSourceReferences.prototype.update
-  // Every two slow steps below cost a timer turn. Few definitions keep each reply
-  // within a handful of turns on coarse or busy Windows timers.
   const f = fixture(t, '[ref]: /first\n\n'.repeat(5))
   let entered = false,
-    cancel = false,
-    turn = 0
+    clock = 0
+  t.mock.method(performance, 'now', () => clock)
   const turns = new Set()
-  const timer = setInterval(() => turn++, 0)
-  t.after(() => clearInterval(timer))
   t.mock.method(
     MarkdownSourceReferences.prototype,
     'update',
     function* (...args) {
       for (const step of update.apply(this, args)) {
-        turns.add(turn)
+        turns.add(
+          f.messages.filter((reply) => reply.type === 'metadata-progress')
+            .length,
+        )
         if (!entered) {
           entered = true
           f.find(1, 0, 'absent')
-          if (cancel)
-            setTimeout(
-              () =>
-                f.worker.receive({
-                  type: 'cancel-metadata',
-                  epoch: 'first',
-                  id: 2,
-                  release: false,
-                }),
-              0,
-            )
         }
-        // Slow steps make slicing deterministic across timer resolutions.
-        const end = performance.now() + 1
-        while (performance.now() < end) {}
+        // One real generator step fills a metadata slice.
+        clock += 2
         yield step
       }
     },
@@ -542,8 +531,16 @@ test('reference preparation yields to find, cancels and reacquires without parti
     release: true,
   })
   entered = false
-  cancel = true
   request(2)
+  await f.next(
+    (message) => message.type === 'metadata-progress' && message.id === 2,
+  )
+  f.worker.receive({
+    type: 'cancel-metadata',
+    epoch: 'first',
+    id: 2,
+    release: false,
+  })
   await f.next(
     (message) => message.type === 'metadata-canceled' && message.id === 2,
   )
@@ -559,7 +556,6 @@ test('reference preparation yields to find, cancels and reacquires without parti
       .done,
     true,
   )
-  cancel = false
   request(3)
   assert.equal(
     (await f.next((message) => message.type === 'metadata' && message.id === 3))
@@ -732,11 +728,30 @@ test('worker source replication is ordered, atomic, and query replies name the e
   })
 })
 
-test('worker replaces pending queries, cancels coverage on edits, and releases disposed work', async (t) => {
+test('worker replaces pending queries, cancels coverage on edits, and releases disposed work', (t) => {
+  const tasks = []
+  t.mock.method(
+    globalThis,
+    'MessageChannel',
+    class {
+      port1 = { onmessage: null, close() {} }
+      port2 = {
+        close() {},
+        postMessage: () => tasks.push(() => this.port1.onmessage?.()),
+      }
+    },
+  )
   const f = fixture(t, 'one two '.repeat(100000))
   f.find(1, 0, 'one')
   f.find(2, 0, 'two')
-  const result = await f.next(
+  while (!f.messages.some((reply) => reply.type === 'find' && reply.id === 2)) {
+    assert.ok(
+      tasks.length,
+      'find must schedule another task while work remains',
+    )
+    tasks.shift()()
+  }
+  const result = f.messages.find(
     (reply) => reply.type === 'find' && reply.id === 2,
   )
   assert.equal(result.location.total, 100000)
@@ -749,7 +764,8 @@ test('worker replaces pending queries, cancels coverage on edits, and releases d
   f.worker.receive({ type: 'cancel-find', epoch: 'first', id: 3 })
   f.find(4, 0, 'absent')
   f.worker.dispose()
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  // Deliver the same queue's stale callbacks, including ones closing ports could not retract.
+  while (tasks.length) tasks.shift()()
   assert.equal(
     f.messages.some(
       (reply) => reply.type === 'find' && [1, 3, 4].includes(reply.id),
@@ -802,6 +818,7 @@ test('iterable source bootstrap preserves raw seams without joining the document
 })
 
 test('worker maintenance preserves live find results and disposes its previous replica owner', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const commits = []
   const commit = SourceStore.prototype.commitCompaction
   t.mock.method(SourceStore.prototype, 'commitCompaction', function (change) {
@@ -832,9 +849,7 @@ test('worker maintenance preserves live find results and disposes its previous r
       .total,
     80,
   )
-  const deadline = performance.now() + 2000
-  while (!commits.length && performance.now() < deadline)
-    await new Promise((resolve) => setTimeout(resolve, 20))
+  t.mock.timers.tick(500)
   assert.deepEqual(commits, [1])
   f.find(2, 1, 'x', 40, 41)
   const result = await f.next(
@@ -844,7 +859,7 @@ test('worker maintenance preserves live find results and disposes its previous r
   assert.equal(result.location.current, 41)
   f.load('replacement', 'fresh')
   f.worker.dispose()
-  await new Promise((resolve) => setTimeout(resolve, 550))
+  t.mock.timers.tick(550)
   assert.deepEqual(commits, [1])
   assert.equal(
     f.messages.some((reply) => reply.type === 'error'),
@@ -1363,13 +1378,16 @@ test('rendered grammar config changes invalidate projection and unknown renderer
 
 test('rendered replacement validation cancels through the existing find channel', async (t) => {
   const original = RenderedTextIndex.prototype.prepareReplacement
-  let steps = 0
+  let steps = 0,
+    clock = 0
+  t.mock.method(performance, 'now', () => clock)
   t.mock.method(
     RenderedTextIndex.prototype,
     'prepareReplacement',
     function* (...args) {
       for (const step of original.apply(this, args)) {
         steps++
+        clock += 2
         yield step
       }
     },
@@ -1392,9 +1410,14 @@ test('rendered replacement validation cancels through the existing find channel'
 test('rendered projection cancels through queued tasks and resumes without another replica', async (t) => {
   const original = RenderedTextIndex.prototype.build,
     projections = []
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock)
   t.mock.method(RenderedTextIndex.prototype, 'build', function* () {
     projections.push(this)
-    return yield* original.call(this)
+    for (const step of original.call(this)) {
+      clock += 2
+      yield step
+    }
   })
   const f = fixture(t, 'hello **world**\n\n' + 'ordinary words. '.repeat(16384))
   f.find(1, 0, 'hello world', 0, 0, { mode: 'rendered' })

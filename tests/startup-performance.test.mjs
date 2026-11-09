@@ -169,6 +169,12 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // left, adds 528 (#878).
   // Reading display blocks as Obsidian reads fenced math, including their
   // closed state, preferences and shared list bounds, adds 894 (#731).
+  // Not taking a write's late storage notice for someone else's change, which
+  // made autocomplete forget words typed after a save, adds 97 (#936).
+  // Not taking an older storage notice over a newer commit, or over a newer
+  // schema learned from a refused write, adds 40 (#937).
+  // Applying an edit at every line of a large selection, such as Tab over a
+  // megabyte of code, in one pass over the source tree adds 1,207 (#964).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -210,7 +216,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         958 +
         924 +
         528 +
-        894,
+        894 +
+        97 +
+        40 +
+        1207,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

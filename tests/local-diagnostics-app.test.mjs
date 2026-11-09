@@ -376,11 +376,9 @@ test('default diagnostics preserve editing, use the raw bridge and export only s
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
   }, reportPath)
   await clickMenu(app, 'Save diagnostic report…')
-  let report = ''
-  for (let i = 0; i < 100 && !report; i++) {
-    report = await readFile(reportPath, 'utf8').catch(() => '')
-    if (!report) await new Promise((resolve) => setTimeout(resolve, 20))
-  }
+  const written = () => readFile(reportPath, 'utf8').catch(() => '')
+  await waitForAsync({ evaluate: (predicate) => predicate() }, written)
+  const report = await written()
   assert.ok(report.includes('RENDERER_ERROR'))
   assert.ok(!report.includes(sentinel))
   assert.ok(Buffer.byteLength(report) <= 64 * 1024)

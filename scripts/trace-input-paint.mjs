@@ -931,11 +931,13 @@ async function runCase(config) {
       await waitForEditor(page)
       await page.waitForFunction(() => !!window.__inputPaintContext)
       if (config.mode === 'source') await switchToSource(app, page)
-      if (config.mode === 'split')
+      if (config.mode === 'split') {
         await pressShortcut(
           app,
           `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+\\`,
         )
+        await page.locator('.editor-panes.mode-side-by-side').waitFor()
+      }
       await app.evaluate(({ dialog }, file) => {
         dialog.showOpenDialog = async () => ({
           canceled: false,

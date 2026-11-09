@@ -15,6 +15,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
+import { EditorState } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 
 const patched = {
   'patch-vim.mjs': '@replit/codemirror-vim-core',
@@ -120,4 +122,105 @@ console.log(resolveOwn('@codemirror/view'))`,
     { encoding: 'utf8' },
   )
   assert.equal(found.stdout.trim(), realpathSync(own), found.stderr)
+})
+
+for (const [name, shift, flags] of [
+  ['shrink after a viewport change', -168.328125, 2 | 4],
+  ['grow after a viewport change', 168.328125, 2 | 4],
+  ['shrink in the same viewport', -168.328125, 2],
+]) {
+  test(`codemirror anchors heights that ${name}, even when the next pass is quiet`, (t) => {
+    globalThis.Window = class {}
+    t.after(() => {
+      delete globalThis.Window
+    })
+    const pane = { scrollTop: 500, scrollHeight: 4000, clientHeight: 560 }
+    let top = 400,
+      changed = true
+    const view = {
+      state: EditorState.create({ doc: 'above\nline' }),
+      destroyed: false,
+      measureScheduled: -1,
+      measureRequests: [],
+      scrollDOM: pane,
+      observer: { forceFlush() {} },
+      inputState: { update() {} },
+      updatePlugins() {},
+      updateAttrs() {},
+      docView: { update: () => false },
+      viewState: {
+        scrollParent: pane,
+        scrollOffset: pane.scrollTop,
+        scrollAnchorPos: 6,
+        scrollAnchorHeight: top,
+        scaleY: 1,
+        editorHeight: pane.clientHeight,
+        scrollTarget: null,
+        getScrollOffset: () => pane.scrollTop,
+        scrollAnchorAt: () => ({ from: 6, top }),
+        lineBlockAt: () => ({ from: 6, top }),
+        measure() {
+          this.scrollOffset = pane.scrollTop
+          if (!changed) return 0
+          changed = false
+          top += shift
+          return flags // Height = 2; Viewport = 4.
+        },
+      },
+    }
+    const before = top - pane.scrollTop
+    EditorView.prototype.measure.call(view)
+    assert.equal(top - pane.scrollTop, before)
+    assert.equal(view.measureScheduled, -1)
+  })
+}
+
+test('codemirror draws what its last pass measured when the measure loop gives up', (t) => {
+  globalThis.Window = class {}
+  t.after(() => {
+    delete globalThis.Window
+  })
+  const warn = t.mock.method(console, 'warn')
+  const pane = { scrollTop: 0, scrollHeight: 4000, clientHeight: 560 }
+  let measured = 0,
+    drawn = 0
+  const view = {
+    state: EditorState.create({ doc: 'line' }),
+    destroyed: false,
+    measureScheduled: -1,
+    measureRequests: [],
+    scrollDOM: pane,
+    observer: { forceFlush() {} },
+    inputState: { update() {} },
+    updatePlugins() {},
+    updateAttrs() {},
+    docView: {
+      update() {
+        drawn = measured
+        return false
+      },
+    },
+    viewState: {
+      scrollParent: pane,
+      scrollOffset: 0,
+      scrollAnchorPos: 0,
+      scrollAnchorHeight: 0,
+      scaleY: 1,
+      editorHeight: pane.clientHeight,
+      scrollTarget: null,
+      getScrollOffset: () => pane.scrollTop,
+      scrollAnchorAt: () => ({ from: 0, top: 0 }),
+      lineBlockAt: () => ({ from: 0, top: 0 }),
+      // Each pass names other text to draw, as a long line's moving gaps do.
+      measure() {
+        if (++measured > 20) throw new Error('the measure loop did not stop')
+        return 4 // Viewport.
+      },
+    },
+  }
+  EditorView.prototype.measure.call(view)
+  assert.equal(measured, 7)
+  assert.equal(drawn, measured)
+  assert.equal(warn.mock.callCount(), 1)
+  assert.equal(view.measureScheduled, -1)
 })

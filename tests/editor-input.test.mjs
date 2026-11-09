@@ -13,12 +13,18 @@ import {
 import {
   after,
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
-import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  withHeldClock,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 // What the removed native editor did with table picks, recorded before its removal.
@@ -793,13 +799,13 @@ test('native table picks retain multiline caret positions, scalar boundaries and
             app,
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
-          assert.equal((await acceptedInput(page)).markdown, before.markdown)
+          await waitForInputSource(page, before.markdown)
           await pressShortcut(
             app,
             process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
           )
+          await waitForInputSource(page, actual.markdown)
           const redone = await acceptedInput(page)
-          assert.equal(redone.markdown, actual.markdown)
           assert.deepEqual(await cmCaretText(rich), result.caret)
           await page.keyboard.insertText('Q')
           const continued = await acceptedInput(page)
@@ -812,6 +818,748 @@ test('native table picks retain multiline caret positions, scalar boundaries and
         },
       )
     }
+})
+
+// Deleting, breaking a line or composing over a pick edits it as typing over
+// it does: text outside the pick stays, and so does the table. A modifier
+// pressed first must not shrink the pick to the table's edge.
+const pickEditOutcomes = {
+  'into a table': {
+    deleted: {
+      markdown: 'a\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['a', ''],
+    },
+    broken: {
+      markdown: 'a\n\n\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['', ''],
+    },
+    composed: {
+      markdown: 'a日本\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['a日本', ''],
+    },
+  },
+  cells: {
+    deleted: {
+      markdown: '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   |    |\n',
+      caret: ['', ''],
+    },
+    broken: {
+      markdown:
+        '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   | <br>   |\n',
+      caret: ['', ''],
+    },
+    composed: {
+      markdown:
+        '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   | 日本   |\n',
+      caret: ['日本', ''],
+    },
+  },
+}
+
+test('keys and compositions over a native table pick keep the text outside it and the table', {
+  timeout: 120000,
+}, async (t) => {
+  const edits = [
+    ['Backspace', 'deleted'],
+    ['Delete', 'deleted'],
+    ['Alt+Backspace', 'deleted'],
+    ['Enter', 'broken'],
+    ['Shift+Enter', 'broken'],
+    ['composition', 'composed'],
+    ['Shift, then composition', 'composed'],
+  ]
+  for (const what of ['into a table', 'cells'])
+    for (const [edit, outcome] of edits)
+      await t.test(what + ': ' + edit, async (t) => {
+        const oracle = inputFixture('multiline', what)
+        const { app, page, rich } = await openInputFixture(oracle.source)
+        await rich.focus()
+        await selectNativeInputTable(t, page, rich, what, oracle)
+        const before = await acceptedInput(page)
+        if (edit.endsWith('composition')) {
+          if (edit.startsWith('Shift')) await page.keyboard.press('Shift')
+          const cdp = await page.context().newCDPSession(page)
+          // An IME takes the key that starts a composition: keyCode 229.
+          await cdp.send('Input.dispatchKeyEvent', {
+            type: 'rawKeyDown',
+            key: 'n',
+            code: 'KeyN',
+            windowsVirtualKeyCode: 229,
+            nativeVirtualKeyCode: 229,
+          })
+          for (const text of ['に', '日本'])
+            await cdp.send('Input.imeSetComposition', {
+              text,
+              selectionStart: text.length,
+              selectionEnd: text.length,
+            })
+          await cdp.send('Input.insertText', { text: '日本' })
+          await cdp.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'n',
+            code: 'KeyN',
+            windowsVirtualKeyCode: 229,
+          })
+          await cdp.detach()
+        } else await page.keyboard.press(edit)
+        const expected = pickEditOutcomes[what][outcome]
+        const actual = await acceptedInput(page)
+        assert.deepEqual(
+          inputOutcome(actual.markdown),
+          inputOutcome(expected.markdown),
+        )
+        assert.deepEqual(await cmCaretText(rich), expected.caret)
+        await pressShortcut(
+          app,
+          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+        )
+        await waitForInputSource(page, before.markdown)
+      })
+})
+
+test('partial native table picks keep unselected cell text and one-step history', {
+  timeout: 60000,
+}, async (t) => {
+  const table = '| hh | ii |\n| --- | --- |\n| abc | def |\n| ghi | jkl |'
+  for (const [what, source, a, b, edits] of [
+    [
+      'rows',
+      table,
+      ['abc', 1, true],
+      ['jkl', 2, true],
+      ['Backspace', 'Enter', 'composition'],
+    ],
+    ['row', table, ['abc', 1, true], ['def', 2, true], ['Enter']],
+    [
+      'out',
+      table + '\n\nafter',
+      ['abc', 1, true],
+      ['after', 3, false],
+      ['Backspace'],
+    ],
+    [
+      'tables',
+      table + '\n\nmiddle\n\n| mm | nn |\n| --- | --- |\n| mno | pqr |',
+      ['abc', 1, true],
+      ['mno', 2, true],
+      ['composition'],
+    ],
+  ])
+    for (const reverse of [false, true])
+      for (const edit of edits)
+        await t.test(
+          what + ': ' + edit + (reverse ? ' backward' : ''),
+          async (t) => {
+            const from = source.indexOf(a[0]) + a[1]
+            const to = source.indexOf(b[0]) + b[1]
+            const { app, page, rich } = await openInputFixture(source)
+            await selectNativeInputTable(
+              t,
+              page,
+              rich,
+              'cells',
+              {
+                source,
+                from,
+                to,
+                pick: [a, b],
+                cell: from,
+                text: source.slice(from, to).replace(/[|\s-]/g, ''),
+              },
+              reverse,
+            )
+            if (edit === 'composition') {
+              const cdp = await page.context().newCDPSession(page)
+              await cdp.send('Input.dispatchKeyEvent', {
+                type: 'rawKeyDown',
+                key: 'n',
+                code: 'KeyN',
+                windowsVirtualKeyCode: 229,
+                nativeVirtualKeyCode: 229,
+              })
+              await cdp.send('Input.imeSetComposition', {
+                text: '日本',
+                selectionStart: 2,
+                selectionEnd: 2,
+              })
+              await cdp.send('Input.insertText', { text: '日本' })
+              await cdp.send('Input.dispatchKeyEvent', {
+                type: 'keyUp',
+                key: 'n',
+                code: 'KeyN',
+                windowsVirtualKeyCode: 229,
+              })
+              await cdp.detach()
+            } else await page.keyboard.press(edit)
+            const actual = (await acceptedInput(page)).markdown
+            assert.ok(
+              actual.startsWith(source.slice(0, from)),
+              'text before the pick stays',
+            )
+            assert.ok(
+              actual.endsWith(source.slice(to)),
+              'text after the pick stays',
+            )
+            await pressShortcut(
+              app,
+              process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+            )
+            await waitForInputSource(page, source)
+          },
+        )
+})
+
+// Cut over a pick puts on the clipboard what copy does there and deletes as
+// Delete does: the table keeps its structure, text outside the pick stays,
+// one undo restores the note. A read-only note only copies.
+test('cut over a native table pick copies as copy does and deletes as Delete does', {
+  timeout: 240000,
+}, async (t) => {
+  const table = '| hh | ii |\n| --- | --- |\n| abc | def |\n| ghi | jkl |'
+  const note = 'before\n\n' + table + '\n\nafter'
+  const shapes = [
+    ['into', note, ['before', 3], ['abc', 1]],
+    ['out', note, ['abc', 1], ['after', 3]],
+    ['rows', note, ['abc', 1], ['jkl', 2]],
+    ['row', note, ['abc', 1], ['def', 2]],
+    ['whole', note, ['before', 6], ['after', 0]],
+    [
+      'tables',
+      note.replace('after', 'middle\n\n| mm |\n| --- |\n| mno |\n\nafter'),
+      ['abc', 1],
+      ['mno', 2],
+    ],
+    ['document start', table + '\n\nafter', ['abc', 1], ['after', 3]],
+    ['document end', 'before\n\n' + table, ['before', 3], ['jkl', 2]],
+  ]
+  // The page's selection from word end `ends[0]` to `ends[1]`, as a pick shows it.
+  const showPick = (rich, ends) =>
+    rich.evaluate((element, ends) => {
+      const find = ([word, offset]) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode())
+          if (walker.currentNode.data.trim() === word)
+            return [
+              walker.currentNode,
+              walker.currentNode.data.indexOf(word) + offset,
+            ]
+        throw new Error('no text ' + word)
+      }
+      getSelection().setBaseAndExtent(...find(ends[0]), ...find(ends[1]))
+      document.dispatchEvent(new Event('selectionchange'))
+    }, ends)
+  const pick = async (page, rich, source, a, b, reverse) => {
+    const cell = [a, b].find(
+      ([word]) => !word.startsWith('before') && word !== 'after',
+    ) ?? [source.match(/abc[\w-]*/)[0]]
+    await rich.evaluate(
+      (element, at) =>
+        element.cmTile.root.view.dispatch({
+          selection: { anchor: at },
+          scrollIntoView: true,
+        }),
+      source.indexOf(cell[0], source.indexOf('|')) + 1,
+    )
+    await page
+      .getByRole('textbox', { name: 'Table cell', exact: true })
+      .waitFor()
+    await showPick(rich, reverse ? [b, a] : [a, b])
+    const range = picked(source, a, b)
+    await page.waitForFunction((range) => {
+      const { main } = document.querySelector(
+        '.rich-pane [aria-label="Document editor"]',
+      ).cmTile.root.view.state.selection
+      return main.from === range[0] && main.to === range[1]
+    }, range)
+  }
+  // Snapshot both formats immediately after a shortcut or the Edit menu's call.
+  // A unique sentinel distinguishes an unchanged clipboard from another lane's.
+  const clipboardAfter = async (app, page, key, menu = false) => {
+    const sentinel = 'hibi-cut-' + crypto.randomUUID()
+    // The formats the page's copy wrote, watched from main: a page call would
+    // give the page the activation some cases take away.
+    await app.evaluate(
+      ({ BrowserWindow, clipboard }, sentinel) =>
+        Promise.all([
+          clipboard.writeText(sentinel),
+          BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+            `window.copiedTypes = null
+            if (!window.watchingCopies) {
+              window.watchingCopies = true
+              // A pick's cut is canceled empty around the copy it runs.
+              const watch = (event) => {
+                const { types } = event.clipboardData
+                if (!event.defaultPrevented) window.copiedTypes = ['text/plain']
+                else if (types.length) window.copiedTypes = [...types]
+              }
+              addEventListener('copy', watch)
+              addEventListener('cut', watch)
+            }`,
+            false,
+          ),
+        ]),
+      sentinel,
+    )
+    if (menu)
+      await app.evaluate(
+        ({ BrowserWindow }, key) =>
+          BrowserWindow.getAllWindows()[0].webContents[key](),
+        key === 'x' ? 'cut' : 'copy',
+      )
+    else await page.keyboard.press('ControlOrMeta+' + key)
+    const copied = ({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        'window.copiedTypes',
+        false,
+      )
+    await waitForAsync(app, copied, undefined, {
+      label: 'the page wrote a copy',
+    })
+    const types = await app.evaluate(copied)
+    assert.ok(types?.length, 'the page wrote a copy')
+    const read = () =>
+      app.evaluate(async ({ clipboard }) => {
+        const [item] = await clipboard.read()
+        return {
+          text: item?.types.includes('text/plain')
+            ? await (await item.getType('text/plain')).text()
+            : '',
+          html: item?.types.includes('text/html')
+            ? await (await item.getType('text/html')).text()
+            : null,
+        }
+      })
+    // Windows shows a copy's text before its HTML: wait for every format.
+    const partial = (held) =>
+      held.text === sentinel ||
+      (types.includes('text/plain') && !held.text) ||
+      (types.includes('text/html') && held.html === null)
+    let held
+    await waitForAsync(
+      { evaluate: (predicate) => predicate() },
+      async () => {
+        held = await read()
+        return !partial(held)
+      },
+      undefined,
+      { label: 'every format the page wrote is on the clipboard' },
+    )
+    assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
+    assert.ok(!partial(held), 'every format the page wrote is on the clipboard')
+    return held
+  }
+  const expireActivation = async (app) => {
+    const active = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        `new Promise(resolve => {
+          const end = Date.now() + 15000
+          const check = () => {
+            if (!navigator.userActivation.isActive || Date.now() > end)
+              resolve(navigator.userActivation.isActive)
+            else setTimeout(check, 30)
+          }
+          check()
+        })`,
+        false,
+      ),
+    )
+    assert.equal(active, false, 'native menu caller has no activation')
+  }
+  for (const what of ['into', 'rows'])
+    await t.test(what + ', menu without activation', async () => {
+      const [, original, start, end] = shapes.find(([name]) => name === what)
+      const token = crypto.randomUUID()
+      const a = [start[0] + token, start[1]]
+      const source = original.replace(start[0], a[0])
+      let { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, end, false)
+      const copied = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      const deleted = (await acceptedInput(page)).markdown
+      ;({ app, page, rich } = await openInputFixture(source))
+      await pick(page, rich, source, a, end, false)
+      await expireActivation(app)
+      assert.deepEqual(await clipboardAfter(app, page, 'x', true), copied)
+      assert.equal((await acceptedInput(page)).markdown, deleted)
+      await page.keyboard.press('ControlOrMeta+z')
+      await waitForInputSource(page, source)
+    })
+  await t.test('synthetic cut does not create user activation', async () => {
+    const source = note.replace('before', 'before' + crypto.randomUUID())
+    const { app, page, rich } = await openInputFixture(source)
+    await pick(
+      page,
+      rich,
+      source,
+      [source.slice(0, source.indexOf('\n')), 3],
+      ['abc', 1],
+      false,
+    )
+    const sentinel = 'hibi-cut-untrusted-' + crypto.randomUUID()
+    await app.evaluate(
+      ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+      sentinel,
+    )
+    await expireActivation(app)
+    const active = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        `document.querySelector('.rich-pane [aria-label="Document editor"]')
+          .cmTile.root.view.contentDOM.dispatchEvent(new ClipboardEvent('cut', {
+            bubbles: true, cancelable: true, clipboardData: new DataTransfer()
+          }));
+        navigator.userActivation.isActive`,
+        false,
+      ),
+    )
+    assert.equal(active, false)
+    assert.equal(
+      await app.evaluate(({ clipboard }) => clipboard.readText()),
+      sentinel,
+    )
+    assert.equal((await acceptedInput(page)).markdown, source)
+  })
+  for (const mode of ['blocked', 'empty'])
+    for (const what of ['into', 'rows'])
+      for (const menu of [false, true])
+        await t.test(
+          what + ', ' + mode + ' copy' + (menu ? ', Edit menu' : ''),
+          async () => {
+            const [, source, a, b] = shapes.find(([name]) => name === what)
+            const { app, page, rich } = await openInputFixture(source)
+            await pick(page, rich, source, a, b, false)
+            const sentinel = 'hibi-cut-denied-' + crypto.randomUUID()
+            await app.evaluate(
+              ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+              sentinel,
+            )
+            await page.evaluate((mode) => {
+              const exec = document.execCommand
+              window.deniedCopySeen = false
+              if (mode === 'blocked')
+                document.execCommand = function (...args) {
+                  if (args[0] !== 'copy') return exec.apply(this, args)
+                  window.deniedCopySeen = true
+                  return false
+                }
+              else
+                document.addEventListener(
+                  'copy',
+                  (event) => {
+                    window.deniedCopySeen = true
+                    event.preventDefault()
+                  },
+                  { once: true, capture: true },
+                )
+              window.restoreCopy = () => {
+                document.execCommand = exec
+              }
+            }, mode)
+            try {
+              if (menu)
+                await app.evaluate(({ BrowserWindow }) =>
+                  BrowserWindow.getAllWindows()[0].webContents.cut(),
+                )
+              else await page.keyboard.press('ControlOrMeta+x')
+              await page.waitForFunction(() => window.deniedCopySeen)
+              assert.equal(
+                await app.evaluate(({ clipboard }) => clipboard.readText()),
+                sentinel,
+              )
+              assert.equal((await acceptedInput(page)).markdown, source)
+            } finally {
+              await page.evaluate(() => window.restoreCopy())
+            }
+          },
+        )
+  for (const menu of [false, true])
+    await t.test(
+      'cut Markdown pastes unchanged' + (menu ? ', Edit menu' : ''),
+      async () => {
+        const token = crypto.randomUUID()
+        const source = note.replace('before', 'before' + token)
+        let { app, page, rich } = await openInputFixture(source)
+        await pick(page, rich, source, ['before' + token, 3], ['abc', 1], false)
+        const held = await clipboardAfter(app, page, 'x', menu)
+        assert.ok(held.text.includes(token))
+        ;({ app, page } = await openInputFixture(''))
+        await app.evaluate(
+          async ({ BrowserWindow, clipboard, ClipboardItem }, held) => {
+            await clipboard.write([
+              new ClipboardItem({
+                'text/plain': new Blob([held.text], { type: 'text/plain' }),
+                'text/html': new Blob([held.html], { type: 'text/html' }),
+              }),
+            ])
+            BrowserWindow.getAllWindows()[0].webContents.paste()
+          },
+          held,
+        )
+        await waitForAsync(page, async () => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown.length > 0
+        })
+        assert.equal((await acceptedInput(page)).markdown, held.text)
+      },
+    )
+  for (const [what, original, start, end] of shapes)
+    for (const reverse of [false, true]) {
+      // Cell text can also occur in the token before the table.
+      const token = 'abc' + crypto.randomUUID()
+      const unique = (word) =>
+        word === 'abc' || word === 'before' ? word + token : word
+      const source = original
+        .replaceAll('abc', unique('abc'))
+        .replaceAll('before', unique('before'))
+      const a = [unique(start[0]), start[1]],
+        b = [unique(end[0]), end[1]]
+      const name = what + (reverse ? ' backward' : '')
+      for (const menu of [false, true])
+        await t.test(name + (menu ? ', Edit menu' : ''), async () => {
+          let { app, page, rich } = await openInputFixture(source)
+          await pick(page, rich, source, a, b, reverse)
+          const copied = await clipboardAfter(app, page, 'c')
+          assert.ok(copied.text.includes(token), 'copy contains this pick')
+          await page.keyboard.press('Delete')
+          const deleted = (await acceptedInput(page)).markdown
+          assert.notEqual(deleted, source)
+          ;({ app, page, rich } = await openInputFixture(source))
+          await pick(page, rich, source, a, b, reverse)
+          assert.deepEqual(await clipboardAfter(app, page, 'x', menu), copied)
+          assert.equal((await acceptedInput(page)).markdown, deleted)
+          await pressShortcut(
+            app,
+            process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+          )
+          await waitForInputSource(page, source)
+          await page.keyboard.press(redoKey)
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, source)
+        })
+      await t.test(name + ', read-only', async () => {
+        const { app, page, rich } = await openInputFixture(source)
+        await pick(page, rich, source, a, b, reverse)
+        await rich.evaluate((element) => {
+          const view = element.cmTile.root.view
+          const [compartment, access] = [
+            ...view.state.config.compartments,
+          ].find(
+            ([, value]) =>
+              Array.isArray(value) &&
+              value.length === 2 &&
+              value.every(
+                (part) => part.facet && typeof part.value === 'boolean',
+              ),
+          )
+          view.dispatch({
+            effects: compartment.reconfigure(
+              access.map((part) => part.facet.of(!part.value)),
+            ),
+          })
+        })
+        // Copy while the page shows the pick in the cells, before a key
+        // draws the view's own selection over it, and after: both are the
+        // pick's Markdown.
+        await showPick(rich, reverse ? [b, a] : [a, b])
+        const first = await clipboardAfter(app, page, 'c')
+        assert.equal(first.text, source.slice(...picked(source, a, b)))
+        await page.keyboard.press('Shift')
+        const copied = await clipboardAfter(app, page, 'c')
+        assert.deepEqual(copied, first)
+        assert.deepEqual(await clipboardAfter(app, page, 'x'), copied)
+        assert.equal((await acceptedInput(page)).markdown, source)
+      })
+      // Pasting a pick's copy where Delete or cut left the caret puts the
+      // pick back as it was, the table's structure included.
+      for (const route of ['copy, Delete', 'cut'])
+        await t.test(name + ', ' + route + ', paste back', async () => {
+          const { app, page, rich } = await openInputFixture(source)
+          await pick(page, rich, source, a, b, reverse)
+          const held = await clipboardAfter(
+            app,
+            page,
+            route === 'cut' ? 'x' : 'c',
+          )
+          assert.equal(held.text, source.slice(...picked(source, a, b)))
+          if (route !== 'cut') await page.keyboard.press('Delete')
+          await waitForAsync(
+            page,
+            async (source) => {
+              await window.hibi.flushDocumentChanges()
+              return (await window.hibi.getDocument()).markdown !== source
+            },
+            source,
+          )
+          const deleted = (await acceptedInput(page)).markdown
+          await pasteHeld(app, page, held, route === 'cut')
+          await waitForAsync(
+            page,
+            async (deleted) => {
+              await window.hibi.flushDocumentChanges()
+              return (await window.hibi.getDocument()).markdown !== deleted
+            },
+            deleted,
+          )
+          assert.equal((await acceptedInput(page)).markdown, source)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press(redoKey)
+          await waitForInputSource(page, source)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, source)
+        })
+    }
+  for (const guard of ['foreign html', 'multiple carets'])
+    await t.test('paste guard: ' + guard, async () => {
+      const source = note.replace('before', 'before' + crypto.randomUUID())
+      const a = [source.slice(0, source.indexOf('\n')), 3]
+      const b = ['abc', 1]
+      const { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, b, false)
+      const held = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      const deleted = (await acceptedInput(page)).markdown
+      const caret = await rich.evaluate((element, multiple) => {
+        const view = element.cmTile.root.view
+        const caret = view.state.selection.main.head
+        if (multiple) {
+          // No app command enables multiple selections; configure the fixture.
+          const [compartment, access] = [
+            ...view.state.config.compartments,
+          ].find(
+            ([, value]) =>
+              Array.isArray(value) &&
+              value.length === 2 &&
+              value.every(
+                (part) => part.facet && typeof part.value === 'boolean',
+              ),
+          )
+          view.dispatch({
+            effects: compartment.reconfigure([
+              ...access,
+              view.state.constructor.allowMultipleSelections.of(true),
+            ]),
+          })
+          const selection = view.state.selection.constructor
+          view.dispatch({
+            selection: selection.create([
+              selection.cursor(caret),
+              selection.cursor(view.state.doc.length),
+            ]),
+          })
+          view.focus()
+        }
+        return caret
+      }, guard === 'multiple carets')
+      const insert =
+        guard === 'foreign html'
+          ? '**foreign-' + crypto.randomUUID() + '**'
+          : held.text
+      await pasteHeld(
+        app,
+        page,
+        {
+          text: held.text,
+          html:
+            guard === 'foreign html'
+              ? '<strong>' + insert.slice(2, -2) + '</strong>'
+              : null,
+        },
+        false,
+      )
+      await waitForAsync(
+        page,
+        async (deleted) => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown !== deleted
+        },
+        deleted,
+      )
+      assert.equal(
+        (await acceptedInput(page)).markdown,
+        deleted.slice(0, caret) +
+          insert +
+          deleted.slice(caret) +
+          (guard === 'multiple carets' ? insert : ''),
+      )
+    })
+  // Away from where the pick was, or once the note changed, a pick's copy
+  // pastes as its Markdown.
+  for (const what of ['rows', 'into'])
+    await t.test(what + ', pasted elsewhere', async () => {
+      const [, original, start, end] = shapes.find(([name]) => name === what)
+      const source = original.replace(start[0], start[0] + crypto.randomUUID())
+      const a = [source.match(new RegExp(start[0] + '[\\w-]*'))[0], start[1]]
+      const { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, end, false)
+      const held = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      await waitForAsync(
+        page,
+        async (source) => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown !== source
+        },
+        source,
+      )
+      const deleted = (await acceptedInput(page)).markdown
+      // rows: the caret moves to the note's end; into: text is added there.
+      await rich.evaluate((element, moved) => {
+        const view = element.cmTile.root.view
+        const end = view.state.doc.length
+        view.dispatch(
+          moved
+            ? { selection: { anchor: end } }
+            : { changes: { from: end, insert: '!' } },
+        )
+      }, what === 'rows')
+      await pasteHeld(app, page, held, false)
+      const from = picked(source, a, end)[0]
+      await waitForInputSource(
+        page,
+        what === 'rows'
+          ? deleted + held.text
+          : deleted.slice(0, from) + held.text + deleted.slice(from) + '!',
+      )
+    })
+})
+
+/**
+ * The source range a pick from word end `a` to `b` selects. Words are found
+ * whole: a random token next to a word can spell another, as `abc…` can `def`.
+ */
+const picked = (source, a, b) =>
+  [a, b].map(
+    ([word, offset]) =>
+      source.search(new RegExp(`(?<![\\w-])${word}(?![\\w-])`)) + offset,
+  )
+
+/** Puts a held copy back on the shared clipboard and pastes it right away. */
+async function pasteHeld(app, page, held, menu) {
+  await app.evaluate(async ({ clipboard, ClipboardItem }, held) => {
+    const formats = {
+      'text/plain': new Blob([held.text], { type: 'text/plain' }),
+    }
+    if (held.html)
+      formats['text/html'] = new Blob([held.html], { type: 'text/html' })
+    await clipboard.write([new ClipboardItem(formats)])
+  }, held)
+  if (menu)
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.paste(),
+    )
+  else await page.keyboard.press('ControlOrMeta+v')
+}
+
+test('native table input keeps the caret before an escaped literal tail', async (t) => {
+  const oracle = inputFixture('multiline', 'cells')
+  const { page, rich } = await openInputFixture(oracle.source)
+  await selectNativeInputTable(t, page, rich, 'cells', oracle)
+  // Several native breaks put the entire escaped entity after the caret.
+  await page.keyboard.insertText('a\n\n\n\n\n&amp;')
+  assert.deepEqual(await cmCaretText(rich), ['', '&amp;'])
 })
 
 test('a native table pick keeps the shared input guards', {
@@ -899,34 +1647,49 @@ test('a native table pick keeps the shared input guards', {
         assert.equal(setup.ranges.length, guard === 'multiple ranges' ? 2 : 1)
         const before = await acceptedInput(page)
         await inputWorkProbe(rich)
-        const composing = await rich.evaluate(
-          async (element, { guard, kind }) => {
-            const target =
-              guard === 'foreign target'
-                ? element.querySelector('.cm-line')
-                : element
-            const init = {
-              bubbles: true,
-              cancelable: true,
-              isComposing: guard === 'composing event',
-            }
-            const event =
-              kind === 'beforeinput'
-                ? new InputEvent(kind, {
-                    ...init,
-                    inputType: 'insertText',
-                    data: 'Q',
-                  })
-                : new KeyboardEvent(kind, { ...init, key: 'Q' })
-            target.dispatchEvent(event)
-            // The view's next measure reads the page's selection, which the
-            // pick shows, even in the moment after text input it did not take.
-            element.cmTile.root.view.requestMeasure()
-            await new Promise(requestAnimationFrame)
-            return event.isComposing
-          },
-          { guard, kind },
-        )
+        const input = (echo) =>
+          rich.evaluate(
+            async (element, { guard, kind, echo }) => {
+              const target =
+                guard === 'foreign target'
+                  ? element.querySelector('.cm-line')
+                  : element
+              const init = {
+                bubbles: true,
+                cancelable: true,
+                isComposing: guard === 'composing event',
+              }
+              const event =
+                kind === 'beforeinput'
+                  ? new InputEvent(kind, {
+                      ...init,
+                      inputType: 'insertText',
+                      data: 'Q',
+                    })
+                  : new KeyboardEvent(kind, { ...init, key: 'Q' })
+              target.dispatchEvent(event)
+              // The same native range can echo back in the other direction
+              // before CodeMirror's next measure. No text in the page has changed.
+              if (echo) {
+                const selection = getSelection()
+                const { anchorNode, anchorOffset, focusNode, focusOffset } =
+                  selection
+                selection.setBaseAndExtent(
+                  focusNode,
+                  focusOffset,
+                  anchorNode,
+                  anchorOffset,
+                )
+              }
+              // The view's next measure reads the page's selection, which the
+              // pick shows, even in the moment after text input it did not take.
+              element.cmTile.root.view.requestMeasure()
+              await new Promise(requestAnimationFrame)
+              return event.isComposing
+            },
+            { guard, kind, echo },
+          )
+        const composing = await input(false)
         assert.equal(composing, guard === 'composing event')
         const after = await acceptedInput(page)
         if (
@@ -960,6 +1723,13 @@ test('a native table pick keeps the shared input guards', {
           ),
           setup.ranges,
         )
+        // Declined text must not arm CodeMirror's next DOM read either.
+        if (kind === 'beforeinput') {
+          await withHeldClock(page, () => input(true))
+          const echoed = await acceptedInput(page)
+          assert.equal(echoed.markdown, before.markdown)
+          assert.equal(echoed.contentVersion, before.contentVersion)
+        }
         const work = await page.evaluate(() => window.cmInputWork)
         assert.equal(work.changes, 0)
         assert.deepEqual(work.inputs, [])
@@ -1231,13 +2001,14 @@ async function launchInputFixture(t, source, counted = false) {
   await waitForFormattedEditor(app, page)
   cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    counted ? 'input.countmd' : 'input.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      counted ? 'input.countmd' : 'input.md',
+    )
+  })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -1269,13 +2040,14 @@ async function openInputFixture(source) {
       filePaths: [path],
     })
   }, path)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    name,
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  })
   return { app, page, rich }
 }
 
@@ -1432,6 +2204,7 @@ async function inputWorkProbe(rich) {
       prevented: [],
       beforeinput: [],
       inputs: [],
+      batches: [],
     }
     const mapping = Object.getPrototypeOf(
       Object.getPrototypeOf(view.state.changes([])),
@@ -1445,6 +2218,18 @@ async function inputWorkProbe(rich) {
     }
     const update = view.update.bind(view)
     view.update = (transactions) => {
+      // Each batch as the source session reads it: its last transaction's
+      // public time and user event, and whether it edits or only selects.
+      const last = transactions.at(-1)
+      if (last)
+        window.cmInputWork.batches.push({
+          time: last.annotation(last.constructor.time),
+          typing: /^(input\.type|delete\.(backward|forward))(\.|$)/.test(
+            last.annotation(last.constructor.userEvent) ?? '',
+          ),
+          changed: transactions.some((transaction) => transaction.docChanged),
+          selection: transactions.some((transaction) => transaction.selection),
+        })
       for (const transaction of transactions)
         if (transaction.docChanged) {
           window.cmInputWork.changes++
@@ -1536,7 +2321,18 @@ const formattedInputOutcomes = {
   'nested list end': { markdown: '- x\n  - ya\n- b' },
 }
 
-async function selectNativeInputTable(t, page, rich, what, oracle) {
+async function selectNativeInputTable(
+  t,
+  page,
+  rich,
+  what,
+  oracle,
+  reverse = false,
+) {
+  const points = oracle.pick ?? [
+    [what === 'cells' ? 'a' : 'ab', what === 'cells' ? 0 : 1, what === 'cells'],
+    [what === 'cells' ? 'd' : 'cd', 1, true],
+  ]
   // The shipped table widget owns a real cell editor. Let its normal selection bridge focus it.
   await rich.evaluate(
     (element, head) =>
@@ -1544,7 +2340,7 @@ async function selectNativeInputTable(t, page, rich, what, oracle) {
         selection: { anchor: head },
         scrollIntoView: true,
       }),
-    what === 'cell' ? oracle.from : oracle.to,
+    oracle.cell ?? (what === 'cell' ? oracle.from : oracle.to),
   )
   await page.getByRole('textbox', { name: 'Table cell', exact: true }).waitFor()
   await page.waitForFunction(
@@ -1556,35 +2352,32 @@ async function selectNativeInputTable(t, page, rich, what, oracle) {
 
   // Native browser selection crosses the rendered cells, or the paragraph and active cell.
   // Do not replace it with a raw Markdown splice when this selection is unsupported.
-  const rendered = await rich.evaluate((element, what) => {
-    const cell = element.querySelector('.hibi-lp-cell-editor .cm-content')
-    const find = (root, word, inCell) => {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-      while (walker.nextNode()) {
-        const node = walker.currentNode
-        if (
-          node.data.trim() === word &&
-          Boolean(node.parentElement.closest('td, th')) === inCell
-        )
-          return { node, offset: node.data.indexOf(word) }
+  const rendered = await rich.evaluate(
+    (element, { points, reverse }) => {
+      const find = ([word, offset, inCell]) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode()) {
+          const node = walker.currentNode
+          if (
+            node.data.trim() === word &&
+            Boolean(node.parentElement.closest('td, th')) === inCell
+          )
+            return [node, node.data.indexOf(word) + offset]
+        }
+        return null
       }
-      return null
-    }
-    const anchor = find(
-      element,
-      what === 'cells' ? 'a' : 'ab',
-      what === 'cells',
-    )
-    const head = cell && find(cell, what === 'cells' ? 'd' : 'cd', true)
-    if (!anchor || !head) return false
-    getSelection().setBaseAndExtent(
-      anchor.node,
-      anchor.offset + (what === 'cells' ? 0 : 1),
-      head.node,
-      head.offset + 1,
-    )
-    return true
-  }, what)
+      const anchor = find(points[0]),
+        head = find(points[1])
+      if (!anchor || !head) return false
+      getSelection().setBaseAndExtent(
+        ...(reverse ? head : anchor),
+        ...(reverse ? anchor : head),
+      )
+      document.dispatchEvent(new Event('selectionchange'))
+      return true
+    },
+    { points, reverse },
+  )
   await t.test(
     'native table selection retains both historical source endpoints',
     async () => {
@@ -1596,9 +2389,9 @@ async function selectNativeInputTable(t, page, rich, what, oracle) {
       const expected = {
         from: oracle.from,
         to: oracle.to,
-        text: what === 'cells' ? 'abcd' : 'bc',
-        anchorInCell: what === 'cells',
-        focusInCell: true,
+        text: oracle.text ?? (what === 'cells' ? 'abcd' : 'bc'),
+        anchorInCell: points[reverse ? 1 : 0][2],
+        focusInCell: points[reverse ? 0 : 1][2],
       }
       const snapshot = (element) => {
         const { from, to } = element.cmTile.root.view.state.selection.main
@@ -1821,7 +2614,7 @@ test('native multiline input at the only empty list item retains the following p
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
     )
-    assert.equal((await acceptedInput(page)).markdown, oracle.source)
+    await waitForInputSource(page, oracle.source)
   })
 })
 
@@ -1841,14 +2634,29 @@ for (const hiddenSource of [false, true]) {
       await waitForDocumentEditor(app, page)
     }
     await rich.focus()
-    await page.evaluate(
-      () =>
-        new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve)),
-        ),
-    )
     await inputWorkProbe(rich)
-    const expectedChecks = await page.evaluate((hiddenSource) => {
+    const expectedChecks = await page.evaluate(async (hiddenSource) => {
+      const frames = new Map()
+      let next = 0
+      const request = window.requestAnimationFrame.bind(window)
+      const cancel = window.cancelAnimationFrame.bind(window)
+      window.requestAnimationFrame = (callback) => {
+        frames.set(--next, callback)
+        return next
+      }
+      window.cancelAnimationFrame = (id) =>
+        id < 0 ? frames.delete(id) : cancel(id)
+      // Hold new frames before draining those already scheduled, so a setup
+      // update cannot post another toolbar inspection behind the drain.
+      await new Promise((resolve) => {
+        const drained = new MessageChannel()
+        drained.port1.onmessage = () => {
+          drained.port1.close()
+          drained.port2.close()
+          resolve()
+        }
+        request(() => drained.port2.postMessage(null))
+      })
       window.countedFormatChecks = []
       window.hiddenInputUpdates = 0
       // Each toolbar refresh inspects every action in one task. A refresh
@@ -1889,28 +2697,21 @@ for (const hiddenSource of [false, true]) {
           return update(transactions)
         }
       }
-      const frames = new Map()
-      let next = 0
-      const request = window.requestAnimationFrame.bind(window)
-      const cancel = window.cancelAnimationFrame.bind(window)
       const now = Date.now,
         typingTime = now()
       Date.now = () => typingTime
-      window.requestAnimationFrame = (callback) => {
-        frames.set(--next, callback)
-        return next
-      }
-      window.cancelAnimationFrame = (id) =>
-        id < 0 ? frames.delete(id) : cancel(id)
       window.releaseInputFrames = () => {
         Date.now = now
         window.requestAnimationFrame = request
         window.cancelAnimationFrame = cancel
         delete window.releaseInputFrames
-        request((time) => {
-          for (const callback of frames.values()) callback(time)
-          window.firstInputFrameChecks = window.countedFormatChecks.length
-        })
+        return new Promise((resolve) =>
+          request((time) => {
+            for (const callback of frames.values()) callback(time)
+            window.firstInputFrameChecks = window.countedFormatChecks.length
+            resolve()
+          }),
+        )
       }
       return [
         ...document.querySelectorAll(
@@ -1977,12 +2778,12 @@ for (const hiddenSource of [false, true]) {
         app,
         process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
       )
-      assert.equal((await acceptedInput(page)).markdown, '')
+      await waitForInputSource(page, '')
       await pressShortcut(
         app,
         process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
       )
-      assert.equal((await acceptedInput(page)).markdown, 'hello')
+      await waitForInputSource(page, 'hello')
     })
     if (hiddenSource) {
       await page
@@ -2239,7 +3040,7 @@ for (const spaces of [1, 2]) {
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
     )
-    assert.equal((await acceptedInput(page)).markdown, '')
+    await waitForInputSource(page, '')
   })
 }
 
@@ -2278,12 +3079,12 @@ test('the original 200–256 KiB HTML/reference note stays natively editable thr
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
-  assert.equal((await acceptedInput(page)).markdown, original)
+  await waitForInputSource(page, original)
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
   )
-  assert.equal((await acceptedInput(page)).markdown, edited)
+  await waitForInputSource(page, edited)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await page.getByRole('button', { name: 'normal', exact: true }).click()
@@ -2587,6 +3388,7 @@ test('a separately typed cell space retains its caret and next word', {
       const { app, page, rich, file } = await launchInputFixture(t, source)
       const before = await acceptedInput(page)
       assert.equal(before.markdown, source)
+      await settledInputToolbar(page, 'undo', { disabled: true })
       const end = source.indexOf('south') + 5
       await rich.evaluate((element, anchor) => {
         element.cmTile.root.view.focus()
@@ -2650,15 +3452,44 @@ test('a separately typed cell space retains its caret and next word', {
           .count(),
         0,
       )
+      // The session starts a history step after a selection-only update or a
+      // non-typing edit, or more than 500 ms after the last edit: the space
+      // and the word are one step unless the checks between them took longer.
+      const glyphs = ' border'
+      const starts = []
+      let glyph = 0,
+        cut = true,
+        last = null
+      for (const batch of work.batches) {
+        if (!batch.changed) {
+          cut ||= batch.selection
+          continue
+        }
+        if (cut || batch.time - last.time > 500 || !last.typing)
+          starts.push(glyph)
+        glyph++
+        cut = false
+        last = batch
+      }
+      assert.equal(glyph, glyphs.length)
+      t.diagnostic(`history steps start at ${starts.join(',')}`)
+      const typedTo = (count) =>
+        source.replace('south', `south${glyphs.slice(0, count)}`)
       const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-      await pressShortcut(app, mod + '+z')
-      assert.equal((await acceptedInput(page)).markdown, source)
-      await pressShortcut(
-        app,
-        process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
-      )
+      for (const count of starts.toReversed()) {
+        await pressShortcut(app, mod + '+z')
+        await waitForInputSource(page, typedTo(count))
+      }
+      await settledInputToolbar(page, 'undo', { disabled: true })
+      for (const count of [...starts.slice(1), glyphs.length]) {
+        await pressShortcut(
+          app,
+          process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
+        )
+        await waitForInputSource(page, typedTo(count))
+      }
+      await settledInputToolbar(page, 'redo', { disabled: true })
       const redone = await acceptedInput(page)
-      assert.equal(redone.markdown, typed.markdown)
       await checkCaret(end + ' border'.length)
       const receipt = await page.evaluate(() => window.hibi.saveDocument(false))
       assert.equal(receipt.saveReceipt, true)

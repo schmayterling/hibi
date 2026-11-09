@@ -3,6 +3,7 @@ import {
   type ChangeDesc,
   type EditorState,
   type Extension,
+  Facet,
   MapMode,
   StateEffect,
   StateField,
@@ -84,6 +85,21 @@ type Syntax = {
    */
   ahead: { parse: ChunkedPartialParse; window: Demand } | null
 }
+
+/**
+ * Where a view opening on a place it kept starts, as one rebuilt after a
+ * failed draw: it paints there before its first idle slice, so its first
+ * parse reads from there and may run longer.
+ */
+export const restoredOpening = Facet.define<number, number | null>({
+  combine: (values) => values[0] ?? null,
+})
+/**
+ * A restored view's first parse budget, in milliseconds, before the idle
+ * slices take over. Soft: it is checked between parse steps, so a step
+ * running at the limit finishes past it.
+ */
+const restoredFirstSlice = 48
 
 const setDemand = StateEffect.define<Demand>()
 const resume = StateEffect.define<boolean>()
@@ -225,8 +241,9 @@ function syntaxField(options: FormattedSyntaxOptions) {
     settling: boolean,
     retained: readonly TreeFragment[],
     oneStep = false,
+    budget = slice,
   ): Syntax => {
-    const end = performance.now() + slice
+    const end = performance.now() + budget
     for (;;) {
       const tree = parse.advance()
       if (tree)
@@ -294,6 +311,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     settling: boolean,
     retained = fragments,
     joined = false,
+    budget = slice,
   ) => {
     const prefix = prefixOf(state)
     return run(
@@ -308,15 +326,25 @@ function syntaxField(options: FormattedSyntaxOptions) {
       prefix,
       settling,
       retained,
+      false,
+      budget,
     )
   }
   const field = StateField.define<Syntax>({
     create(state) {
+      const restored = state.facet(restoredOpening)
+      const from = Math.min(restored ?? 0, state.doc.length)
       return start(
         state,
         [],
-        { from: 0, to: Math.min(state.doc.length, 8192) },
+        { from, to: Math.min(state.doc.length, from + 8192) },
         false,
+        [],
+        false,
+        // A smaller slice set by the caller still bounds it.
+        restored === null
+          ? slice
+          : Math.min(restoredFirstSlice, options.slice ?? restoredFirstSlice),
       )
     },
     update(value, transaction) {
@@ -416,12 +444,13 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
         value.parse.setDemand(demand)
-        // A new viewport shows chunks as they are parsed.
+        // An edit's reparse still lacks the edited chunks on a new viewport:
+        // the layout stays mapped, or a table's open cell editor would go.
         return run(
           value.parse,
           demand,
           value.prefix,
-          value.settling && !moved,
+          value.settling,
           value.retained,
           oneStep,
         )
@@ -953,9 +982,12 @@ export function formattedSyntax(
   return {
     extension: [
       field,
+      // Replacing parseInline itself deoptimizes Lezer's shared table parser.
       formattedBlockParser.of((state) =>
-        Object.assign(syntax.chunkedFor(state).scan.configure({}), {
-          parseInline: () => [],
+        syntax.chunkedFor(state).scan.configure({
+          parseInline: [
+            { name: 'HibiBlockText', parse: (context) => context.end },
+          ],
         }),
       ),
       driver(syntax, options),

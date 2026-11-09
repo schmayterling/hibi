@@ -10,6 +10,7 @@ import {
   waitForFormattedEditor,
 } from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('journal barriers preserve immediate saves, retries, renderer recovery, and native close', {
   timeout: 45000,
@@ -282,8 +283,13 @@ test('J07: saturated native input preserves accepted source and history through 
       )
     },
   )
-  await page.evaluate(() => new Promise(requestAnimationFrame))
   await t.test('recovery restores native editability and focus', async () => {
+    await waitForAsync(
+      rich,
+      (element) =>
+        element.getAttribute('contenteditable') === 'true' &&
+        element === document.activeElement,
+    )
     assert.equal(await rich.getAttribute('contenteditable'), 'true')
     assert.equal(
       await rich.evaluate((element) => element === document.activeElement),
@@ -291,16 +297,22 @@ test('J07: saturated native input preserves accepted source and history through 
     )
   })
   await t.test('native undo and redo retain only accepted source', async () => {
+    const previous =
+      pressure.accepted.at(-2)?.character.repeat(240000) ?? 'x'.repeat(140)
     await pressShortcut(
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      previous,
     )
     const undone = await page.evaluate(async () => {
       await window.hibi.flushDocumentChanges()
       return (await window.hibi.getDocument()).markdown
     })
-    const previous =
-      pressure.accepted.at(-2)?.character.repeat(240000) ?? 'x'.repeat(140)
     assert.equal(
       undone,
       previous,
@@ -309,6 +321,12 @@ test('J07: saturated native input preserves accepted source and history through 
     await pressShortcut(
       app,
       process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+    )
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      pressure.text,
     )
     await page.evaluate(() => window.hibi.flushDocumentChanges())
     assert.equal(

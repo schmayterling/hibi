@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import {
   contextActionBroker,
   EditorInteractionBroker,
@@ -7,6 +7,10 @@ import {
   registerContextActionProvider,
   registerHoverProvider,
 } from '../src/renderer/src/editor-interaction-broker.ts'
+
+beforeEach((t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+})
 
 let nextOwner = 0
 const owner = () => ({
@@ -112,7 +116,7 @@ for (const transition of ['replace', 'timeout']) {
       assert.equal(cancel, null)
       assert.equal(captures, 0)
       assert.deepEqual(updates, [])
-    }
+    } else t.mock.timers.tick(400)
     await started.promise
     assert.deepEqual(await nested.final, [{ label: 'nested-newest' }])
     assert.equal(calls, 2)
@@ -275,6 +279,8 @@ test('dispose inside a timeout abort prevents further current reads and publicat
     if (stopped) staleCurrentCalls++
     return captured
   })
+  await tick()
+  t.mock.timers.tick(400)
   await disposed.promise
   await tick()
   assert.equal(staleCurrentCalls, 0)
@@ -318,7 +324,7 @@ test('hover follows one target and aborts superseded work', async () => {
   remove()
 })
 
-test('unresponsive owner cannot consume new slots across requests', async () => {
+test('unresponsive owner cannot consume new slots across requests', async (t) => {
   const stuck = owner()
   const healthy = owner()
   let stuckCalls = 0
@@ -334,6 +340,8 @@ test('unresponsive owner cannot consume new slots across requests', async () => 
 
   for (let version = 0; version < 20; version++) {
     const result = collect(hoverBroker, request({ contentVersion: version }))
+    await tick()
+    t.mock.timers.tick(400)
     assert.deepEqual(await result.final, [{ label: `fresh ${version}` }])
   }
 

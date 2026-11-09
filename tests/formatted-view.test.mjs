@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -238,8 +239,15 @@ test('behind the switch, completions get prose context past the first 16 KiB', {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'long.md',
+    )
+  })
   await page.waitForFunction(() => window.completionProbe?.ready)
+  await waitForDocumentEditor(app, page)
   const formatted = page.locator('.rich-pane .cm-content')
   await formatted.waitFor()
   await formatted.focus()

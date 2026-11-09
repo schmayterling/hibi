@@ -14,18 +14,52 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  stopElectronTree,
+  waitForAsync,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const day = 24 * 60 * 60 * 1000
+
+async function copyHolds(file, text) {
+  try {
+    return (await readFile(file, 'utf8')).includes(text)
+  } catch (error) {
+    if (error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+test('a copy removed between listing and reading is gone, not a failed scan', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-recovery-scan-'))
+  t.after(() => rm(folder, { recursive: true, force: true }))
+  const old = join(folder, 'offered.1.recovery')
+  await writeFile(old, 'recovered words')
+  const names = await readdir(folder)
+  assert.deepEqual(names, ['offered.1.recovery'])
+  await rm(join(folder, names[0]))
+  assert.equal(await copyHolds(old, 'recovered words'), false)
+  const replacement = join(folder, 'opened.1.recovery')
+  await writeFile(replacement, 'recovered words')
+  assert.equal(await copyHolds(replacement, 'recovered words'), true)
+  await assert.rejects(copyHolds(folder, 'recovered words'), { code: 'EISDIR' })
+})
 
 async function note(t, text = 'original') {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-recovery-app-'))
   const file = join(profile, 'note.md')
   await writeFile(file, text)
   const running = new Set()
-  const copies = () => readdir(join(profile, 'recovery')).catch(() => [])
+  const copies = () =>
+    readdir(join(profile, 'recovery')).catch((error) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
   t.after(async () => {
     for (const app of running) await app.close()
     await rm(profile, { recursive: true, force: true })
@@ -86,15 +120,15 @@ async function note(t, text = 'original') {
         await replaceRichText(page, editor, text)
         await shows(text)
       },
-      /** Until a copy holding this text is on disk. */
-      async kept(text) {
+      /** Until this text is on disk, under a new id when replacing a copy. */
+      async kept(text, previous) {
+        const oldId = previous?.split('.')[0]
         const deadline = performance.now() + 8000
         for (;;) {
           for (const name of await copies())
             if (
-              (
-                await readFile(join(profile, 'recovery', name), 'utf8')
-              ).includes(text)
+              name.split('.')[0] !== oldId &&
+              (await copyHolds(join(profile, 'recovery', name), text))
             )
               return name
           assert.ok(performance.now() < deadline, `no copy holds ${text}`)
@@ -103,12 +137,12 @@ async function note(t, text = 'original') {
           )
         }
       },
-      /** The real thing: main can do nothing about this signal. */
+      /** Kill the tree: on Windows the launcher is not Electron's main. */
       async kill() {
         const child = app.process()
         running.delete(app)
         const gone = once(child, 'exit')
-        child.kill('SIGKILL')
+        stopElectronTree(child)
         await gone
       },
       async quit() {
@@ -158,7 +192,7 @@ test('after a killed process the prompt gets the text back, the file untouched, 
   const first = await launch()
   await first.open('original')
   await first.edit('typed and never saved')
-  await first.kept('typed and never saved')
+  const old = await first.kept('typed and never saved')
   await first.kill()
   assert.equal(await readFile(file, 'utf8'), 'original')
 
@@ -176,7 +210,7 @@ test('after a killed process the prompt gets the text back, the file untouched, 
   assert.equal(restored.dirty, true)
   assert.equal(await readFile(file, 'utf8'), 'original')
   // Killed again now, it would still be there.
-  await second.kept('typed and never saved')
+  await second.kept('typed and never saved', old)
 
   await pressShortcut(second.app, `${mod}+s`)
   await waitForAsync(
@@ -308,11 +342,13 @@ test('a note deleted outside and a note never saved both come back as new notes'
   await first.open('original')
   await first.edit('gone but kept')
   await first.kept('gone but kept')
-  await pressShortcut(first.app, `${mod}+n`)
-  await waitForAsync(
-    first.page,
-    async () => (await window.hibi.getDocument()).name === 'untitled.md',
-  )
+  await openInDocumentEditor(first.app, first.page, async () => {
+    await pressShortcut(first.app, `${mod}+n`)
+    await waitForAsync(
+      first.page,
+      async () => (await window.hibi.getDocument()).name === 'untitled.md',
+    )
+  })
   await first.edit('a new draft')
   await first.kept('a new draft')
   await first.kill()
@@ -470,7 +506,7 @@ test('with the setting on, a killed note opens without a prompt and stays protec
   const first = await launch()
   await first.open('original')
   await first.edit('opened by itself')
-  await first.kept('opened by itself')
+  const old = await first.kept('opened by itself')
   await first.kill()
   await writeFile(file, 'original')
 
@@ -483,7 +519,7 @@ test('with the setting on, a killed note opens without a prompt and stays protec
   assert.equal(opened.dirty, true)
   assert.equal(await readFile(file, 'utf8'), 'original')
   // Opening wrote no note: a second crash still has the text.
-  await second.kept('opened by itself')
+  await second.kept('opened by itself', old)
   await second.kill()
   const third = await launch()
   await third.shows('opened by itself')

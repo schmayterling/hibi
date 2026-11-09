@@ -521,13 +521,15 @@ test('restoring a large stored history takes time in proportion to its steps, wh
     const history = { saved, units, version: 0, steps }
     // Copying the same history through JSON is the yardstick: a restore that
     // went over its steps once per step took hundreds of copies' time.
-    let started = performance.now()
+    let started = process.cpuUsage()
     JSON.parse(JSON.stringify(history))
-    const copy = performance.now() - started
+    let used = process.cpuUsage(started)
+    const copy = (used.user + used.system) / 1000
     const reopened = open('x'.repeat(units))
-    started = performance.now()
+    started = process.cpuUsage()
     assert.equal(restore(reopened, history), true)
-    const took = performance.now() - started
+    used = process.cpuUsage(started)
+    const took = (used.user + used.system) / 1000
     assert.ok(took < 50 * copy + 50, `${shape}: ${took} ms, copy ${copy} ms`)
     assert.equal(reopened.session.historySize().groups, 128)
   }

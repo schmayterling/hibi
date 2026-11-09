@@ -551,7 +551,7 @@ test('dismissed notices refresh other indexed clients without reading word pages
   assert.equal(first.snapshot().notice, 'Recovered words.')
   await first.dismissNotice()
   await waitForAsync(
-    { evaluate: (check) => check() },
+    { evaluate: async (check) => check() },
     () => second.snapshot().notice === undefined,
   )
   assert.equal(first.snapshot().notice, undefined)

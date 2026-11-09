@@ -59,6 +59,10 @@
   gap: var(--space-2);
   min-height: 36px;
   padding: 2px 0;
+  /* Thousands of fields each paint their own controls; off-screen ones skip it
+     and keep a one-line field's height, padding included. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32px;
 }
 .frontmatter-field label {
   display: flex;

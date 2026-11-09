@@ -9,6 +9,7 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import {
   electron,
+  electronGpuArgs,
   forwardElectronDiagnostics,
   installElectronDiagnostics,
   showElectronTestWindows,
@@ -175,6 +176,7 @@ test('hosted visibility policy lets a worker-only fixture launch and close', asy
   const launch = new Function(
     '_electron',
     'showTestWindows',
+    'electronGpuArgs',
     'forwardElectronDiagnostics',
     'showElectronTestWindows',
     'waitForElectronShutdown',
@@ -183,6 +185,7 @@ test('hosted visibility policy lets a worker-only fixture launch and close', asy
   )(
     { launch: async () => application },
     true,
+    electronGpuArgs,
     () => new EventEmitter(),
     showElectronTestWindows,
     (_child, pending) => pending,
@@ -560,6 +563,7 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
     const launch = new Function(
       '_electron',
       'showTestWindows',
+      'electronGpuArgs',
       'forwardElectronDiagnostics',
       'waitForElectronShutdown',
       'stopElectronTree',
@@ -570,6 +574,7 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
     )(
       { launch: async () => application },
       false,
+      electronGpuArgs,
       forwardElectronDiagnostics,
       () =>
         new Promise((_, reject) => {

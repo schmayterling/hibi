@@ -634,8 +634,9 @@ export type DesktopApi = {
   appendDocumentChange: (
     change: import('./document-journal').DocumentChange,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
+  /** An operation, or the id of one admitted, which then need not cross again. */
   appendSourceOperation: (
-    operation: import('./source-operations').SourceOperation,
+    operation: import('./source-operations').SourceOperation | string,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
   admitSourceOperation: (
     operation: import('./source-operations').SourceOperation,

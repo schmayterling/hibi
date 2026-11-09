@@ -310,6 +310,7 @@ for (const route of ['menu', 'shortcut']) {
       await pressShortcut(
         app,
         process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+Shift+z',
+        { delivered: true },
       )
     await settle()
     await page.evaluate(() => window.hibi.flushDocumentChanges())

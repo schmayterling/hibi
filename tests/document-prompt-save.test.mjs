@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -131,12 +132,11 @@ test('version restore keeps a prompt save acknowledged when reading the version 
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).markdown === 'original',
   )
-  await waitForDocumentEditor(app, page)
   await replaceRichText(page, editor, 'saved change')
   await clickMenu(app, 'Save')
   await waitForAsync(

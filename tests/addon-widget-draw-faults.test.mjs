@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   electron,
   expectPageError,
+  openInDocumentEditor,
   waitForDocumentEditor,
 } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
@@ -153,7 +154,9 @@ async function open(
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`), {
+    timeout: 20000,
+  })
   context.pane = presentation === 'formatted' ? '.rich-pane' : '.source-pane'
   // Renderer focus stays inside a hidden test window.
   const cdp = await page.context().newCDPSession(page)
@@ -301,6 +304,57 @@ test('a widget that fails when scrolling draws it leaves the note working', {
     scroller.scrollTop = scroller.scrollHeight
   }, context.pane)
   await named(context, 'bad-ext.bad: widget boom')
+  await type(context, 'x')
+  await typingAndSavingWork(context, source, 'x')
+})
+
+test('a resize restore stops when its pending draw kills the view', {
+  timeout: 60000,
+}, async (t) => {
+  const source = `# Title\n\n${'word '.repeat(200)}Q ${'word '.repeat(8000)}\n\nend\n\n`
+  const context = await open(t, {
+    source,
+    code: featureAddon(
+      'formatted',
+      `
+      // Keep the real observer and draw; invoke its resize before the next
+      // animation frame can drain the pending measure.
+      const NativeResizeObserver = window.ResizeObserver
+      window.ResizeObserver = class extends NativeResizeObserver {
+        constructor(callback) { super(callback); this.callback = callback }
+        observe(target, options) {
+          if (target.matches('.rich-pane'))
+            window.resizeRestore = () => this.callback([], this)
+          super.observe(target, options)
+        }
+      }
+      const extension = EditorView.decorations.of(() => {
+        if (window.resizeDrawFault) throw new Error('resize decorations boom')
+        return Decoration.none
+      })
+    `,
+    ),
+  })
+  await context.page.setViewportSize({ width: 1000, height: 720 })
+  await opened(context, source)
+  await context.page.evaluate(() => {
+    document.querySelector('.rich-pane').scrollTop = 250
+  })
+  await context.page.waitForFunction(() => !!window.resizeRestore)
+  const scroll = await context.page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    const view = pane.querySelector('.cm-content').cmTile.root.view
+    window.resizeDrawFault = true
+    pane.style.maxWidth = '480px'
+    pane.getBoundingClientRect()
+    view.requestMeasure()
+    const before = pane.scrollTop
+    window.resizeRestore()
+    return { before, after: pane.scrollTop }
+  })
+  assert.equal(scroll.after, scroll.before, JSON.stringify(scroll))
+  await named(context, 'bad-ext.bad: resize decorations boom')
+  await editorReady(context)
   await type(context, 'x')
   await typingAndSavingWork(context, source, 'x')
 })
@@ -1034,27 +1088,41 @@ test('a source view that fails drawing what its own scroll brings in is named an
   await typingAndSavingWork(context, source, 'x')
 })
 
-for (const presentation of ['formatted', 'source'])
-  test(`the rebuilt ${presentation} editor keeps the place being read`, {
+for (const [presentation, headings, lateReading] of [
+  ['formatted', false],
+  ['source', false],
+  ['formatted', true],
+  ['formatted', false, true],
+])
+  test(`the rebuilt ${presentation} editor keeps the place being read${headings ? ' in a note with headings' : ''}${lateReading ? ' before older reading work finishes' : ''}`, {
     timeout: 60000,
   }, async (t) => {
-    const far = Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')
+    const far = Array.from(
+      { length: 400 },
+      (_, i) => `${headings && i % 4 === 0 ? '## ' : ''}line ${i}\n\n`,
+    ).join('')
     const source = `${far}end\n\n`
     const context = await open(t, {
       source,
       presentation,
       code: decorationsAddon(presentation),
     })
+    await context.page.setViewportSize({ width: 1000, height: 720 })
     await opened(context, source, presentation)
+    // On a slow machine, as on hosted runners, the rebuilt view settles after
+    // its first measure; at full speed it lands near its place by itself.
+    const cpu = await context.page.context().newCDPSession(context.page)
+    await cpu.send('Emulation.setCPUThrottlingRate', { rate: 6 })
     const at = source.indexOf('line 300')
-    const lineTop = () =>
+    const lineTop = (releaseReading = false) =>
       context.page.evaluate(
-        ({ pane, at }) => {
+        ({ pane, at, releaseReading }) => {
           const content = document.querySelector(`${pane} .cm-content`)
           const view = content.cmTile.root.view
+          if (releaseReading) window.releaseReadingWork()
           return view.coordsAtPos(at)?.top ?? null
         },
-        { pane: context.pane, at },
+        { pane: context.pane, at, releaseReading },
       )
     await context.page.evaluate(
       ({ pane, at }) => {
@@ -1083,6 +1151,54 @@ for (const presentation of ['formatted', 'source'])
         ),
     )
     const before = await lineTop()
+    if (lateReading)
+      await context.page.evaluate(() => {
+        const queue = window.queueMicrotask
+        const held = { queue, tasks: [], released: 0 }
+        window.delayedReading = held
+        // A reading snapshot guards movement, composition and selection.
+        window.queueMicrotask = (task) => {
+          const body = task.toString()
+          if (
+            body.includes('.moved') &&
+            body.includes('.composing') &&
+            body.includes('.selection')
+          )
+            held.tasks.push(task)
+          else queue(task)
+        }
+        window.releaseReadingWork = () => {
+          window.queueMicrotask = held.queue
+          const tasks = held.tasks.splice(0)
+          held.released += tasks.length
+          for (const task of tasks) task()
+        }
+      })
+    // Where each frame the rebuilt views paint shows the line, their first
+    // included: a resize observer runs after layout, before the paint.
+    if (presentation === 'formatted')
+      await context.page.evaluate((pane) => {
+        const painted = []
+        window.paintedLine = painted
+        const failed = document.querySelector(`${pane} .cm-content`)
+        const pulse = document.createElement('div')
+        pulse.style.cssText =
+          'position: fixed; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none'
+        document.body.append(pulse)
+        new ResizeObserver(() => {
+          const content = document.querySelector(`${pane} .cm-content`)
+          if (!content || content === failed) return
+          const line = [...content.querySelectorAll('.cm-line')].find((each) =>
+            each.textContent.startsWith('line 300'),
+          )
+          if (line) painted.push(line.getBoundingClientRect().top)
+        }).observe(pulse)
+        const frame = () => {
+          pulse.style.width = pulse.style.width === '1px' ? '2px' : '1px'
+          if (!window.paintedDone) requestAnimationFrame(frame)
+        }
+        requestAnimationFrame(frame)
+      }, context.pane)
     await context.page.keyboard.insertText('Q')
     await named(context, 'bad-ext.bad: decorations boom')
     await editorReady(context)
@@ -1095,6 +1211,136 @@ for (const presentation of ['formatted', 'source'])
       { pane: context.pane, at },
       { timeout: 5000 },
     )
-    const after = await lineTop()
+    if (lateReading) {
+      // The bookmark finishes before the older reading work is delivered.
+      const aligned = await lineTop()
+      assert.ok(
+        Math.abs(aligned - before) < 60,
+        `bookmark moved ${before} to ${aligned}`,
+      )
+    }
+    const after = await lineTop(lateReading)
+    if (lateReading)
+      assert.ok(
+        await context.page.evaluate(() => window.delayedReading.released > 0),
+        'the delayed reading work ran',
+      )
+    t.diagnostic(`line moved ${before} to ${after}`)
     assert.ok(Math.abs(after - before) < 60, `line moved ${before} to ${after}`)
+    if (presentation === 'formatted') {
+      await context.page.waitForFunction(() => window.paintedLine.length > 0)
+      const painted = await context.page.evaluate(() => {
+        window.paintedDone = true
+        return window.paintedLine
+      })
+      assert.ok(
+        painted.every((top) => Math.abs(top - before) < 60),
+        `line painted ${before} at ${painted.join(', ')}`,
+      )
+    }
   })
+
+test('a focused rebuilt formatted editor keeps its place when lines change height', {
+  timeout: 60000,
+}, async (t) => {
+  const source = `${Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')}end\n\n`
+  const context = await open(t, {
+    source,
+    presentation: 'formatted',
+    code: decorationsAddon('formatted'),
+  })
+  await context.page.setViewportSize({ width: 1000, height: 720 })
+  await opened(context, source)
+  const cdp = await context.page.context().newCDPSession(context.page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const at = source.indexOf('line 300')
+  await context.page.evaluate(
+    ({ pane, at }) => {
+      const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+        .view
+      view.focus()
+      view.dispatch({
+        selection: { anchor: at + 8 },
+        effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+      })
+    },
+    { pane: context.pane, at },
+  )
+  await context.page.keyboard.insertText('Q')
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  // The rebuilt view holds its place until input; here it has focus, so
+  // CodeMirror holds its top line itself when line heights change.
+  await context.page.waitForFunction((pane) => {
+    const lines = [...document.querySelectorAll(`${pane} .cm-line`)]
+    return (
+      lines.length > 0 &&
+      lines.every(
+        (line) => line.textContent || line.classList.contains('hibi-lp-gap'),
+      )
+    )
+  }, context.pane)
+  assert.equal(
+    await context.page.evaluate((pane) => {
+      const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+        .view
+      view.focus()
+      return view.hasFocus
+    }, context.pane),
+    true,
+  )
+  const frames = () =>
+    context.page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+  await frames()
+  // The line at the pane's top, which the view holds.
+  const kept = await context.page.evaluate((pane) => {
+    const scroller = document.querySelector(pane)
+    const top = scroller.getBoundingClientRect().top
+    const line = [...scroller.querySelectorAll('.cm-line')].find(
+      (each) => each.getBoundingClientRect().bottom > top,
+    )
+    return {
+      text: line.textContent,
+      top: line.getBoundingClientRect().top - top,
+      scroll: scroller.scrollTop,
+    }
+  }, context.pane)
+  await context.page.addStyleTag({
+    content: `${context.pane} .cm-line { padding-bottom: 0.25px !important }`,
+  })
+  // Notify CodeMirror of the manually injected style change.
+  await context.page.evaluate(
+    (pane) =>
+      document
+        .querySelector(`${pane} .cm-content`)
+        .cmTile.root.view.requestMeasure(),
+    context.pane,
+  )
+  await context.page.waitForFunction(
+    ({ pane, scroll }) => document.querySelector(pane).scrollTop !== scroll,
+    { pane: context.pane, scroll: kept.scroll },
+  )
+  await frames()
+  await frames()
+  const after = await context.page.evaluate(
+    ({ pane, text }) => {
+      const scroller = document.querySelector(pane)
+      const line = [...scroller.querySelectorAll('.cm-line')].find(
+        (each) => each.textContent === text,
+      )
+      return (
+        line.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      )
+    },
+    { pane: context.pane, text: kept.text },
+  )
+  assert.ok(
+    Math.abs(after - kept.top) < 1,
+    `${kept.text} moved ${kept.top} to ${after}`,
+  )
+})

@@ -15,6 +15,7 @@ import test from 'node:test'
 import { MEDIA_CHANNELS } from '../src/shared/media.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -224,12 +225,14 @@ test('overflowing tabs reveal close buttons and reorder without losing drafts', 
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      basename(file),
-    )
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        basename(file),
+      )
+    })
     await page.waitForFunction(
       () =>
         document.querySelector('.app').getAttribute('aria-busy') === 'false',
@@ -667,8 +670,10 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
     async () => (await window.hibi.getDocument()).markdown === 'untitled draft',
   )
   await choose(a)
-  await clickMenu(app, 'Open…')
-  await page.getByRole('tab', { name: /^a\.md$/i, exact: true }).waitFor()
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await page.getByRole('tab', { name: /^a\.md$/i, exact: true }).waitFor()
+  })
   await waitEditable()
   await replaceRichText(page, rich, 'draft a')
   const aTab = (await read()).tabId
@@ -862,18 +867,26 @@ test('source selection survives tab remounts with emoji and mixed line endings',
   await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await waitForDocumentEditor(app, page)
-  const open = async (file) => {
+  // `name` is the editor the window's current mode shows the note in.
+  const open = async (file, name = 'Document editor') => {
     await app.evaluate(({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
+    await openInDocumentEditor(
+      app,
       page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      basename(file),
+      async () => {
+        await clickMenu(app, 'Open…')
+        await waitForAsync(
+          page,
+          async (name) => (await window.hibi.getDocument()).name === name,
+          basename(file),
+        )
+      },
+      { name },
     )
     await page.waitForFunction(
       () =>
@@ -892,7 +905,7 @@ test('source selection survives tab remounts with emoji and mixed line endings',
   for (let n = 0; n < 7; n++) await source.press('ArrowRight')
   for (let n = 0; n < 6; n++) await source.press('Shift+ArrowRight')
   assert.equal(await page.evaluate(() => getSelection().toString()), 'second')
-  await open(second)
+  await open(second, 'Markdown editor')
   await page.getByRole('tab', { name: 'first.md', exact: true }).click()
   await waitForAsync(
     page,
@@ -1160,12 +1173,14 @@ test('context-menu bulk close confirms dirty tabs and cancels as a unit', {
   while ((await read()).tabs.length < 3) await newTab()
   const [a, b, c] = (await read()).tabs
   assert.ok(a && b && c)
-  await page.locator(`[data-tab-id="${b.id}"]`).click()
-  await waitForAsync(
-    page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    b.id,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await page.locator(`[data-tab-id="${b.id}"]`).click()
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      b.id,
+    )
+  })
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: /document editor/i }),
@@ -1252,13 +1267,14 @@ for (const failure of [false, true]) {
     )
     assert.ok(a && b && c)
     const select = async (id) => {
-      await page.locator(`[data-tab-id="${id}"]`).click()
-      await waitForAsync(
-        page,
-        async (id) => (await window.hibi.getDocument()).tabId === id,
-        id,
-      )
-      await waitForDocumentEditor(app, page)
+      await openInDocumentEditor(app, page, async () => {
+        await page.locator(`[data-tab-id="${id}"]`).click()
+        await waitForAsync(
+          page,
+          async (id) => (await window.hibi.getDocument()).tabId === id,
+          id,
+        )
+      })
     }
     const editor = page.getByRole('textbox', { name: /document editor/i })
     await select(b.id)
@@ -1410,13 +1426,14 @@ test('quit and workspace deletion keep tabs saved before a later prompt cancels'
   const tabs = (await read()).tabs
   const id = (name) => tabs.find((tab) => tab.name === name).id
   const select = async (tabId) => {
-    await page.locator(`[data-tab-id="${tabId}"]`).click()
-    await waitForAsync(
-      page,
-      async (id) => (await window.hibi.getDocument()).tabId === id,
-      tabId,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await page.locator(`[data-tab-id="${tabId}"]`).click()
+      await waitForAsync(
+        page,
+        async (id) => (await window.hibi.getDocument()).tabId === id,
+        tabId,
+      )
+    })
   }
   const marked = (tabId, description) =>
     page.waitForFunction(
@@ -1599,12 +1616,14 @@ test('middle-click is ignored while a tab close is awaiting confirmation', {
   const [a, b] = (await read()).tabs
   assert.ok(a && b)
   assert.equal((await read()).tabId, b.id)
-  await page.locator(`[data-tab-id="${a.id}"]`).click()
-  await waitForAsync(
-    page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    a.id,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await page.locator(`[data-tab-id="${a.id}"]`).click()
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      a.id,
+    )
+  })
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: /document editor/i }),
@@ -2296,12 +2315,14 @@ test('an addon undo asked during a save drops instead of undoing the note a wait
   const [b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
   assert.ok(a && b)
   const show = async (id) => {
-    await page.locator(`[data-tab-id="${id}"]`).click()
-    await waitForAsync(
-      page,
-      async (id) => (await window.hibi.getDocument()).tabId === id,
-      id,
-    )
+    await openInDocumentEditor(app, page, async () => {
+      await page.locator(`[data-tab-id="${id}"]`).click()
+      await waitForAsync(
+        page,
+        async (id) => (await window.hibi.getDocument()).tabId === id,
+        id,
+      )
+    })
     await idle()
     await waitForDocumentEditor(app, page)
   }

@@ -36,6 +36,7 @@ export function createRequestUrl(
         reject(new Error('This plugin has unloaded.'))
         return
       }
+      const throwOnError = input.throw !== false
       const requestId = crypto.randomUUID()
       const cancel = () => {
         reject(new Error('This plugin request was cancelled on unload.'))
@@ -58,7 +59,7 @@ export function createRequestUrl(
           const response = value as RequestUrlBytes
           if (owner.isUnloaded) return
           // Obsidian throws for 400+, not successful or unconsumed redirect responses.
-          if (input.throw !== false && response.status >= 400)
+          if (throwOnError && response.status >= 400)
             throw new Error(
               `Plugin request failed with HTTP ${response.status}.`,
             )

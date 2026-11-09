@@ -298,3 +298,24 @@ test('protocol action names retain valid namespaced and encoded public API strin
     'résumé',
   ])
 })
+
+test('reusing request options cannot change an earlier request HTTP error policy', async (t) => {
+  const load = await modules(t)
+  const { createRequestUrl } = await load('api/core/network.ts')
+  const { Component } = await load('api/core/component.ts')
+  const owner = new Component()
+  t.after(() => owner.unload())
+  const response = Promise.withResolvers()
+  const requestUrl = createRequestUrl(owner, 'fixture', () => response.promise)
+  const options = { url: 'http://localhost', throw: true }
+  const first = requestUrl(options)
+  options.throw = false
+  const second = requestUrl(options)
+  response.resolve({
+    status: 404,
+    headers: {},
+    arrayBuffer: new ArrayBuffer(0),
+  })
+  await assert.rejects(first, /404/)
+  assert.equal((await second).status, 404)
+})

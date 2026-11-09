@@ -61,7 +61,7 @@ export async function obsidianConfiguration(root: string) {
         const info = await lstat(path).catch(() => null)
         if (!info?.isFile() || info.isSymbolicLink() || info.size > 65536)
           continue
-        JSON.parse(await readFile(path, 'utf8'))
+        JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, ''))
         folders.push(entry.name)
         break
       }

@@ -79,3 +79,43 @@ test('unrelated dotfolders are not vaults', async (t) => {
   assert.equal(await obsidianConfiguration(root), null)
   assert.equal(await obsidianSettings(root), null)
 })
+
+for (const [name, json] of [
+  ['appearance.json', '{\r\n  "theme": "moon"\r\n}\r\n'],
+  ['community-plugins.json', '[\r\n  "fixture-plugin"\r\n]\r\n'],
+]) {
+  test(
+    'BOM in custom config ' +
+      name +
+      ' preserves detection without vault writes',
+    async (t) => {
+      const root = await fixture(t)
+      const directory = '.café 日本語'
+      await rename(join(root, '.obsidian'), join(root, directory))
+      for (const companion of [
+        'appearance.json',
+        'workspace.json',
+        'workspace-mobile.json',
+        'core-plugins.json',
+        'community-plugins.json',
+      ])
+        await rm(join(root, directory, companion), { force: true })
+      await writeFile(
+        join(root, directory, 'app.json'),
+        '\ufeff{\r\n  "attachmentFolderPath": "attachments/été"\r\n}\r\n',
+      )
+      await writeFile(join(root, directory, name), '\ufeff' + json)
+      const before = await snapshotVault(root)
+      assert.deepEqual(await obsidianConfiguration(root), {
+        directory,
+        folders: [directory],
+        notice: '',
+      })
+      assert.equal(
+        (await obsidianSettings(root)).attachmentFolderPath,
+        'attachments/été',
+      )
+      assert.deepEqual(diffVault(before, await snapshotVault(root)), [])
+    },
+  )
+}

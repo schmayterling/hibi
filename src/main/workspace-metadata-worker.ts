@@ -279,7 +279,10 @@ async function removeEntry(base: string, name: string): Promise<void> {
     await unlink(join(base, name)).catch(() => {})
 }
 
-async function readRecord(id: string): Promise<CacheRecord | null> {
+async function readRecord(
+  id: string,
+  details = false,
+): Promise<CacheRecord | null> {
   const base = idPattern.test(id) ? await cacheAvailable() : undefined
   if (!base) return null
   try {
@@ -294,7 +297,7 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
     try {
       const opened = await file.stat({ bigint: true })
       if (!opened.isFile() || !sameFileIdentity(opened, info)) return null
-      const reader = new RecordReader(undefined, true)
+      const reader = new RecordReader(undefined, true, !details)
       let first = true
       const buffer = Buffer.alloc(64 * 1024)
       const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -361,7 +364,8 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
             version: page.version,
             fingerprint: value.fingerprint,
           }) &&
-        (value.inlineDetails === undefined ||
+        (!details ||
+          value.inlineDetails === undefined ||
           validInlineDetails(page.details, value.inlineDetails)) &&
         (page.details.bytes > 0 || value.inlineDetails !== undefined) &&
         (!value.headings ||
@@ -432,7 +436,7 @@ async function readDetails(
       ? readInlineDetails(local.source, local.inline, cursor)
       : readDetailStore(local.directory, local.source, cursor)
   }
-  const record = await readRecord(request.id)
+  const record = await readRecord(request.id, true)
   if (
     !record ||
     record.fingerprint !== request.fingerprint ||

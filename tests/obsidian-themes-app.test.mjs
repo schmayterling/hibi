@@ -98,7 +98,7 @@ async function launch(profile, args = []) {
     await backup.waitFor()
     await backup.getByRole('button', { name: 'Continue' }).click()
   }
-  return { close, page }
+  return { app, close, page }
 }
 
 const colors = (page) =>
@@ -449,11 +449,11 @@ test('community installs are reachable through the addon and refuse bad input of
   timeout: 60000,
 }, async (t) => {
   const { profile } = await themedVault(t)
-  const { page } = await launch(profile)
+  const { app, page } = await launch(profile)
   const call = (method, input) =>
     page.evaluate(
       ([method, input]) =>
-        window.hibi.invokeAddon('obsidian-themes', method, input),
+        window.hibi.invokeAddonProfile('obsidian-themes', method, input),
       [method, input],
     )
   assert.deepEqual(
@@ -483,6 +483,55 @@ test('community installs are reachable through the addon and refuse bad input of
     call('installRepo', { repo: 'a/b', name: 'X' }),
     /request id/,
   )
+  // Hold every outgoing request in main, so an install stays in flight
+  // and nothing leaves the machine.
+  await app.evaluate(({ session }) => {
+    globalThis.heldRequests = []
+    session.defaultSession.webRequest.onBeforeRequest(
+      { urls: ['https://*/*'] },
+      (details, callback) => {
+        globalThis.heldRequests.push({ url: details.url, callback })
+      },
+    )
+  })
+  const installing = call('installRepo', {
+    repo: 'hibi-fixtures/heavy-grid',
+    name: 'Heavy Grid',
+    requestId: 'held',
+  })
+  const started = Date.now()
+  for (;;) {
+    const held = await app.evaluate(() => globalThis.heldRequests.length)
+    if (held) break
+    assert.ok(
+      Date.now() - started < 10000,
+      'the install never reached the network',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  assert.match(
+    await app.evaluate(() => globalThis.heldRequests[0].url),
+    /^https:\/\/api\.github\.com\/repos\/hibi-fixtures\/heavy-grid\/releases\/latest/,
+  )
+  // File operations and the cancel both get through while it downloads.
+  await page.evaluate(() =>
+    window.hibi.invokeAddon('obsidian-themes', 'select', {
+      theme: null,
+      snippets: [],
+    }),
+  )
+  assert.deepEqual(await call('cancelInstall', { requestId: 'held' }), {
+    cancelled: true,
+  })
+  assert.deepEqual(await installing, {
+    ok: false,
+    code: 'cancelled',
+    message: 'The theme download was cancelled.',
+  })
+  await app.evaluate(() => {
+    for (const { callback } of globalThis.heldRequests)
+      callback({ cancel: true })
+  })
 })
 
 test('--disable-obsidian-themes starts without the chosen theme', {

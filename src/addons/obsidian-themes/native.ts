@@ -239,7 +239,10 @@ export default {
       }
     },
   },
-  methods: {
+  // Community downloads write only Hibi's own data, and run beside file
+  // operations: on the invoke channel a download would hold every file
+  // operation and its cancel would wait behind it.
+  profileMethods: {
     /** Download a theme from Obsidian's community directory into Hibi's data. Never applies it. */
     async installRepo(input) {
       const request = (input ?? {}) as Record<string, unknown>
@@ -267,6 +270,8 @@ export default {
       controller?.abort()
       return { cancelled: !!controller }
     },
+  },
+  methods: {
     /** Keep a theme and snippets for this vault, copying them into Hibi's data. */
     async select(input, context) {
       const vault = context.workspace.directory()

@@ -46,6 +46,7 @@ test('custom configuration is detected; ambiguous profiles use defaults with not
   assert.equal((await obsidianSettings(root)).directory, '.日本語')
   await mkdir(join(root, '.desktop'))
   await writeFile(join(root, '.desktop/appearance.json'), '{}')
+  await writeFile(join(root, '.desktop/app.json'), '{}')
   const before = await snapshotVault(root)
   const settings = await obsidianSettings(root)
   assert.equal(settings.directory, null)

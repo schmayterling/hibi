@@ -145,6 +145,11 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
     configDir = '.obsidian',
     setup,
   ) {
+    if (
+      process.env.HIBI_FIDELITY_SCENARIO &&
+      !name.includes(process.env.HIBI_FIDELITY_SCENARIO)
+    )
+      return
     await t.test(name, async () => {
       const root = join(folder, `vault-${observations.length}`)
       const capabilities = await fixtureVault(root, settings)
@@ -153,6 +158,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
         await rename(join(root, '.obsidian'), join(root, configs[0]))
       for (const config of configs.slice(1)) {
         await mkdir(join(root, config))
+        await writeFile(join(root, config, 'appearance.json'), '{}')
         await writeFile(
           join(root, config, 'app.json'),
           '{"attachmentFolderPath":"wrong"}',
@@ -336,7 +342,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
       }
       for (const note of [
         ...formats,
-        ...formats.map((path) => 'editable-' + path),
+        ...formats.map((path) => `editable-${path}`),
       ])
         changes[note] = {
           kind: 'file',
@@ -424,9 +430,45 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
     )
   }
 
+  await scenario(
+    'unicode source alias preserves active note and all reference bytes',
+    async ({ result }) => {
+      if (result.capabilities.distinctNormalization) {
+        result.skip = 'filesystem distinguishes unicode normalization'
+        return {}
+      }
+      await openNote('cafe\u0301.md', 'source')
+      const reply = await page.evaluate(() =>
+        window.hibi.workspaceAction({
+          action: 'move',
+          path: 'café.md',
+          destination: 'moved/Été.md',
+        }),
+      )
+      assert.equal(reply.document.name, 'Été.md')
+      return {
+        'cafe\u0301.md': null,
+        'moved/Été.md': {
+          kind: 'file',
+          bytes: Buffer.from('\ufeff[[Été#H]]\r\n'),
+        },
+        'unicode-ref.md': {
+          kind: 'file',
+          bytes: Buffer.from('[[Été#H|alias]]\r\n'),
+        },
+      }
+    },
+    {},
+    '.obsidian',
+    async (root) => {
+      await writeFile(join(root, 'cafe\u0301.md'), '\ufeff[[café#H]]\r\n')
+      await writeFile(join(root, 'unicode-ref.md'), '[[CAFÉ#H|alias]]\r\n')
+    },
+  )
+
   for (const title of [false, true]) {
     await scenario(
-      'case-only rename through ' + (title ? 'document title' : 'explorer'),
+      `case-only rename through ${title ? 'document title' : 'explorer'}`,
       async ({ before }) => {
         if (title) {
           await openNote('case/Case.md', 'source')
@@ -492,7 +534,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
   }
   for (const mode of ['source', 'formatted']) {
     await scenario(
-      'pasted image follows vault policy in ' + mode,
+      `pasted image follows vault policy in ${mode}`,
       async ({ before }) => {
         const note = mode === 'source' ? 'crlf.md' : 'editable-bom.md'
         await openNote(note, mode)
@@ -573,7 +615,7 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
         .getByLabel('Link destination', { exact: true })
         .fill('unicode/café.md#Heading')
       await dialog.getByRole('button', { name: 'Insert', exact: true }).click()
-      const markup = '[[unicode/café#Heading|' + paragraph + ']]'
+      const markup = `[[unicode/café#Heading|${paragraph}]]`
       await waitForAsync(
         page,
         async (markup) =>
@@ -665,6 +707,15 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
             [path]: before.get('nested/Target.md'),
           }
           if (policy !== false) {
+            changes['board.canvas'] = {
+              kind: 'file',
+              bytes: Buffer.from(
+                before
+                  .get('board.canvas')
+                  .bytes.toString()
+                  .replace('"file":"nested/Target.md"', `"file":"${path}"`),
+              ),
+            }
             for (const note of [
               ...formats,
               ...formats.map((path) => `editable-${path}`),
@@ -685,8 +736,12 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
                 referrer
                   .slice(0, referrer.indexOf('`'))
                   .replace(
-                    /(\[\[|\]\()Target/g,
-                    `$1${action !== 'move' ? 'Renamed' : '../moved/Target'}`,
+                    /\[\[Target/g,
+                    `[[${action !== 'move' ? 'Renamed' : 'Target'}`,
+                  )
+                  .replace(
+                    /\]\(Target/g,
+                    `](${action !== 'move' ? 'Renamed' : '../moved/Target'}`,
                   ) + referrer.slice(referrer.indexOf('`')),
               ),
             }
@@ -703,6 +758,159 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
         { alwaysUpdateLinks },
       )
     }
+  }
+
+  await scenario(
+    'moved note keeps outgoing links and updates yaml properties and canvas strings',
+    async ({ before }) => {
+      const source = before.get('nested/Outgoing.md').bytes.toString()
+      const canvas = before.get('references.canvas').bytes.toString()
+      const path = 'moved/deep/Été.md'
+      const reply = await page.evaluate(
+        (destination) =>
+          window.hibi.workspaceAction({
+            action: 'move',
+            path: 'nested/Outgoing.md',
+            destination,
+          }),
+        path,
+      )
+      assert.equal(reply.path, path)
+      return {
+        'nested/Outgoing.md': null,
+        [path]: {
+          kind: 'file',
+          bytes: Buffer.from(
+            source
+              .replaceAll('[[Outgoing', '[[Été')
+              .replaceAll('../unicode/', '../../unicode/'),
+          ),
+        },
+        'references.canvas': {
+          kind: 'file',
+          bytes: Buffer.from(
+            canvas.replaceAll('nested/Outgoing', 'moved/deep/Été'),
+          ),
+        },
+        'properties.md': {
+          kind: 'file',
+          bytes: Buffer.from(
+            before
+              .get('properties.md')
+              .bytes.toString()
+              .replaceAll('nested/Outgoing', 'moved/deep/Été'),
+          ),
+        },
+      }
+    },
+    {},
+    '.obsidian',
+    async (root) => {
+      await mkdir(join(root, 'moved/deep'))
+      await writeFile(
+        join(root, 'nested/Outgoing.md'),
+        '\ufeff---\r\nlinks: ["[[Outgoing#self|alias]]"] # keep\r\n---\r\n[up](../unicode/caf%C3%A9.md#H "keep") [[../unicode/café#H]] [[Outgoing#self]]\r\n',
+      )
+      await writeFile(
+        join(root, 'properties.md'),
+        '\ufeff---\r\nlinks:\r\n  - "[[nested/Outgoing#self|alias]]"\r\nflow: [\'[[nested/Outgoing]]\'] # keep comment\r\n---\r\nbody stays\r\n',
+      )
+      await writeFile(
+        join(root, 'references.canvas'),
+        '{\r\n  "nodes": [{"id":"file","type":"file","file":"nested/Outgoing.md","subpath":"#self"}, {"id":"text","type":"text","text":"[[nested/Outgoing#self|alias]] [up](nested/Outgoing.md)"}],\r\n  "edges": [], "unknown":"keep"\r\n}\r\n',
+      )
+    },
+  )
+
+  await scenario(
+    'title rename refreshes clean source session after self-link edits',
+    async ({ before }) => {
+      await openNote('nested/Self.md', 'source')
+      await clickMenu(app, 'Command palette')
+      await page
+        .getByRole('combobox', { name: 'Search commands' })
+        .fill('Rename document')
+      await page.getByRole('option', { name: /Rename document/i }).click()
+      const dialog = page.getByRole('dialog', {
+        name: 'Rename document',
+        exact: true,
+      })
+      const input = dialog.getByRole('textbox', {
+        name: 'File name',
+        exact: true,
+      })
+      await input.fill('Renamed.md')
+      await input.press('Enter')
+      await dialog.waitFor({ state: 'hidden' })
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).name === 'Renamed.md',
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).dirty,
+        false,
+      )
+      await waitForAsync(page, () =>
+        document
+          .querySelector('.source-pane .cm-content')
+          ?.cmTile?.root?.view.state.doc.toString()
+          .includes('[[Renamed#H|alias]]'),
+      )
+      return {
+        'nested/Self.md': null,
+        'nested/Renamed.md': {
+          kind: 'file',
+          bytes: Buffer.from(
+            before
+              .get('nested/Self.md')
+              .bytes.toString()
+              .replaceAll('[[Self', '[[Renamed'),
+          ),
+        },
+      }
+    },
+    {},
+    '.obsidian',
+    async (root) => {
+      await writeFile(
+        join(root, 'nested/Self.md'),
+        '\ufeff---\r\nlinks: ["[[Self#H|alias]]"]\r\n---\r\n# H\r\n[[Self#H|alias]]\r\n',
+      )
+    },
+  )
+
+  for (const title of [false, true]) {
+    await scenario(
+      `read-only referrer refuses ${title ? 'title rename' : 'explorer move'} before any write`,
+      async () => {
+        if (title) await openNote('nested/Target.md', 'source')
+        const error = await page.evaluate(async (title) => {
+          try {
+            if (title) await window.hibi.renameDocument('New.md')
+            else
+              await window.hibi.workspaceAction({
+                action: 'move',
+                path: 'nested/Target.md',
+                destination: 'moved/Target.md',
+              })
+            return null
+          } catch (error) {
+            return error.message
+          }
+        }, title)
+        assert.match(error, /syntax\.md.*read-only/)
+        return {}
+      },
+      {},
+      '.obsidian',
+      async (root) => {
+        // The byte snapshot precedes the operation; the readonly mode is itself part of setup.
+        await app.evaluate(async (_electron, root) => {
+          const { chmod } = process.getBuiltinModule('fs/promises')
+          await chmod(`${root}/syntax.md`, 0o444)
+        }, root)
+      },
+    )
   }
 
   for (const newFileLocation of ['folder', 'current', 'root']) {

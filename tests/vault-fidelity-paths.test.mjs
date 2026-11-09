@@ -45,7 +45,7 @@ for (const [setting, path] of [
 }
 for (const setting of [
   '../outside',
-  '/tmp/outside',
+  '/../../outside',
   '.obsidian',
   './.obsidian',
   'a/../../outside',

@@ -27,17 +27,12 @@ test('rename updates only wiki and markdown target spans, retaining aliases, suf
   const paths = new Set(['nested/Referrer.md', 'nested/Target.md'])
   const moves = new Map([['nested/Target.md', 'moved/Été.md']])
   const expected = source
-    .replace('[[Target|alias]]', '[[../moved/Été|alias]]')
-    .replace('[[Target#Heading|head]]', '[[../moved/Été#Heading|head]]')
-    .replace('![[Target#^block]]', '![[../moved/Été#^block]]')
-    .replace(
-      '(Target.md#Heading "title")',
-      '(../moved/%C3%89t%C3%A9.md#Heading "title")',
-    )
-    .replace(
-      '(<Target.md#^block> "keep")',
-      '(<../moved/%C3%89t%C3%A9.md#^block> "keep")',
-    )
+    .replace('title: "[[Target]]"', 'title: "[[Été]]"')
+    .replace('[[Target|alias]]', '[[Été|alias]]')
+    .replace('[[Target#Heading|head]]', '[[Été#Heading|head]]')
+    .replace('![[Target#^block]]', '![[Été#^block]]')
+    .replace('(Target.md#Heading "title")', '(../moved/Été.md#Heading "title")')
+    .replace('(<Target.md#^block> "keep")', '(<../moved/Été.md#^block> "keep")')
   assert.equal(
     links.rewriteObsidianLinks(source, 'nested/Referrer.md', paths, moves),
     expected,
@@ -199,8 +194,16 @@ test('automatic updates disabled leave all referrers identical', async (t) => {
     'moved/Target.md',
   )
   await plan.verify()
-  await rename(join(root, 'nested/Target.md'), join(root, 'moved/Target.md'))
-  assert.deepEqual(await plan.apply(), [])
+  assert.deepEqual(
+    await plan.run(
+      () =>
+        rename(join(root, 'nested/Target.md'), join(root, 'moved/Target.md')),
+      () =>
+        rename(join(root, 'moved/Target.md'), join(root, 'nested/Target.md')),
+      join(root, '..', `profile-${root.split('/').at(-1)}`),
+    ),
+    [],
+  )
   assert.deepEqual(
     diffVault(before, await snapshotVault(root), {
       'nested/Target.md': null,

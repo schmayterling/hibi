@@ -11,7 +11,7 @@ export type VaultInfo = {
   target: WorkspaceTarget
   sequence: number
   name: string
-  configDir: string
+  configDir?: string
   settings: VaultSettings | null
   activePath: string | null
   documents: { tabId: string; path: string }[]

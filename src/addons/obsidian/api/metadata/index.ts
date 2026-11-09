@@ -65,6 +65,7 @@ export class MetadataCache extends Events {
     if (this.context.app.vault.target === null) return
     const stream = await this.context.hibi.workspace.subscribeChanges(
       (event) => {
+        if (this.disposed) return
         const previous = this.target
         const same =
           previous?.workspaceId === event.workspaceId &&
@@ -84,6 +85,7 @@ export class MetadataCache extends Events {
     this.target ??= stream.snapshot.target
     this.stops.push(
       this.context.hibi.documents.subscribe((event) => {
+        if (this.disposed) return
         const target =
           event.kind === 'closed' ? event.target : event.metadata?.target
         const file = target ? this.documentFile(target) : null
@@ -91,7 +93,9 @@ export class MetadataCache extends Events {
       }),
     )
     this.stops.push(
-      this.context.hibi.editor.onSyntaxChange(() => this.invalidate(true)),
+      this.context.hibi.editor.onSyntaxChange(() => {
+        if (!this.disposed) this.invalidate(true)
+      }),
     )
   }
 

@@ -305,7 +305,8 @@ test('native APIs work in a plain folder and refuse hidden writes without a conf
   const stored = join(env.root, 'stored-profile')
   await rename(join(env.vault, '.obsidian'), stored)
   const info = await env.queries.vaultInfo(env.input)
-  assert.equal(info.configDir, '.obsidian')
+  assert.equal(info.configDir, undefined)
+  assert.equal(Object.hasOwn(info, 'configDir'), false)
   assert.equal(info.settings, null)
   assert.equal(
     (await env.queries.vaultStat({ ...env.input, path: 'untouched.md' })).kind,

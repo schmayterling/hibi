@@ -174,7 +174,10 @@ export class Workspace extends Events {
     }
     await this.refresh()
     const refresh = () => {
-      void this.refresh().catch(reportError)
+      if (this.stopped) return
+      void this.refresh().catch((error) => {
+        if (!this.stopped) reportError(error)
+      })
     }
     this.context.register(
       this.context.hibi.editorViews.onDidChangeActive(refresh),

@@ -120,7 +120,10 @@ async function environment(t, { plain = false } = {}) {
       documents,
       workspace: {
         get: async () => ({ id: target.workspaceId, workspaceGeneration: 1 }),
-        subscribeChanges: async () => ({ dispose() {} }),
+        subscribeChanges: async (listener) => {
+          state.change = listener
+          return { dispose() {} }
+        },
         readText: async (_target, path) => {
           const markdown = await readFile(join(fixture.vault, path), 'utf8')
           return { ok: true, value: { markdown, version: markdown } }
@@ -160,7 +163,7 @@ async function environment(t, { plain = false } = {}) {
             return {
               target,
               sequence: 1,
-              configDir: '.obsidian',
+              ...(plain ? {} : { configDir: '.obsidian' }),
               name: 'Fixture',
               settings: state.settings,
               activePath: state.openPath,
@@ -585,6 +588,7 @@ test('frontmatter pair patches support additions and deletions without rewriting
 
 test('plain folder exposes its tree and supports note edits without creating configuration', async (t) => {
   const env = await environment(t, { plain: true })
+  assert.equal(env.vault.configDir, undefined)
   assert.equal(await env.vault.adapter.exists('.obsidian'), false)
   assert.equal(env.vault.getMarkdownFiles()[0].path, 'untouched.md')
   assert.deepEqual((await readdir(env.fixture.vault)).sort(), ['untouched.md'])
@@ -619,6 +623,47 @@ test('plain folder exposes its tree and supports note edits without creating con
     await readFile(join(env.fixture.vault, 'untouched.md')),
     before,
   )
+})
+
+test('internal vault refreshes cancel quietly on disposal and still report live failures', async (t) => {
+  const errors = []
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'reportError')
+  globalThis.reportError = (error) => errors.push(error)
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, 'reportError', previous)
+    else delete globalThis.reportError
+  })
+  for (const stopped of [true, false]) {
+    errors.length = 0
+    const env = await environment(t)
+    const file = env.vault.getFileByPath('untouched.md')
+    let reject, start
+    const started = new Promise((resolve) => {
+      start = resolve
+    })
+    const pending = new Promise((_resolve, rejectValue) => {
+      reject = rejectValue
+    })
+    env.context.hibi.native.query = async () => {
+      start()
+      return pending
+    }
+    const refresh = t.mock.method(env.vault, 'refresh')
+    env.state.change({ kind: 'content', paths: ['untouched.md'] })
+    await started
+    if (stopped) env.vault.dispose()
+    const error = new Error('Open this plugin vault again.')
+    reject(error)
+    await new Promise(setImmediate)
+    assert.deepEqual(errors, stopped ? [] : [error])
+    env.vault.dispose()
+    env.state.change({ kind: 'content', paths: ['untouched.md'] })
+    await new Promise(setImmediate)
+    assert.equal(refresh.mock.calls.length, 1)
+    await assert.rejects(env.vault.info(), /stopped/)
+    await assert.rejects(env.vault.read(file), /stopped/)
+    await env.fixture.assertUnchanged()
+  }
 })
 
 test('adapter existence treats protected paths as unavailable', async (t) => {

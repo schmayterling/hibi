@@ -346,29 +346,24 @@ test('app palettes update all surfaces, preserve editing, and persist native app
 })
 
 unit(
-  'a colorscheme can name the group the theme picker lists it under',
+  'the theme picker groups colorschemes under valid headings only',
   async () => {
-    const { defineColorscheme } = await import('../src/shared/colorschemes.ts')
-    const base = {
-      id: 'grouped',
-      name: 'Grouped',
-      appearance: 'light',
-      author: 'test',
-      license: { name: 'MIT', text: 'MIT' },
-      colors: {
-        background: '#ffffff',
-        surface: '#eeeeee',
-        ink: '#111111',
-        muted: '#666666',
-        accent: '#0066cc',
-        border: '#dddddd',
-      },
-    }
-    assert.equal(
-      defineColorscheme({ ...base, group: 'Obsidian themes' }).group,
-      'Obsidian themes',
+    const { colorschemeGroups } = await import(
+      '../src/ui/colorscheme-groups.ts'
     )
-    for (const group of ['', ' ', 'x'.repeat(61), 42])
-      assert.throws(() => defineColorscheme({ ...base, group }), /invalid/)
+    assert.deepEqual(
+      colorschemeGroups([
+        { id: 'a' },
+        { id: 'b', group: 'Obsidian themes' },
+        { id: 'c', group: '' },
+        { id: 'd', group: 'x'.repeat(61) },
+        { id: 'e', group: 42 },
+        { id: 'f', group: 'Obsidian themes' },
+      ]).map(([group, list]) => [group, list.map((item) => item.id)]),
+      [
+        ['', ['a', 'c', 'd', 'e']],
+        ['Obsidian themes', ['b', 'f']],
+      ],
+    )
   },
 )

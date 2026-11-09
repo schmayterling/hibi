@@ -344,3 +344,31 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   )
   await harness.close()
 })
+
+unit(
+  'a colorscheme can name the group the theme picker lists it under',
+  async () => {
+    const { defineColorscheme } = await import('../src/shared/colorschemes.ts')
+    const base = {
+      id: 'grouped',
+      name: 'Grouped',
+      appearance: 'light',
+      author: 'test',
+      license: { name: 'MIT', text: 'MIT' },
+      colors: {
+        background: '#ffffff',
+        surface: '#eeeeee',
+        ink: '#111111',
+        muted: '#666666',
+        accent: '#0066cc',
+        border: '#dddddd',
+      },
+    }
+    assert.equal(
+      defineColorscheme({ ...base, group: 'Obsidian themes' }).group,
+      'Obsidian themes',
+    )
+    for (const group of ['', ' ', 'x'.repeat(61), 42])
+      assert.throws(() => defineColorscheme({ ...base, group }), /invalid/)
+  },
+)

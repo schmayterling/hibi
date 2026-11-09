@@ -411,6 +411,9 @@
   "f1077726d560": [
     "src/renderer/src/addons.ts"
   ],
+  "a9c30426d639": [
+    "src/addons/obsidian/community-native.ts"
+  ],
   "8c733faf0a0a": [
     "src/main/dependencies.ts"
   ],
@@ -597,8 +600,14 @@
   "9711da7f3cd9": [
     "src/addons/import-notion/hibi-addon.json"
   ],
+  "1ab79ec74a09": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "bacfd35540a3": [
     "src/addons/tags/index.tsx"
+  ],
+  "889c99e3c86f": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "e9347ce3c607": [
     "src/addons/tags/index.tsx"
@@ -656,6 +665,9 @@
   ],
   "8fa63eb3c5e1": [
     "src/renderer/src/HotkeyRow.tsx"
+  ],
+  "44907a7a62da": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "cb141fb6cd63": [
     "src/renderer/src/HotkeyRow.tsx"
@@ -1022,6 +1034,9 @@
   ],
   "c533fb66971f": [
     "src/addons/obsidian-themes/store.ts"
+  ],
+  "90d4bf65e43c": [
+    "src/addons/obsidian/community.ts"
   ],
   "9b428a658996": [
     "src/addons/quick-note/native.ts"
@@ -1891,6 +1906,9 @@
   "8f70f6e47c2b": [
     "src/main/workspace-actions.ts"
   ],
+  "45989de49fb7": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "7ebe6d8acd59": [
     "src/renderer/src/FlavorPicker.tsx"
   ],
@@ -2111,6 +2129,9 @@
   "5dd4b9e997ee": [
     "src/main/updates.ts"
   ],
+  "33d22c27af9a": [
+    "src/addons/obsidian/native.ts"
+  ],
   "4f494b22379b": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -2134,6 +2155,9 @@
   ],
   "0cf465b311aa": [
     "src/addons/dictionary/PackSettings.tsx"
+  ],
+  "d5fdc1af021e": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "ad23f434e670": [
     "src/main/media.ts"
@@ -3433,6 +3457,21 @@
   "2296b7344bc6": [
     "src/renderer/src/document-runtime.ts"
   ],
+  "f3996512f031": [
+    "src/addons/obsidian/community.ts"
+  ],
+  "b1dcb0b3d8fa": [
+    "src/addons/obsidian/community-native.ts"
+  ],
+  "e4af843fd6c1": [
+    "src/addons/obsidian/package.ts"
+  ],
+  "c83f24cc74ac": [
+    "src/addons/obsidian/community.ts"
+  ],
+  "98d6bd2995b7": [
+    "src/addons/obsidian/community-native.ts"
+  ],
   "6bf078824a31": [
     "src/renderer/src/completion-broker.ts"
   ],
@@ -3796,6 +3835,10 @@
   "0849033411ce": [
     "src/renderer/src/AddonGarden.tsx"
   ],
+  "97c2e8aeeafb": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "7e11e029a961": [
     "src/addons/_shared/FormatPdf.tsx",
     "src/addons/_shared/format-renderer.tsx"
@@ -4079,6 +4122,7 @@
     "src/addons/keybeats/engine.ts"
   ],
   "dcd1d5223f73": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "cd452315c10b": [
@@ -4381,6 +4425,15 @@
   "6358e3a74155": [
     "src/addons/obsidian/api/registry.ts"
   ],
+  "695ef53b5dd0": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
+  "98c62c72c2f5": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "2cac78b1ff77": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "4e304a5409d2": [
     "src/main/workspace-obsidian.ts"
   ],
@@ -4523,6 +4576,9 @@
   ],
   "c44722ae953a": [
     "src/addons/obsidian/api/vault/index.ts"
+  ],
+  "cc9f5ee62050": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "eb7765f482ac": [
     "src/addons/obsidian/Panel.tsx"
@@ -4869,6 +4925,9 @@
   "f70b903623c3": [
     "src/addons/obsidian/store.ts"
   ],
+  "7a21e9380bb8": [
+    "src/addons/obsidian/store.ts"
+  ],
   "f03cc5f63628": [
     "src/addons/obsidian/store.ts"
   ],
@@ -5174,6 +5233,9 @@
   ],
   "903ae9ad0d9f": [
     "src/addons/git/Panel.tsx"
+  ],
+  "e3514af91da0": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "e2b488cb6e0d": [
     "src/renderer/src/WorkspaceSidebar.tsx"
@@ -5616,8 +5678,14 @@
   "af8d1197c93c": [
     "src/addons/math/PackageSettings.tsx"
   ],
+  "e665f01f95b1": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "0a12d684f979": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "91c3e71aa19f": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "00ff7398c308": [
     "src/renderer/src/CommandPalette.tsx"
@@ -5789,6 +5857,9 @@
   "d03262ba19b0": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "88c42874d9a4": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "6fc9865f25c7": [
     "src/renderer/src/Introduction.tsx"
   ],
@@ -5864,6 +5935,9 @@
   ],
   "a708e074a112": [
     "src/renderer/src/main.tsx"
+  ],
+  "26f089953e84": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "564484f13e2f": [
     "src/addons/keybeats/engine.ts"
@@ -6207,8 +6281,20 @@
   "4d1e54d66aa8": [
     "src/addons/_shared/format-worker.ts"
   ],
+  "9adb62eb7812": [
+    "src/addons/obsidian/community-types.ts"
+  ],
+  "32e2e8d7488d": [
+    "src/addons/obsidian/community-types.ts"
+  ],
+  "0e4f612ac8b8": [
+    "src/addons/obsidian/community-types.ts"
+  ],
   "ce268f14cee4": [
     "src/addons/_shared/FormatPdf.tsx"
+  ],
+  "d9a79be25349": [
+    "src/addons/obsidian/community.ts"
   ],
   "76f814ffc818": [
     "src/main/import-files.ts"
@@ -6403,6 +6489,21 @@
   ],
   "2ea18168d79b": [
     "src/renderer/src/addons.ts"
+  ],
+  "f2b7ad5a0dbd": [
+    "src/addons/obsidian/community.ts"
+  ],
+  "f0e1bdb635fc": [
+    "src/addons/obsidian/community-native.ts"
+  ],
+  "79770acf205f": [
+    "src/addons/obsidian/community-types.ts"
+  ],
+  "922a45b87f59": [
+    "src/addons/obsidian/community-types.ts"
+  ],
+  "42c3f29ed113": [
+    "src/addons/obsidian/community-types.ts"
   ],
   "65cbc7de1c4b": [
     "src/addons/obsidian/api/file-manager/index.ts"
@@ -6702,6 +6803,9 @@
   "cf9108c9789b": [
     "src/addons/mcp-server/tools.ts"
   ],
+  "11b12c51e717": [
+    "src/addons/obsidian/community-native.ts"
+  ],
   "7d078829c1ff": [
     "src/addons/obsidian/native.ts"
   ],
@@ -6722,6 +6826,12 @@
   ],
   "3d98bbef1b29": [
     "src/main/recovery-journal.ts"
+  ],
+  "524e362698c8": [
+    "src/addons/obsidian/community.ts"
+  ],
+  "c47ea763ecee": [
+    "src/addons/obsidian/community.ts"
   ],
   "cf49f739ab5e": [
     "src/main/workspace-obsidian-transaction.ts"
@@ -7181,6 +7291,9 @@
   "f3baf23e2a31": [
     "src/main/addon-documentation.ts"
   ],
+  "52a931fb480a": [
+    "src/addons/obsidian/native.ts"
+  ],
   "4396b1d0a374": [
     "src/renderer/src/source-formatting-actions.ts"
   ],
@@ -7290,6 +7403,9 @@
   "4c1532864ab1": [
     "src/renderer/src/WindowEditor.tsx"
   ],
+  "94be51601b29": [
+    "src/addons/obsidian/community.ts"
+  ],
   "fad38e891406": [
     "src/main/licenses.ts"
   ],
@@ -7374,6 +7490,9 @@
   ],
   "73003d179a64": [
     "src/main/addon-repository.ts"
+  ],
+  "7f62090b78c8": [
+    "src/addons/obsidian/community.ts"
   ],
   "77a1eca0b3d2": [
     "src/renderer/src/document-edits.ts"
@@ -7543,6 +7662,9 @@
   "55674746977e": [
     "src/renderer/src/completion-broker.ts"
   ],
+  "bd9c97edfe75": [
+    "src/addons/obsidian/native.ts"
+  ],
   "38555cec15e2": [
     "src/renderer/src/editor-interaction-broker.ts"
   ],
@@ -7610,6 +7732,12 @@
     "src/addons/dictionary/CustomWords.tsx",
     "src/addons/dictionary/custom-word-storage.ts",
     "src/addons/dictionary/custom-words.ts"
+  ],
+  "088e428fd789": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "6419bd1e8562": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "9a928ba210da": [
     "src/addons/markdown/index.tsx"
@@ -7742,6 +7870,9 @@
   "7786cacd2ef2": [
     "src/addons/dictionary/PackSettings.tsx"
   ],
+  "1c2d290081bc": [
+    "src/addons/obsidian/community-native.ts"
+  ],
   "ffa7aa26add4": [
     "src/shared/admitted-operations.ts"
   ],
@@ -7843,6 +7974,9 @@
   ],
   "a8964f36f720": [
     "src/renderer/src/AddonSettings.tsx"
+  ],
+  "3a5ecca188c0": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "22e2bada8f1c": [
     "src/renderer/src/UpdateSettings.tsx"
@@ -8469,14 +8603,14 @@
   "507e6dce93ec": [
     "src/renderer/src/main.tsx"
   ],
+  "9f06739c7dbe": [
+    "src/addons/obsidian/native.ts"
+  ],
   "93b74ca2930b": [
     "src/renderer/src/RecoverySettings.tsx"
   ],
   "229213386c16": [
     "src/renderer/src/main.tsx"
-  ],
-  "ed78b57877f7": [
-    "src/addons/obsidian/native.ts"
   ],
   "6e73ea811fa6": [
     "src/renderer/src/addons.ts"

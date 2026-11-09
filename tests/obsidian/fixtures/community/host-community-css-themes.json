@@ -1,0 +1,9 @@
+[
+  {
+    "name": "Fixture theme",
+    "author": "Fixture author",
+    "repo": "fixture/theme",
+    "screenshot": "preview.png",
+    "modes": ["dark", "light"]
+  }
+]

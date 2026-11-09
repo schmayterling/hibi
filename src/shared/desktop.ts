@@ -313,6 +313,15 @@ export type DesktopApi = {
   getAddonDirectory: (
     refresh?: boolean,
   ) => Promise<import('./addon-directory').AddonDirectory>
+  obsidianCommunity: (
+    action: 'directory' | 'details' | 'cancel',
+    input: {
+      requestId: string
+      refresh?: boolean
+      kind?: 'plugin' | 'theme'
+      id?: string
+    },
+  ) => Promise<unknown>
   installDirectoryAddon: (
     id: string,
     openSettings?: readonly string[],

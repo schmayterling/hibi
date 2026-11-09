@@ -3,6 +3,24 @@
 This built-in addon is off by default. Enable **Obsidian plugins** in Settings →
 Addons, then open its settings page with a vault folder open.
 
+You can browse the official Obsidian community directory in Settings → Addon
+Manager → **Browse community plugins and themes**, even when both compatibility
+addons are off. Search by name, author, description, or repository, and sort by
+downloads, name, or update date. The Themes tab uses the Obsidian themes addon;
+turn it on before installing a theme. Theme installs do not apply themselves.
+
+Open **Details** to read a repository's README and check its latest release,
+minimum Obsidian version, or desktop-only restriction. README images do not
+load automatically. The directory caches validated lists with ETags for later
+offline visits; **Refresh community directory** checks for newer lists.
+
+Community plugin installs download release assets in the main process, then use
+the same validation and trust confirmation as folder installs. The confirmation
+names the author, repository, release, and package hash. Hibi records the source
+and individual file hashes. A changed latest release is shown when you open
+Details for an installed plugin. Updating keeps its overlay settings and starts
+the replacement disabled. You can cancel a download before confirming trust.
+
 Choose **Install from folder** to select a plugin package. You can also install
 a separate copy of a plugin found in the vault's `.obsidian/plugins` folder.
 Review the package name, description, and hash before confirming trust. Each

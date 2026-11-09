@@ -118,6 +118,13 @@ export function startObsidianHost(hibi: AddonContext): () => void {
       if (current() && host === nextHost) await refresh(nextHost)
     }
   }
+  const communityInstalled = () => {
+    if (host && current()) void refresh(host).catch(failed)
+  }
+  window.addEventListener(
+    'hibi:obsidian-community-installed',
+    communityInstalled,
+  )
   // Activation returns immediately. A plugin awaiting onload cannot delay host teardown.
   void hibi.workspace
     .subscribeChanges((event) => {
@@ -138,6 +145,10 @@ export function startObsidianHost(hibi: AddonContext): () => void {
     active = false
     sequence++
     subscription?.dispose()
+    window.removeEventListener(
+      'hibi:obsidian-community-installed',
+      communityInstalled,
+    )
     removePage()
     styles.dispose()
     try {

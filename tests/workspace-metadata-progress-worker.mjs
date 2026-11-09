@@ -1,4 +1,5 @@
 import { parentPort } from 'node:worker_threads'
+import { MarkdownParser } from '@lezer/markdown'
 import { Tokenizer } from 'marked'
 import { BlockTokenizer } from '../src/shared/marked-blocks.ts'
 
@@ -21,5 +22,16 @@ for (const prototype of [Tokenizer.prototype, BlockTokenizer.prototype]) {
       }
     }
   }
+}
+// Metadata now parses with lezer: count each step of its incremental parse.
+const startParse = MarkdownParser.prototype.startParse
+MarkdownParser.prototype.startParse = function (...args) {
+  const parse = startParse.apply(this, args)
+  const advance = parse.advance
+  parse.advance = function () {
+    Atomics.add(advances, 0, 1)
+    return advance.call(this)
+  }
+  return parse
 }
 await import('../src/main/workspace-metadata-worker.ts')

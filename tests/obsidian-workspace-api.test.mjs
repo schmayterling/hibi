@@ -162,6 +162,51 @@ async function environment(t) {
   }
 }
 
+test('internal workspace refreshes cancel quietly on disposal and still report live failures', async (t) => {
+  const errors = []
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'reportError')
+  globalThis.reportError = (error) => errors.push(error)
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, 'reportError', previous)
+    else delete globalThis.reportError
+  })
+  for (const stopped of [true, false]) {
+    errors.length = 0
+    const env = await environment(t)
+    let reject, start
+    const started = new Promise((resolve) => {
+      start = resolve
+    })
+    const pending = new Promise((_resolve, rejectValue) => {
+      reject = rejectValue
+    })
+    env.context.app.vault.info = async () => {
+      start()
+      return pending
+    }
+    const refresh = t.mock.method(env.workspace, 'refresh')
+    const dispose = () => {
+      for (const cleanup of env.cleanups.splice(0).reverse()) cleanup()
+    }
+    env.handlers.active()
+    await started
+    if (stopped) dispose()
+    const error = new Error('Open this plugin vault again.')
+    reject(error)
+    await new Promise(setImmediate)
+    assert.deepEqual(errors, stopped ? [] : [error])
+    dispose()
+    env.handlers.document()
+    await new Promise(setImmediate)
+    assert.equal(refresh.mock.calls.length, 1)
+    await assert.rejects(
+      env.workspace.openLinkText('other', 'untouched.md'),
+      /stopped/,
+    )
+    await env.fixture.assertUnchanged()
+  }
+})
+
 test('workspace maps active leaves to document identity and emits lifecycle changes', async (t) => {
   const env = await environment(t)
   const { workspace, state } = env

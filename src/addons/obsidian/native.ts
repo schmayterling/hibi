@@ -22,6 +22,7 @@ import {
   ObsidianStore,
   obsidianVaultIdentity,
   readObsidianPackage,
+  type VaultSettingsOffer,
 } from './store'
 
 const stores = new Map<string, ObsidianStore>()
@@ -114,6 +115,23 @@ function pluginId(data: { id?: unknown }) {
   if (!validPluginId(data.id))
     throw new Error('Choose an installed Obsidian plugin.')
   return data.id
+}
+
+function settingsImport(input: unknown): VaultSettingsOffer {
+  const offer = input as VaultSettingsOffer | null
+  if (
+    !offer ||
+    typeof input !== 'object' ||
+    Array.isArray(input) ||
+    typeof offer.overwrite !== 'boolean' ||
+    typeof offer.sourceHash !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(offer.sourceHash) ||
+    (offer.globalHash !== null &&
+      (typeof offer.globalHash !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(offer.globalHash)))
+  )
+    throw new Error('Invalid vault settings request.')
+  return offer
 }
 
 async function install(
@@ -377,9 +395,20 @@ export default {
       return place.store.setEnabled(id, enabled, place.check)
     },
     async importVaultData(input, context) {
+      const offer = settingsImport(input)
       const place = await globalPlace(input, context)
-      const folder = await captured(input, context, false)
+      const folder = await captured(input, context)
       return place.store.importVaultData(
+        pluginId(place.data),
+        folder.canonical,
+        offer,
+        folder.check,
+      )
+    },
+    async dismissVaultData(input, context) {
+      const place = await globalPlace(input, context)
+      const folder = await captured(input, context)
+      await place.store.dismissVaultData(
         pluginId(place.data),
         folder.canonical,
         folder.check,

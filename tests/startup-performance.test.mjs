@@ -176,7 +176,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Applying an edit at every line of a large selection, such as Tab over a
   // megabyte of code, in one pass over the source tree adds 1,207 (#964).
   // Listing the built-in Obsidian themes addon (off by default) in the addon
-  // catalog adds its manifest's 369 bytes; its code loads only when enabled.
+  // catalog adds 291 bytes (paired builds with only its catalog registration
+  // omitted: 695,989 -> 696,280); its code loads only when enabled.
   // Registering the minimal, off-by-default Obsidian plugins catalog entry adds
   // 1,332 bytes (paired builds: 694,970 -> 696,302; identical initial module sets).
   // Plugin code stays lazy, including the services registered by other lanes.
@@ -226,7 +227,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         97 +
         40 +
         1207 +
-        369 +
+        291 +
         obsidianPluginCatalogBytes,
     `startup catalog grew to ${bytes} bytes`,
   )

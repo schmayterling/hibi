@@ -289,6 +289,12 @@
   "7e778f24c85b": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "e806d706a53c": [
+    "src/addons/editor-width/hibi-addon.json"
+  ],
+  "9ac0cbee1739": [
+    "src/addons/editor-width/index.ts"
+  ],
   "f003198c9d2c": [
     "src/addons/markdown/github-flavor-info.ts",
     "src/addons/markdown/index.tsx"
@@ -2188,6 +2194,10 @@
   "1d183389ad2b": [
     "src/renderer/src/Titlebar.tsx"
   ],
+  "6eb4090c5159": [
+    "src/addons/editor-width/hibi-addon.json",
+    "src/addons/editor-width/index.ts"
+  ],
   "f1056ff3b7e2": [
     "src/renderer/src/addons.ts"
   ],
@@ -2311,6 +2321,9 @@
   "60a7eb27b26a": [
     "src/renderer/src/workspace-menu.ts"
   ],
+  "283fab389c04": [
+    "src/addons/editor-width/Settings.tsx"
+  ],
   "33c4e36cc1fd": [
     "src/addons/quick-note/native.ts"
   ],
@@ -2322,6 +2335,9 @@
   ],
   "7b23c1fa88c7": [
     "src/addons/mcp-server/types.ts"
+  ],
+  "37139d427e24": [
+    "src/addons/editor-width/Settings.tsx"
   ],
   "245811b9dc75": [
     "src/addons/discord-presence/types.ts"
@@ -3447,6 +3463,9 @@
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
   ],
+  "c3ffe90b3fec": [
+    "src/addons/editor-width/Settings.tsx"
+  ],
   "3f7e8edecd18": [
     "src/main/window-controls.ts"
   ],
@@ -3555,6 +3574,9 @@
   ],
   "eeb809788685": [
     "src/renderer/src/likely-addons.ts"
+  ],
+  "98d72e5c64cd": [
+    "src/addons/editor-width/index.ts"
   ],
   "d7852cd0d245": [
     "src/addons/vim/Settings.tsx"
@@ -7004,6 +7026,9 @@
   "2b065c7c9ce4": [
     "src/renderer/src/Introduction.tsx"
   ],
+  "ce3ec6bfc92b": [
+    "src/addons/editor-width/index.ts"
+  ],
   "dfc1e6d16ba5": [
     "src/site/main.tsx"
   ],
@@ -7475,6 +7500,9 @@
   ],
   "147170e793c6": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "4f25222813cc": [
+    "src/addons/editor-width/index.ts"
   ],
   "39965152019f": [
     "src/addons/markdown/flavor-info.ts"

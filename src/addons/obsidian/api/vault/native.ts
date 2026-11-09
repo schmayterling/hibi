@@ -13,6 +13,7 @@ import {
   workspaceChangeCursor,
 } from '../../../../main/workspace'
 import { workspaceAction } from '../../../../main/workspace-actions'
+import { updateWorkspaceText } from '../../../../main/workspace-files'
 import {
   obsidianConfiguration,
   obsidianSettings,
@@ -266,6 +267,24 @@ export function createVaultNative(
       },
     },
     methods: {
+      async vaultUpdateText(input: unknown) {
+        const place = await captured(input)
+        const path = place.path(place.data.path)
+        await resolveWorkspaceEntry(place.root, path)
+        place.check()
+        return updateWorkspaceText(
+          place.target,
+          path,
+          place.data.expectedVersion,
+          place.data.markdown,
+          { allowMetadataReset: true },
+          () => {
+            place.check()
+            return true
+          },
+          true,
+        )
+      },
       async vaultCreateFolder(input: unknown) {
         const place = await captured(input)
         const path = place.path(place.data.path)

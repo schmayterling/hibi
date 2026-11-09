@@ -2824,6 +2824,9 @@
   "c7a8f9cd36ee": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "90293fa136c2": [
+    "src/addons/obsidian/api/file-manager/index.ts"
+  ],
   "1de211d07e92": [
     "src/addons/obsidian/api/file-manager/index.ts"
   ],
@@ -7104,9 +7107,6 @@
   ],
   "3f08b04c75dd": [
     "src/addons/dictionary/pack-verification.ts"
-  ],
-  "bfc583a375b8": [
-    "src/addons/obsidian/api/vault/index.ts"
   ],
   "f70a180e8466": [
     "src/shared/imports.ts"

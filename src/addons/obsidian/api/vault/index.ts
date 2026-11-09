@@ -1,5 +1,12 @@
 import type { SourceEdit } from '../../../../shared/document-edits'
-import type { WorkspaceTarget } from '../../../../shared/foundation-contracts'
+import type {
+  DocumentTarget,
+  WorkspaceTarget,
+} from '../../../../shared/foundation-contracts'
+import type {
+  WorkspaceFileResult,
+  WorkspaceTextUpdate,
+} from '../../../../shared/workspace'
 import type { AddonContext } from '../../../api'
 import { Events, reportError } from '../core/events'
 import { registerObsidianApi } from '../registry'
@@ -316,6 +323,19 @@ export class Vault extends Events {
     if (!document) throw new Error('This document session changed. Try again.')
     return document
   }
+  getFileForDocument(target: DocumentTarget) {
+    const open = this.#hibi.documents
+      .listOpen()
+      .find(
+        ({ target: current }) =>
+          current.documentId === target.documentId &&
+          current.documentGeneration === target.documentGeneration,
+      )
+    const path = this.#info.documents.find(
+      (document) => document.tabId === open?.tabId,
+    )?.path
+    return path ? this.getFileByPath(path) : null
+  }
   async read(file: TFile) {
     const path = this.#path(file)
     const info = await this.info()
@@ -378,27 +398,21 @@ export class Vault extends Events {
           changes: sourceChange(before, after),
         })
         if (result.status !== 'applied') throw new Error(result.message)
-        const saved = await this.#hibi.documents.save({
-          ...read.target,
-          contentVersion: result.contentVersion,
-        })
-        if (saved.status !== 'saved' && saved.status !== 'clean')
-          throw new Error(
-            'message' in saved
-              ? saved.message
-              : 'This document could not be saved.',
-          )
+        return after
       } else {
-        const result = await this.#hibi.workspace.updateText(
-          this.target,
+        const result = await this.#invoke<
+          WorkspaceFileResult<WorkspaceTextUpdate>
+        >('vaultUpdateText', {
           path,
-          read.value.version,
-          after,
-          { allowMetadataReset: true },
-        )
+          expectedVersion: read.value.version,
+          markdown: after,
+        })
         if (!result.ok) throw new Error(result.message)
       }
-      await this.refresh([path])
+      // A committed write must not become a retryable failure if tree refresh fails.
+      await this.refresh([path]).catch((error) => {
+        if (!this.#disposed) reportError(error)
+      })
       return after
     })
   }
@@ -484,10 +498,16 @@ export class Vault extends Events {
     return result as T
   }
   readonly adapter = {
-    exists: async (path: string) =>
-      (await this.#query<VaultEntry | null>('vaultStat', {
-        path: vaultPath(path, this.configDir, true),
-      })) !== null,
+    exists: async (path: string) => {
+      try {
+        path = vaultPath(path, this.configDir, true)
+      } catch {
+        return false
+      }
+      return (
+        (await this.#query<VaultEntry | null>('vaultStat', { path })) !== null
+      )
+    },
     stat: async (path: string) => {
       const entry = await this.#query<VaultEntry | null>('vaultStat', {
         path: vaultPath(path, this.configDir, true),

@@ -188,6 +188,7 @@ export default {
     },
   },
   methods: {
+    vaultUpdateText: vaultMethod('vaultUpdateText'),
     vaultCreateFolder: vaultMethod('vaultCreateFolder'),
     vaultAction: vaultMethod('vaultAction'),
     install: (input, context) => install(input, context, false),

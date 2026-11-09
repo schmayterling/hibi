@@ -10,7 +10,7 @@ export function vaultPath(
     !value ||
     value.length > 4096 ||
     /[\\\p{Cc}]/u.test(value) ||
-    /^[a-z]:\//i.test(value)
+    /^[a-z]:/i.test(value)
   )
     throw new Error('Choose a path inside this vault.')
   const parts = value.split('/')

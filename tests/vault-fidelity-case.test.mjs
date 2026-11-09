@@ -67,6 +67,15 @@ for (const windowsPaths of [false, true])
     t.after(() => rm(base, { recursive: true, force: true }))
     const root = join(base, 'vault')
     await fixtureVault(root)
+    // Windows path comparison only meets volumes that ignore case.
+    if (
+      windowsPaths &&
+      !(await isCaseOnlyRename(
+        join(root, 'case/Case.md'),
+        join(root, 'case/CASE.md'),
+      ))
+    )
+      return t.skip('this volume is case-sensitive')
     const context = {
       root,
       current: join(root, 'case/Case.md'),

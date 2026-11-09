@@ -229,7 +229,10 @@ export async function workspaceAction(
           document: getDocument(),
           path: relative(base, source).split(sep).join('/'),
         }
-      if (contains(source, resultPath))
+      const caseOnly =
+        action === 'rename' && (await isCaseOnlyRename(source, resultPath))
+      // Windows compares paths without case, so a case-only rename is "inside" itself.
+      if (!caseOnly && contains(source, resultPath))
         throw new Error(
           'A folder cannot be placed inside itself. Choose another location.',
         )
@@ -237,8 +240,6 @@ export async function workspaceAction(
         throw new Error(
           'A document is open at that location. Choose another name or location.',
         )
-      const caseOnly =
-        action === 'rename' && (await isCaseOnlyRename(source, resultPath))
       if (!caseOnly && (await lstat(resultPath).catch(missing)))
         throw new Error(
           'A file or folder exists at that location. Choose another name or location.',

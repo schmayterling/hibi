@@ -153,10 +153,11 @@ test('main admission blocks transitive consumers without changing enabled prefer
     }),
   ])
   const errors = t.mock.method(console, 'error', () => {})
+  const sender = { webContents: { id: 7 } }
   let stops = 0
   h.state.natives.consumer = {
     id: 'consumer',
-    methods: { probe: () => 'ok' },
+    methods: { probe: (_input, context) => context.senderId },
     import: () => 'imported',
     stop() {
       stops++
@@ -171,13 +172,13 @@ test('main admission blocks transitive consumers without changing enabled prefer
   for (const value of [null, 'true', 1, {}])
     await assert.rejects(h.enableAddon('leaf', true, value), /Could not change/)
   assert.equal(stateOf(h, 'provider').enabled, false)
-  await assert.rejects(h.invokeAddon({}, 'consumer', 'probe', null), {
+  await assert.rejects(h.invokeAddon(sender, 'consumer', 'probe', null), {
     message: 'Enable this addon in Settings → Addons first.',
   })
   await h.enableAddon('leaf', true, true)
   await h.enableAddon('optional', true)
   const owner = h.currentAddonOwner('consumer')
-  assert.equal(await h.invokeAddon({}, 'consumer', 'probe', null), 'ok')
+  assert.equal(await h.invokeAddon(sender, 'consumer', 'probe', null), 7)
   assert.equal(await h.convertImport('consumer', []), 'imported')
   const cleanups = []
   h.setAddonDeactivationHandler(async (id, generation) => {
@@ -202,7 +203,7 @@ test('main admission blocks transitive consumers without changing enabled prefer
   )
   assert.equal(h.getImporters().length, 0)
   assert.equal(stateOf(h, 'optional').blockedBy, undefined)
-  await assert.rejects(h.invokeAddon({}, 'consumer', 'probe', null), {
+  await assert.rejects(h.invokeAddon(sender, 'consumer', 'probe', null), {
     message: 'Enable this addon in Settings → Addons first.',
   })
   await assert.rejects(h.convertImport('consumer', []), /Enable this importer/)
@@ -212,7 +213,7 @@ test('main admission blocks transitive consumers without changing enabled prefer
     h.isAddonActivationCurrent('consumer', owner.activationGeneration),
     false,
   )
-  assert.equal(await h.invokeAddon({}, 'consumer', 'probe', null), 'ok')
+  assert.equal(await h.invokeAddon(sender, 'consumer', 'probe', null), 7)
 })
 
 test('main rejects import results after disabling and re-enabling the importer', async (t) => {

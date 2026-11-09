@@ -86,7 +86,9 @@ const bundle = await build({
             }),
           )
         build.onResolve({ filter: /^\.\/workspace$/ }, (args) =>
-          /[/\\]workspace-(metadata-query|text-search)\.ts$/.test(args.importer)
+          /[/\\]workspace-(metadata-query|note-cache-query|text-search)\.ts$/.test(
+            args.importer,
+          )
             ? { path: args.path, namespace: 'text-host' }
             : null,
         )
@@ -144,6 +146,7 @@ const bundle = await build({
           }
           export const workspaceMetadataDelta=async()=>null
           export const workspaceMetadataHeadings=async()=>null
+          export const workspaceMetadataDetails=async()=>null
           export const workspaceMetadataPages=(syntax,current)=>({
             pages:(async function*(){
               host().indexReads++

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -120,7 +121,19 @@ for (const [useMarkdownLinks, format, expected] of [
         join(root, 'unicode/café.md'),
         'label',
       )
-      assert.equal(result.markdown, expected)
+      // A volume that keeps café and its decomposed twin apart makes the
+      // shortest name ambiguous, so the link falls back to the vault path.
+      const twins = (await readdir(join(root, 'unicode'))).filter(
+        (name) => name.normalize('NFC') === 'café.md',
+      ).length
+      assert.equal(
+        result.markdown,
+        format === 'shortest' && twins > 1
+          ? useMarkdownLinks
+            ? '[label](/unicode/caf%C3%A9.md)'
+            : '[[/unicode/café|label]]'
+          : expected,
+      )
       assert.deepEqual(diffVault(before, await snapshotVault(root)), [])
     },
   )

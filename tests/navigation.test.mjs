@@ -64,6 +64,7 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
       dialog.showMessageBox = async () => ({ response: 1 })
       shell.openExternal = async (url) => {
         globalThis.lastExternal = url
+        globalThis.externalOpened?.()
       }
     },
     join(root, 'a.md'),
@@ -75,8 +76,15 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
   await rich
     .getByRole('link', { name: /^web$/i, exact: true })
     .click({ modifiers: ['Shift'] })
+  // The open reaches main after the click returns.
   assert.equal(
-    await app.evaluate(() => globalThis.lastExternal),
+    await app.evaluate(
+      () =>
+        new Promise((resolve) => {
+          globalThis.externalOpened = () => resolve(globalThis.lastExternal)
+          if (globalThis.lastExternal) globalThis.externalOpened()
+        }),
+    ),
     'https://example.com/',
   )
   await rich.getByRole('link', { name: /^next$/i, exact: true }).click()

@@ -13,7 +13,14 @@ const preferences = stored<Preferences>(
     try {
       const value = JSON.parse(localStorage.getItem(key) ?? '{}')
       return {
-        enabled: value.enabled === true,
+        // On unless turned off. A stored value that isn't one can't say the
+        // note may be written, so it stays off too.
+        enabled:
+          value.enabled === undefined &&
+          typeof value === 'object' &&
+          !Array.isArray(value)
+            ? true
+            : value.enabled === true,
         delay: autosaveDelays.includes(value.delay) ? value.delay : 2000,
       }
     } catch {
@@ -53,11 +60,17 @@ function release(tabId: string) {
   holds.get(tabId)?.notice?.dismiss()
   holds.delete(tabId)
 }
+/** When a tab's rest after its last attempt ends: a large note rests between them, its text kept for recovery meanwhile. */
+const rests = new Map<string, number>()
+const ATTEMPT_REST = 10
+// An attempt that outlasts a lost share or a sleeping computer says little about the next.
+const LONGEST_REST = 300000
 function attemptDelay(tabId: string, delay: number) {
   const hold = holds.get(tabId)
+  const wait = Math.max(delay, (rests.get(tabId) ?? 0) - performance.now())
   return hold?.notice
-    ? Math.max(delay, hold.last + HELD_ATTEMPT_GAP - Date.now())
-    : delay
+    ? Math.max(wait, hold.last + HELD_ATTEMPT_GAP - Date.now())
+    : wait
 }
 
 export function useAutosave(
@@ -144,6 +157,7 @@ export function useAutosave(
           if (!token) return
           inFlight.current = true
           const identity = { id: next.id, revision: next.revision }
+          const started = performance.now()
           setResult({ ...identity, status: 'saving' })
           try {
             const saved = await window.hibi.autosaveDocument(
@@ -197,6 +211,11 @@ export function useAutosave(
           } finally {
             documentRuntime.endSave(token)
             inFlight.current = false
+            const now = performance.now()
+            rests.set(
+              next.tabId,
+              now + Math.min((now - started) * ATTEMPT_REST, LONGEST_REST),
+            )
             // Timers of one length run in order: the tabs after this one go
             // first, so each gets a turn however many are held. Settings may
             // have changed during the attempt.

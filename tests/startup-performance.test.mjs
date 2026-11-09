@@ -169,12 +169,16 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // left, adds 528 (#878).
   // Reading display blocks as Obsidian reads fenced math, including their
   // closed state, preferences and shared list bounds, adds 894 (#731).
+  // The Editor width addon's catalog entry and icon, and status bar sliders and
+  // switches for addons, add 1,929 (#868).
   // Not taking a write's late storage notice for someone else's change, which
   // made autocomplete forget words typed after a save, adds 97 (#936).
   // Not taking an older storage notice over a newer commit, or over a newer
   // schema learned from a refused write, adds 40 (#937).
   // Applying an edit at every line of a large selection, such as Tab over a
   // megabyte of code, in one pass over the source tree adds 1,207 (#964).
+  // Default-on autosave and resting from each attempt's end, for at most five
+  // minutes, adds 227 (#883).
   // Listing the built-in Obsidian themes addon (off by default) in the addon
   // catalog adds 291 bytes (paired builds with only its catalog registration
   // omitted: 695,932 -> 696,223); its code loads only when enabled.
@@ -224,9 +228,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         924 +
         528 +
         894 +
+        1929 +
         97 +
         40 +
         1207 +
+        227 +
         291 +
         obsidianPluginCatalogBytes,
     `startup catalog grew to ${bytes} bytes`,

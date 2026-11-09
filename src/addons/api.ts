@@ -339,6 +339,23 @@ export type StatusItem = {
   /** Omit to show in every editor view. Empty labels hide the pill. */
   when?: 'normal' | 'source'
   onClick?: () => void | Promise<void>
+  /** Render a labeled range control instead of a text pill or button. */
+  slider?: {
+    min: number
+    max: number
+    step?: number | 'any'
+    value: number
+    disabled?: boolean
+    /** Spoken value, including units, for assistive technology. */
+    valueText?: string
+    /** Called while the slider moves, including keyboard adjustments. */
+    onChange: (value: number) => void | Promise<void>
+  }
+  /** Render a labeled checkbox switch instead of a text pill or button. */
+  toggle?: {
+    checked: boolean
+    onChange: (checked: boolean) => void | Promise<void>
+  }
 }
 
 /** Editor-only input. Never emitted from settings, search, dialogs, or hidden panes. */

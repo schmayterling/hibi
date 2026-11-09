@@ -14,6 +14,7 @@ import {
   PanelTop,
   Plug,
   Puzzle,
+  RulerDimensionLine,
   ScrollText,
   Settings,
   Sigma,
@@ -65,6 +66,7 @@ export const settingsCategories = [
 ] as const
 
 const icons = {
+  'ruler-dimension-line': RulerDimensionLine,
   activity: Activity,
   'audio-lines': AudioLines,
   'book-open': BookOpen,

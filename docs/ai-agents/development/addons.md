@@ -87,6 +87,10 @@ mode.dispose()
 
 Updates after disposal are ignored. Click failures produce an error notification. Vim owns one status pill per source editor and updates it when modes change.
 
+For a range control, add `slider: { min, max, step?, value, valueText?, onChange }`. The item label names the slider, and `valueText` supplies its spoken value with units. Update the slider value through the status handle as it changes. Slider callbacks have the same error handling and shutdown cleanup as clicks. Editor width demonstrates this control.
+
+Sliders also accept `disabled` and `step: 'any'`. For a checkbox switch, use a separate item with `toggle: { checked, onChange }`. Update `checked` through its status handle. Toggle callbacks share the same lifecycle and error handling.
+
 ## Slash actions
 
 An existing command can join the slash menu with `slash: { label, description, keywords?, available?, when?, transform }`. `available(note)` decides whether the action is offered and reads only what it needs: `note.slice(from, to)` returns part of the note and `note.length` is its length, in UTF-16 code units. `when(source)` receives the complete note instead, which is read again whenever the menu changes, so prefer `available`; Hibi checks `available` when both are set. `transform(source)` synchronously receives the whole note with its slash query removed, then returns replacement text or `null` to cancel. Keep checks and transforms pure. Frontmatter's check reads a few pieces of the note each time, reads on in idle time, and keeps its answer through edits that cannot change it; it shares one `addFrontmatter` transform between its palette and slash actions.

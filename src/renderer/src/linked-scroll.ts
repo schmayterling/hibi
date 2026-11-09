@@ -1,16 +1,35 @@
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
-/** Markdown follows text positions; other preview formats keep proportional scrolling. */
+/** Markdown caret alignment stays active even when linked scrolling is disabled. */
 export function linkScroll(
   first: HTMLElement,
   second: HTMLElement,
   initial: HTMLElement,
   markdown?: 'source',
+  syncScrolling = true,
 ) {
   let leader = initial
   let frame = 0
   let refinements = 0
+  const paneState = (pane: HTMLElement) => {
+    const content = pane.querySelector('.cm-content')
+    const view = content && sourceView(content)
+    return view?.state
+  }
+  const caret = (pane: HTMLElement) => {
+    const state = paneState(pane)
+    if (!state) return null
+    const selection = state.selection.main
+    return {
+      pane,
+      doc: state.doc,
+      mirrorDoc: paneState(pane === first ? second : first)?.doc,
+      anchor: selection.anchor,
+      head: selection.head,
+    }
+  }
+  let previousCaret = caret(initial)
   const sourcePane = second.closest('.source-pane')
   function sourceTop(target: HTMLElement): number | null {
     const fromContent = leader.querySelector('.cm-content')
@@ -83,6 +102,7 @@ export function linkScroll(
     frame = requestAnimationFrame(sync)
   }
   const scroll = (event: Event) => {
+    if (!syncScrolling) return
     const origin = event.currentTarget as HTMLElement
     // Virtualized source layout can emit several delayed scroll events. Only
     // direct input or focus changes may hand control to the other pane.
@@ -91,12 +111,33 @@ export function linkScroll(
   }
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
+    if (!syncScrolling) {
+      cancelAnimationFrame(frame)
+      frame = 0
+    }
   }
-  const selection = () => {
+  const selection = (event?: Event) => {
     const focused = document.activeElement
     if (first.contains(focused)) leader = first
     else if (second.contains(focused)) leader = second
     else return
+    if (syncScrolling) {
+      schedule()
+      return
+    }
+    const next = caret(leader)
+    const changed =
+      next &&
+      (next.pane !== previousCaret?.pane ||
+        next.doc !== previousCaret?.doc ||
+        next.mirrorDoc !== previousCaret?.mirrorDoc ||
+        next.anchor !== previousCaret?.anchor ||
+        next.head !== previousCaret?.head)
+    previousCaret = next
+    // Virtualized scrolls can rewrite the native selection without moving the caret.
+    const deliberate =
+      event instanceof Event && ['pointerup', 'focusin'].includes(event.type)
+    if (!changed && !deliberate) return
     schedule()
   }
   // CodeMirror panes report caret and text changes, and focus leaving, as
@@ -119,15 +160,25 @@ export function linkScroll(
     if (focused && sourceView(focused)) return
     selection()
   }
-  const observer = new ResizeObserver(schedule)
+  const click = (event: Event) => {
+    if (event.target instanceof Element && event.target.closest('.cm-content'))
+      selection(event)
+  }
+  const settled = () => {
+    if (syncScrolling) schedule()
+  }
+  const observer = new ResizeObserver(settled)
   // Virtualized table rows can arrive without changing the content's height.
-  const drawn = new MutationObserver(schedule)
+  const drawn = new MutationObserver(settled)
   for (const pane of [first, second]) {
     pane.addEventListener('wheel', intent, { passive: true })
     pane.addEventListener('pointerdown', intent)
   }
   if (markdown) {
     const richContent = first.querySelector('.cm-content')
+    if (!syncScrolling)
+      for (const pane of [first, second])
+        pane.addEventListener('pointerup', click)
     if (richContent) {
       observer.observe(richContent)
       drawn.observe(richContent, { childList: true, subtree: true })
@@ -144,11 +195,10 @@ export function linkScroll(
   }
   first.addEventListener('scroll', scroll, { passive: true })
   second.addEventListener('scroll', scroll, { passive: true })
-  const settled = () => schedule()
   // Widths settle during the view transition; new files are already at their final widths.
   first.addEventListener('transitionend', settled)
   sourcePane?.addEventListener('transitionend', settled)
-  schedule()
+  settled()
   return () => {
     cancelAnimationFrame(frame)
     observer.disconnect()
@@ -156,6 +206,8 @@ export function linkScroll(
     for (const pane of [first, second]) {
       pane.removeEventListener('wheel', intent)
       pane.removeEventListener('pointerdown', intent)
+      pane.removeEventListener('pointerup', click)
+      pane.removeEventListener('focusin', selection)
     }
     document.removeEventListener('selectionchange', nativeSelection)
     for (const pane of [first, second]) {

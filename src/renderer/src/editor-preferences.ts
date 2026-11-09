@@ -4,6 +4,11 @@ import { type CursorSettings, loadCursor } from './EditorCursor'
 
 /** Editor preferences shared by the main window and addon editor windows. */
 export const editorPreferences = {
+  syncPreviewScroll: stored(
+    'sync-preview-scroll',
+    () => localStorage.getItem('sync-preview-scroll') !== 'false',
+    String,
+  ),
   cursor: stored<CursorSettings>('cursor-settings', loadCursor, (value) =>
     JSON.stringify(value),
   ),

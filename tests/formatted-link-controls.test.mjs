@@ -176,9 +176,7 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
   )
   await link.hover()
   await panel.getByRole('button', { name: 'Open link', exact: true }).click()
-  assert.deepEqual(await openedLinks(app), [
-    'https://old.example/',
-  ])
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
   await link.hover()
   await panel.getByRole('button', { name: 'Edit link', exact: true }).click()
   assert.equal(
@@ -355,9 +353,7 @@ test('codemirror caret actions and context edit are keyboard reachable', {
     'https://old.example',
   )
   await choose('Open link')
-  assert.deepEqual(await openedLinks(app), [
-    'https://old.example/',
-  ])
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
   await page.waitForFunction(
     () =>
       document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
@@ -723,9 +719,7 @@ test('codemirror link menu holds the editor actions of addons too', {
   await menu.waitFor({ state: 'hidden' })
   assert.equal(await active(), null)
   assert.equal(await controls(), null)
-  assert.deepEqual(await openedLinks(app), [
-    'https://old.example/',
-  ])
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
   // Opening a link keeps the app busy for a moment; the editor then has its
   // focus back.
   await page.waitForFunction(
@@ -1085,9 +1079,7 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   // Last, as opening a link makes the app busy, which ends this read-only spell.
   await link.hover()
   await panel.getByRole('button', { name: 'Open link', exact: true }).click()
-  assert.deepEqual(await openedLinks(app), [
-    'https://old.example/',
-  ])
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
 })
 
 test('codemirror link actions wait for the caret to move after a note opens', {

@@ -748,6 +748,48 @@ test('disposal cancels in-flight worker publication and queued sources', async (
   assert.equal(env.calls.native.length, 1)
 })
 
+test('metadata rejects stale publication quietly and ignores callbacks after disposal', async (t) => {
+  const errors = []
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'reportError')
+  globalThis.reportError = (error) => errors.push(error)
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, 'reportError', previous)
+    else delete globalThis.reportError
+  })
+  for (const stopped of [false, true]) {
+    errors.length = 0
+    const env = environment(t)
+    let reject
+    env.state.pause = new Promise((_resolve, rejectValue) => {
+      reject = rejectValue
+    })
+    await env.start()
+    env.cache.getCache('note.md')
+    const completed = env.cache.tail
+    await Promise.resolve()
+    assert.equal(env.calls.native.length, 1)
+    if (stopped) env.cache.dispose()
+    const error = new Error('Open this plugin vault again.')
+    reject(error)
+    await completed
+    assert.deepEqual(errors, stopped ? [] : [error])
+    env.cache.dispose()
+    const invalidate = t.mock.method(env.cache, 'invalidate')
+    env.context.app.vault.getFileForDocument = () => {
+      throw new Error('disposed callback resolved a document')
+    }
+    assert.doesNotThrow(() =>
+      env.documentChange({
+        kind: 'closed',
+        target: { documentId: 'old', documentGeneration: 1 },
+      }),
+    )
+    env.change('resync')
+    env.syntaxChange()
+    assert.equal(invalidate.mock.calls.length, 0)
+  }
+})
+
 test('metadata registers app service, public exports and lifetime cleanup', async (t) => {
   const env = environment(t)
   const disposers = []

@@ -123,11 +123,14 @@ export class Vault extends Events {
     await vault.refresh()
     const subscription = await context.hibi.workspace.subscribeChanges(
       (event) => {
+        if (vault.#disposed) return
         void vault
           .refresh(
             event.kind === 'content' && event.paths ? event.paths : undefined,
           )
-          .catch(reportError)
+          .catch((error) => {
+            if (!vault.#disposed) reportError(error)
+          })
       },
     )
     vault.#stop = () => subscription.dispose()

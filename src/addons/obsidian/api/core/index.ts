@@ -1,3 +1,4 @@
+import { acquireMoment } from '../moment'
 import type { App, PluginManifest } from '../types'
 import { Component } from './component'
 import { acquireDomHelpers } from './dom'
@@ -17,9 +18,13 @@ export function createCoreApi(
   manifest: PluginManifest,
 ) {
   host.owner.register(acquireDomHelpers())
+  const moment = acquireMoment(host.owner)
+  const requestOwner = host.owner.addChild(new Component())
+  const requestUrl = createRequestUrl(requestOwner, manifest.id)
   class BoundPlugin extends Plugin {
     constructor(pluginApp = app, pluginManifest = manifest) {
       super(pluginApp, pluginManifest, host)
+      this.register(() => requestOwner.unload())
     }
   }
   return {
@@ -53,6 +58,9 @@ export function createCoreApi(
       host.owner.register(() => debounced.cancel())
       return debounced
     },
-    requestUrl: createRequestUrl(host.hibi),
+    moment,
+    requestUrl,
+    request: (input: Parameters<typeof requestUrl>[0]) =>
+      requestUrl(input).text,
   }
 }

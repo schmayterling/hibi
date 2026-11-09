@@ -233,6 +233,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(modules, /src\/addons\/obsidian(?:\/|-themes\/)/)
+  assert.doesNotMatch(modules, /node_modules\/moment\//)
   assert.doesNotMatch(
     modules,
     /src\/(?:renderer\/src\/local-diagnostics-report|shared\/local-diagnostics(?:-budget)?)\.ts/,

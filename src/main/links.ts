@@ -64,6 +64,13 @@ export async function openDocumentLink(
     revision !== getDocument().revision
   )
     return null
+  if (/^(?:obsidian:|hibi:\/\/obsidian\/)/i.test(href)) {
+    const { queueObsidianProtocol } = await import(
+      '../addons/obsidian/api/protocol/native'
+    )
+    queueObsidianProtocol(href)
+    return null
+  }
   if (/^(?:https?:|mailto:)/i.test(href)) {
     await openExternalDocumentLink(href)
     return null

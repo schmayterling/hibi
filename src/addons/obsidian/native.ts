@@ -4,6 +4,16 @@ import { app, dialog } from 'electron'
 import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { createMetadataNative } from './api/metadata/native'
+import {
+  cancelRequestUrl,
+  requestUrlNative,
+  stopRequestUrls,
+} from './api/network/native'
+import {
+  cancelObsidianProtocol,
+  nextObsidianProtocol,
+  stopObsidianProtocol,
+} from './api/protocol/native'
 import { closeVaultLists, createVaultNative } from './api/vault/native'
 import {
   cancelCommunityRequest,
@@ -254,11 +264,17 @@ function vaultMethod(
 export default {
   id: 'obsidian',
   stop() {
+    stopRequestUrls()
+    stopObsidianProtocol()
     stopCommunityInstalls()
     communityCandidates.clear()
     closeVaultLists()
   },
   queries: {
+    async nextObsidianProtocol(input, context) {
+      addonCheck(context)
+      return nextObsidianProtocol(input)
+    },
     vaultInfo: vaultQuery('vaultInfo'),
     vaultStat: vaultQuery('vaultStat'),
     vaultList: vaultQuery('vaultList'),
@@ -301,6 +317,20 @@ export default {
     },
   },
   profileMethods: {
+    async requestUrl(input, context) {
+      const check = addonCheck(context)
+      return requestUrlNative(input, async (id) => {
+        const { store } = await obsidianGlobalStore()
+        const plugins = await store.list()
+        check()
+        if (
+          !plugins.some((plugin) => plugin.manifest.id === id && plugin.enabled)
+        )
+          throw new Error('This plugin is disabled or uninstalled.')
+      })
+    },
+    cancelRequestUrl,
+    cancelObsidianProtocol,
     async downloadCommunity(input, context) {
       const place = await globalPlace(input, context)
       return communityTask(

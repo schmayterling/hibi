@@ -94,23 +94,23 @@ test('commands preserve public IDs and use the palette captured editor with docu
 test('requestUrl uses the main network policy and creates convenience promises only when accessed', async (t) => {
   const load = await modules(t)
   const { createRequestUrl } = await load('api/core/network.ts')
+  const { Component } = await load('api/core/component.ts')
+  const owner = new Component()
+  t.after(() => owner.unload())
   const calls = []
   let allowed = true
-  const requestUrl = createRequestUrl({
-    host: {
-      network: {
-        getText: async (request) => {
-          calls.push(request)
-          return allowed
-            ? {
-                ok: true,
-                value: { status: 200, text: 'plain text', url: request.url },
-              }
-            : { ok: false, code: 'permission-denied' }
-        },
-      },
+  const native = {
+    async invoke(_method, input) {
+      calls.push(input.request)
+      if (!allowed) throw new Error('permission-denied')
+      return {
+        status: 200,
+        headers: {},
+        arrayBuffer: new TextEncoder().encode('plain text').buffer,
+      }
     },
-  })
+  }
+  const requestUrl = createRequestUrl(owner, 'fixture', native.invoke)
   const request = requestUrl('https://example.test')
   assert.equal(await request.text, 'plain text')
   assert.equal(
@@ -119,18 +119,18 @@ test('requestUrl uses the main network policy and creates convenience promises o
   )
   await assert.rejects(request.json, SyntaxError)
   assert.deepEqual(calls, [{ url: 'https://example.test' }])
-  await assert.rejects(
-    requestUrl({ url: 'https://example.test', method: 'POST' }),
-    /GET requests/,
+  assert.equal(
+    await requestUrl({ url: 'https://example.test', method: 'POST' }).text,
+    'plain text',
   )
-  await assert.rejects(
-    requestUrl({
+  assert.equal(
+    await requestUrl({
       url: 'https://example.test',
-      headers: { Authorization: 'refused' },
-    }),
-    /GET requests/,
+      headers: { Authorization: 'fixture' },
+    }).text,
+    'plain text',
   )
-  assert.equal(calls.length, 1)
+  assert.equal(calls.length, 3)
   allowed = false
   await assert.rejects(requestUrl('https://example.test'), /permission-denied/)
 })

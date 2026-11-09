@@ -66,10 +66,39 @@ for vault, metadata, workspace, and editor APIs.
 
 Desktop-only packages, Node.js, Electron, and undeclared module imports are
 refused. CodeMirror and Lezer modules are shared with Hibi's editor.
-`requestUrl` supports HTTPS GET without custom headers or a body, through
-Hibi's main-process network policy. Protocol handlers are refused. Moment is
-not a dependency and is not exported; date-format controls preview basic
-numeric date/time tokens.
+`requestUrl` and `request` use Electron networking in the main process, without
+CORS restrictions. HTTP and HTTPS, custom methods and headers, string and
+ArrayBuffer bodies, and `contentType` are supported. Responses expose status,
+headers, exact bytes, text, and lazily parsed JSON. Promise shortcuts
+(`requestUrl(url).text`, `.json`, `.arrayBuffer`) share the same request.
+Following Obsidian's public declaration, HTTP statuses of 400 or greater throw
+unless `throw: false` is supplied. Redirect responses below 400 do not throw.
+
+Requests allow 64 MiB bodies, 128 MiB responses, twenty redirects, five minutes,
+and thirty-two concurrent requests. Unloading a plugin cancels its requests.
+Only enabled, trusted plugins can use this native transport. `window.fetch`
+remains the renderer's fetch, subject to CORS and Hibi's
+`connect-src 'self' app://hibi` policy. Use `requestUrl` for arbitrary origins.
+
+The exported `moment` is the same real Moment function as `window.moment`.
+Moment and its locales load with the first enabled plugin, outside startup.
+The browser's user locale is selected before plugin execution; plugins can
+switch any shipped locale synchronously with `moment.locale()`. The last
+plugin unload restores the previous global property.
+
+`registerObsidianProtocolHandler(action, handler)` handles decoded
+`obsidian://action?key=value` links inside Hibi, including rendered Markdown
+and plugin UI. Empty query flags become the string `true`; `params.action`
+always contains the actual action. Registrations disappear on plugin unload.
+Hibi's existing OS scheme also accepts
+`hibi://obsidian/action?key=value`, including links received at launch.
+Hibi does not register as the OS handler for `obsidian://`.
+
+The built-in `open` action opens `file` in the current vault. The `new` action
+creates and opens a Markdown note from `file` or `name` and optional `content`.
+A `vault` parameter must name the currently open vault. Hibi has no vault-wide
+search interface equivalent to Obsidian's `search` action, so that action
+reports the limitation instead of opening a different application.
 
 DOM helpers exist only while plugins are loaded; the last unload restores the
 original prototype descriptors. Registered commands, settings, listeners,

@@ -1,6 +1,7 @@
-import { Facet } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { Annotation, Facet, type Transaction } from '@codemirror/state'
+import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
+import { isViewDead } from './view-death.ts'
 
 /**
  * Whether the view placed the selection itself, as a note opens with its
@@ -10,31 +11,71 @@ export const placedSelection = Facet.define<boolean, boolean>({
   combine: (values) => values.some(Boolean),
 })
 
+/** A selection the view moved itself, which no reader did. */
+export const placedByView = Annotation.define<boolean>()
+
 const scrollRequests = new WeakMap<EditorView, number>()
+/**
+ * Views with a scroll command they have not run: a measure can end without
+ * running it while what the view draws keeps changing.
+ */
+const scrollsWaiting = new WeakSet<EditorView>()
 
 /** The reading position during one rendering or background parsing slice. */
 type Reading = {
   /** The element that scrolls the editor. */
   pane: Element
   pos: number
-  /** Where `pos` is on screen. */
+  /** Where `pos` is below the pane's top. The pane can move on the page, as under a bar that appears: its place in the pane is what holds. */
   top: number
   /** How far below its line block's top in the editor's heights `pos` showed. */
   offset: number
+  /** Whether the editor drew `pos` as its own text, not in a widget. */
+  text: boolean
   /** The end of the line `pos` is on. */
   line: number
   moved: boolean
   doc: EditorView['state']['doc']
   selection: EditorView['state']['selection']
   scrollRequest: number
+  /** Read from the text at the top of a block taller than the pane, for as long as the pane stays. */
+  isTop?: boolean
 }
 const reading = new WeakMap<EditorView, Reading | null>()
 
+/** Whether a place still answers for its text: a scroll command after it takes over. */
+function current(view: EditorView, place: Reading) {
+  return (
+    place.doc === view.state.doc &&
+    place.scrollRequest === (scrollRequests.get(view) ?? 0)
+  )
+}
+
 /**
- * Where the reader is: the caret while it is on screen, else the first line
- * below the top of the scrolled pane, or the block the pane's top is in.
+ * Whether the pane moved up to its new bottom from `scroll`: a shorter layout
+ * can clamp the pane without reader input. A place given up has no scroll to
+ * return to.
  */
-function readingPosition(view: EditorView): Reading | null {
+function clamped({ pane }: Reading, scroll: number) {
+  return (
+    Number.isFinite(scroll) &&
+    pane.scrollTop < scroll - 1 &&
+    pane.clientHeight > 0 &&
+    pane.scrollTop >= pane.scrollHeight - pane.clientHeight - 1
+  )
+}
+
+/** Whether a place still stands where it left the pane, but for a clamp. */
+function stayed(view: EditorView, place: Reading, scroll: number) {
+  return (
+    place.doc === view.state.doc &&
+    (Math.abs(place.pane.scrollTop - scroll) <= 1 ||
+      (current(view, place) && clamped(place, scroll)))
+  )
+}
+
+/** The element scrolling the editor, if not the page. */
+function scrollingPane(view: EditorView) {
   let pane: Element | null = view.scrollDOM
   while (
     pane &&
@@ -44,6 +85,22 @@ function readingPosition(view: EditorView): Reading | null {
     )
   )
     pane = pane.parentElement
+  return pane
+}
+
+/** Where the pane's top is on screen. */
+function paneTop(pane: Element) {
+  return pane === document.scrollingElement
+    ? 0
+    : pane.getBoundingClientRect().top
+}
+
+/**
+ * Where the reader is: the caret while it is on screen, else the first line
+ * below the top of the scrolled pane, or the block the pane's top is in.
+ */
+function readingPosition(view: EditorView): Reading | null {
+  const pane = scrollingPane(view)
   const scroller = pane ?? document.scrollingElement
   const { top, bottom } = pane?.getBoundingClientRect() ?? {
     top: 0,
@@ -53,6 +110,27 @@ function readingPosition(view: EditorView): Reading | null {
   // A caret the view placed is not where the reader is.
   let at = view.state.facet(placedSelection) ? null : view.coordsAtPos(pos, 1)
   if (!at || at.top < top || at.top > bottom) {
+    // The place held last, while nothing but holding it scrolled the pane:
+    // read again, the text at the top of a line the editor lays out again
+    // can start a row earlier each time, and the place would creep a row
+    // per slice.
+    const before = anchors.get(view)
+    if (before?.position.doc === view.state.doc) {
+      // Reading the layout runs a pending measure first, which moves the pane,
+      // as every fresh read does, and can hold another place.
+      view.coordsAtPos(before.position.pos, 1)
+      const held = anchors.get(view)
+      if (
+        held?.position.doc === view.state.doc &&
+        stayed(view, held.position, held.scroll)
+      )
+        return {
+          ...held.position,
+          moved: false,
+          selection: view.state.selection,
+          scrollRequest: scrollRequests.get(view) ?? 0,
+        }
+    }
     const { documentTop } = view
     let block = view.lineBlockAtHeight(top - documentTop)
     // The text the page shows at the pane's top, inside a block that starts
@@ -87,19 +165,22 @@ function reader(
   pos: number,
   top: number,
 ): Reading | null {
-  return pane
-    ? {
-        pane,
-        pos,
-        top,
-        offset: top - view.documentTop - view.lineBlockAt(pos).top,
-        line: view.state.doc.lineAt(pos).to,
-        moved: false,
-        doc: view.state.doc,
-        selection: view.state.selection,
-        scrollRequest: scrollRequests.get(view) ?? 0,
-      }
-    : null
+  if (!pane) return null
+  const text = drawnText(view, pos)
+  // As restoring reads it: the two differ at a row that starts at a join.
+  const shown = (text ? drawnTop(view, pos) : null) ?? top
+  return {
+    pane,
+    pos,
+    top: shown - paneTop(pane),
+    offset: shown - view.documentTop - view.lineBlockAt(pos).top,
+    text,
+    line: view.state.doc.lineAt(pos).to,
+    moved: false,
+    doc: view.state.doc,
+    selection: view.state.selection,
+    scrollRequest: scrollRequests.get(view) ?? 0,
+  }
 }
 
 /**
@@ -108,12 +189,23 @@ function reader(
  * the widget's own layout: the widget's block holds the reader.
  */
 function textAt(view: EditorView, y: number) {
-  const caret = view.dom.ownerDocument.caretPositionFromPoint(
-    contentLeft(view),
-    y,
-  )
+  const x = contentLeft(view)
+  const { ownerDocument } = view.dom
+  // Below what covers the pane's top, as the find bar over a narrow pane.
+  const over = ownerDocument.elementFromPoint(x, y)
+  const below =
+    over && !over.contains(view.dom) && !view.dom.contains(over)
+      ? over.getBoundingClientRect().bottom + 1
+      : y
+  const caret = ownerDocument.caretPositionFromPoint(x, below)
   const read = caret && readDOMPosition(view, caret.offsetNode, caret.offset)
-  return read && !read.mapped ? read.at : null
+  if (!read || read.mapped) return null
+  // A joined newline belongs to the row above when revealed. Hold the next
+  // character, whose own box is the text the reader sees here.
+  return (
+    read.at +
+    (view.state.doc.sliceString(read.at, read.at + 1) === '\n' ? 1 : 0)
+  )
 }
 
 /** Just inside where the content's lines start. */
@@ -146,6 +238,7 @@ function blockAt(view: EditorView, y: number) {
  * delta once per slice. Later edits, selections and scrolling still stand.
  */
 export function keepReading(view: EditorView, at = 0) {
+  if (isViewDead(view)) return
   // Changes below what is on screen never move it, nor do hidden editors. A
   // screen inside one block, as a long table, has no visible ranges.
   const end = view.visibleRanges.at(-1)?.to ?? view.viewport.to
@@ -158,6 +251,7 @@ export function keepReading(view: EditorView, at = 0) {
       if (reading.get(view) !== position) return
       reading.delete(view)
       if (
+        isViewDead(view) ||
         !position?.moved ||
         !view.dom.isConnected ||
         view.composing ||
@@ -176,25 +270,217 @@ export function keepReading(view: EditorView, at = 0) {
   if (position && at <= position.line) position.moved = true
 }
 
+/** Whether the editor draws `pos` as text: not in a widget, nor in the undrawn part of a long line. */
+function drawnText(view: EditorView, pos: number) {
+  return view.visibleRanges.some((range) => range.from <= pos && pos < range.to)
+}
+
+/**
+ * Where the page draws the text at `pos`. Scroll handlers run while the
+ * editor updates, when it can't measure positions itself.
+ */
+function drawnTop(view: EditorView, pos: number) {
+  let { node, offset } = view.domAtPos(pos, 1)
+  // Between elements, as before a widget's buffer at a row that starts at a
+  // join of lines: the line's next text.
+  if (node.nodeType !== Node.TEXT_NODE) {
+    const next = node.childNodes[offset]
+    const line = next && (node as Element).closest('.cm-line')
+    if (!line) return null
+    const walker = view.dom.ownerDocument.createTreeWalker(
+      line,
+      NodeFilter.SHOW_TEXT,
+    )
+    walker.currentNode = next
+    const text = next.nodeType === Node.TEXT_NODE ? next : walker.nextNode()
+    if (!text) return null
+    node = text
+    offset = 0
+  }
+  const range = view.dom.ownerDocument.createRange()
+  range.setStart(node, offset)
+  // The character after the position, in the row it starts.
+  if (
+    node.nodeType === Node.TEXT_NODE &&
+    offset < (node.nodeValue?.length ?? 0)
+  )
+    range.setEnd(node, offset + 1)
+  const box = range.getClientRects()[0]
+  return box ? box.top : null
+}
+
+/** Reading positions the editor is asked to draw so they can be scrolled back, by view. */
+const revealing = new WeakMap<EditorView, Reading>()
+
+/** A scroll command the reading position sends itself. */
+const revealed = Annotation.define<boolean>()
+// ponytail: CodeMirror exports no type for its scroll command's effect; its
+// value's class names it. A public effect type would replace this.
+const scrollTarget = (EditorView.scrollIntoView(0).value as object).constructor
+
+/** Whether a transaction asks the view to scroll, other than to a reading position. */
+function asksScroll(transaction: Transaction) {
+  return (
+    !transaction.annotation(revealed) &&
+    (transaction.scrollIntoView ||
+      transaction.effects.some(
+        (effect) => effect.value instanceof scrollTarget,
+      ))
+  )
+}
+
+/**
+ * Has the editor draw the reading position, then lines it up where it was
+ * (scrollHandler), all before the page paints or the reader's next scroll.
+ * Inside the part of a long line the editor leaves undrawn, a position's
+ * coordinates are a line gap's edge and its heights there are estimates, so
+ * neither can line it up.
+ */
+function reveal(view: EditorView, position: Reading) {
+  if (revealing.get(view) === position) return
+  revealing.set(view, position)
+  queueMicrotask(() => {
+    if (revealing.get(view) !== position) return
+    if (
+      !view.dom.isConnected ||
+      (scrollRequests.get(view) ?? 0) !== position.scrollRequest
+    ) {
+      revealing.delete(view)
+      return
+    }
+    // Where the editor scrolls it when the page can't place it either.
+    view.dispatch({
+      effects: EditorView.scrollIntoView(position.pos, {
+        y: 'start',
+        yMargin: position.top,
+      }),
+      annotations: revealed.of(true),
+    })
+    // Reading the layout runs the command.
+    view.lineBlockAtHeight(0)
+  })
+}
+
 /**
  * Where the reading position is on screen: where it is drawn, else where the
  * editor's heights put it. New heights above can move it out of what the
  * editor draws, as when it estimates a long paragraph's lines again.
  */
 function screenTop(view: EditorView, position: Reading) {
-  const drawn = view.coordsAtPos(position.pos, 1)
-  if (drawn) return drawn.top
+  const drawn =
+    (position.text ? drawnTop(view, position.pos) : null) ??
+    view.coordsAtPos(position.pos, 1)?.top
+  if (drawn !== undefined) return drawn
   return view.documentTop + view.lineBlockAt(position.pos).top + position.offset
+}
+
+/** The place each view held last, with the pane's scroll once it was held. */
+const anchors = new WeakMap<EditorView, { position: Reading; scroll: number }>()
+function hold(view: EditorView, position: Reading) {
+  anchors.set(view, { position, scroll: position.pane.scrollTop })
+}
+
+/**
+ * Holds the text at the pane's top inside a block taller than the pane. The
+ * editor keeps such a block's start in place but none of the text in it, so
+ * when the width or the line gaps change, the same scroll shows other text.
+ * A new width has already wrapped the text once anything can tell, so the
+ * place is read as the reader moves. This reads no heights: asking for them
+ * runs a pending measure, which can move the line gaps before the place is
+ * read.
+ */
+function holdTop(view: EditorView) {
+  if (isViewDead(view)) return
+  const pane = scrollingPane(view)
+  if (!pane) return
+  const held = anchors.get(view)
+  if (
+    held?.position.pane === pane &&
+    current(view, held.position) &&
+    clamped(held.position, held.scroll)
+  )
+    return
+  // The reader's scroll, which no update reports when nothing else changed.
+  if (held && !stayed(view, held.position, held.scroll))
+    held.scroll = Number.POSITIVE_INFINITY
+  const keep = kept.get(view)
+  if (keep && !stayed(view, keep, keep.scroll)) kept.delete(view)
+  if (held?.position.isTop) {
+    if (held.position.pane === pane && stayed(view, held.position, held.scroll))
+      return
+    anchors.delete(view)
+  }
+  const text = textAt(view, pane.getBoundingClientRect().top + 1)
+  if (text === null || view.lineBlockAt(text).height <= pane.clientHeight)
+    return
+  const top = drawnTop(view, text)
+  const position = top === null ? null : reader(view, pane, text, top)
+  // Not at a line gap's edge, where nothing is drawn to hold.
+  if (position?.text) {
+    hold(view, { ...position, isTop: true })
+    paneSizes.get(view)?.observe(pane)
+  }
 }
 
 /** Scrolls the reading position back to where it was on screen. */
 function restore(view: EditorView, position: Reading) {
-  const now = screenTop(view, position)
+  // Asking runs a pending measure first: its own correction for new heights
+  // above would come on top of this one, and it can move the line gaps.
+  // Its draw can kill the view before the coordinate read returns.
+  try {
+    view.coordsAtPos(position.pos, 1)
+  } catch (error) {
+    if (!isViewDead(view)) throw error
+  }
+  if (isViewDead(view)) return false
+  // Text the editor doesn't draw now: a widget's position keeps its own
+  // coordinates, without a scroll command for each correction.
+  if (position.text && !drawnText(view, position.pos)) {
+    if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
+    // The view keeps only the last command, which this one would replace.
+    if (scrollsWaiting.has(view)) {
+      view.requestMeasure()
+      return false
+    }
+    reveal(view, position)
+    return true
+  }
+  const now = screenTop(view, position) - paneTop(position.pane)
   // Measuring can execute a pending scroll command; its destination takes precedence.
   if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
   if (Math.abs(now - position.top) >= 0.5)
     position.pane.scrollTop += now - position.top
+  hold(view, position)
   return true
+}
+
+/**
+ * A scroll a view's widget makes itself, as a table showing the cell it
+ * edits: it takes precedence as a scroll command does, over a place read
+ * before it and not restored yet.
+ */
+export function scrolledItself(view: EditorView) {
+  scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)
+}
+
+/** Each view's watch on its pane's size, which a view's own updates don't change. */
+const paneSizes = new WeakMap<EditorView, ResizeObserver>()
+
+/** Puts the text held at the pane's top back, after its layout changed. */
+function holdHeld(view: EditorView) {
+  if (isViewDead(view)) return
+  const held = anchors.get(view)
+  if (
+    !held?.position.isTop ||
+    held.position.doc !== view.state.doc ||
+    // The reader's scroll, whose event comes after this update.
+    !stayed(view, held.position, held.scroll)
+  )
+    return
+  restore(view, {
+    ...held.position,
+    scrollRequest: scrollRequests.get(view) ?? 0,
+  })
 }
 
 /**
@@ -207,29 +493,81 @@ const kept = new WeakMap<
   Reading & { scroll: number; left: number }
 >()
 export const keepRead = [
+  // A view given a new state, as after a failed edit, drops its scroll command.
+  ViewPlugin.define((view) => {
+    scrollsWaiting.delete(view)
+    // Before the page paints a new size: the editor measures it later.
+    const resize = new ResizeObserver(() => holdHeld(view))
+    paneSizes.set(view, resize)
+    return { destroy: () => resize.disconnect() }
+  }),
+  EditorView.domEventObservers({ scroll: (_, view) => holdTop(view) }),
   EditorView.updateListener.of((update) => {
-    const keep = kept.get(update.view)
-    if (!keep) return
-    if (
-      update.docChanged ||
-      update.selectionSet ||
-      Math.abs(keep.pane.scrollTop - keep.scroll) > 1
-    ) {
-      kept.delete(update.view)
-      return
+    const asked = update.transactions.some(asksScroll)
+    // A scroll command takes precedence from when it is sent: the view keeps
+    // only the last one, which a reading position's would replace.
+    if (asked) {
+      scrollRequests.set(
+        update.view,
+        (scrollRequests.get(update.view) ?? 0) + 1,
+      )
+      scrollsWaiting.add(update.view)
+      revealing.delete(update.view)
     }
+    // An edit can move the line gaps before anything reads the place again,
+    // so the place follows its text.
+    const held = anchors.get(update.view)
+    if (held?.position.isTop && update.docChanged) {
+      const { doc } = update.state
+      const pos = update.changes.mapPos(held.position.pos, 1)
+      held.position = {
+        ...held.position,
+        pos,
+        doc,
+        line: doc.lineAt(pos).to,
+      }
+    }
+    // Scrolling away ends the place held: back at the same scroll, the
+    // heights under it can be new.
+    if (held && !stayed(update.view, held.position, held.scroll))
+      held.scroll = Number.POSITIVE_INFINITY
+    const keep = kept.get(update.view)
+    if (
+      keep &&
+      (update.docChanged ||
+        update.selectionSet ||
+        !stayed(update.view, keep, keep.scroll))
+    )
+      kept.delete(update.view)
     if (
       !update.geometryChanged &&
       !update.heightChanged &&
       !update.viewportChanged
     )
       return
+    if (!keep || kept.get(update.view) !== keep) {
+      holdHeld(update.view)
+      return
+    }
     if (--keep.left <= 0) kept.delete(update.view)
     restore(update.view, keep)
     keep.scroll = keep.pane.scrollTop
   }),
-  EditorView.scrollHandler.of((view) => {
+  EditorView.scrollHandler.of((view, range) => {
+    // The editor drew a reading position it was asked to: line it up.
+    const position = revealing.get(view)
+    revealing.delete(view)
+    if (position && range.head === position.pos) {
+      const now = drawnTop(view, position.pos)
+      if (now === null) return false
+      position.pane.scrollTop += now - paneTop(position.pane) - position.top
+      const keep = kept.get(view)
+      if (keep) keep.scroll = keep.pane.scrollTop
+      hold(view, position)
+      return true
+    }
     scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)
+    scrollsWaiting.delete(view)
     reading.delete(view)
     kept.delete(view)
     return false

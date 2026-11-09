@@ -1,12 +1,56 @@
 import assert from 'node:assert/strict'
 import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import test from 'node:test'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
+import './file-limit.mjs'
 
 export { after, before } from './electron-hooks.mjs'
 
 const execute = promisify(execFile)
+
+const pageErrors = []
+const expectedPageErrors = new Set()
+/** Lets this test's renderer throw errors matching `pattern`, and fails it if none is thrown. */
+export function expectPageError(t, pattern) {
+  const entry = { pattern, seen: false }
+  expectedPageErrors.add(entry)
+  // Reported later: a throw here would skip the hooks that close the test's app.
+  t.after(() => {
+    expectedPageErrors.delete(entry)
+    // A test that failed first has already said what went wrong.
+    if (!entry.seen && t.passed)
+      pageErrors.push(`no renderer error matched ${pattern} in ${t.name}`)
+  })
+}
+const pageError = (message, text) => {
+  const expected = [...expectedPageErrors].filter(({ pattern }) =>
+    pattern.test(message),
+  )
+  for (const entry of expected) entry.seen = true
+  if (!expected.length) pageErrors.push(text)
+}
+const failOnPageErrors = () => {
+  const errors = pageErrors.splice(0)
+  if (errors.length)
+    throw new Error(`unexpected renderer errors:\n${errors.join('\n')}`)
+}
+// Benchmarks and probes import this file too, and a hook would start a test run in them.
+if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
+  test.afterEach(failOnPageErrors)
+  // A throw in a root hook would skip the later ones, which close a file's app.
+  const reportLeftover = () => {
+    if (!pageErrors.length) return
+    console.error(
+      `unexpected renderer errors:\n${pageErrors.splice(0).join('\n')}`,
+    )
+    process.exitCode = 1
+  }
+  test.after(reportLeftover)
+  // A file's own after hooks run later still, and can bring a throw of their own.
+  process.on('exit', reportLeftover)
+}
 
 export async function snapshotElectronProcesses(pid) {
   if (process.platform === 'win32') return
@@ -259,13 +303,13 @@ export function stopElectronTree(child) {
 export const showTestWindows =
   (process.env.GITHUB_ACTIONS === 'true' && !!process.env.GITHUB_RUN_ID) ||
   process.env.HIBI_TEST_SHOW_WINDOWS === '1'
+// Cold native GPU startup on Xvfb can outlive main and hold its stdio open.
+export const electronGpuArgs =
+  showTestWindows && process.platform === 'linux'
+    ? ['--use-gl=angle', '--use-angle=swiftshader']
+    : []
 export const electron = {
   async launch({ diagnostics = true, ...options }) {
-    // Cold Xvfb runners can lose the default GPU process before first paint.
-    const gpuArgs =
-      showTestWindows && process.platform === 'linux'
-        ? ['--use-gl=angle', '--use-angle=swiftshader']
-        : []
     const application = await _electron.launch({
       ...options,
       env: {
@@ -275,7 +319,7 @@ export const electron = {
         ).href,
         ...(options.env ?? process.env),
       },
-      args: [...options.args, '--hibi-test', ...gpuArgs],
+      args: [...options.args, '--hibi-test', ...electronGpuArgs],
     })
     const observeStartup = (page) => {
       if (page.hibiStartupTrace) return
@@ -332,6 +376,21 @@ export const electron = {
         onQuit?.()
       },
     )
+    // A page that stopped answering never answers a detach either.
+    const context = application.context?.()
+    if (context?.newCDPSession) {
+      const open = context.newCDPSession.bind(context)
+      context.newCDPSession = async (...args) => {
+        const session = await open(...args)
+        const detach = session.detach.bind(session)
+        session.detach = () =>
+          Promise.race([
+            detach(),
+            new Promise((resolve) => setTimeout(resolve, 5000).unref()),
+          ])
+        return session
+      }
+    }
     const close = application.close.bind(application)
     const quitTrace = {
       notInstalled: true,
@@ -447,16 +506,29 @@ export const electron = {
         clearTimeout(diagnosticTimer)
       }
     }
-    if (diagnostics) {
-      const report = (page) =>
-        page.on('pageerror', (error) =>
-          console.error(
-            'electron-renderer-uncaught',
-            error.stack ?? String(error),
-          ),
+    const report = (page) => {
+      page.on('pageerror', (error) => {
+        // Playwright leaves the stack empty when the error has no frames.
+        const text = error.stack || String(error)
+        console.error('electron-renderer-uncaught', text)
+        pageError(error.message, text)
+      })
+      // CodeMirror carries on after a throw in a widget, a plugin or a
+      // listener, and logging it under these names is all it does.
+      page.on('console', (message) => {
+        const text = message.text()
+        if (
+          message.type() === 'error' &&
+          /^(widget|editor exception|CodeMirror plugin crashed|update listener|doc view update listener|scroll handler|hover tooltip|completion info):/.test(
+            text,
+          )
         )
-      application.context().on('page', report)
-      for (const page of application.windows()) report(page)
+          pageError(text, text)
+      })
+    }
+    application.context?.().on('page', report)
+    for (const page of application.windows?.() ?? []) report(page)
+    if (diagnostics) {
       await application.evaluate(installElectronDiagnostics)
       await application.evaluate(refuseEarlyIpcReplacements)
       await application.evaluate(({ app }) =>
@@ -1059,6 +1131,34 @@ export async function waitForFormattedEditor(
   return editor
 }
 
+/**
+ * Run `open`, which shows another document, and wait for that document's
+ * editor. The window mounts a new editor for each document, and the one shown
+ * before stays ready until it is replaced, also while a screen such as
+ * settings hides it.
+ */
+export async function openInDocumentEditor(application, page, open, options) {
+  const shown = await page
+    .locator('#document-editor-panel')
+    .getByRole('textbox', {
+      name: options?.name ?? 'Document editor',
+      exact: true,
+      includeHidden: true,
+    })
+    .elementHandles()
+  try {
+    await open()
+    for (const editor of shown)
+      await waitForAsync(page, (editor) => !editor.isConnected, editor, {
+        label: 'the editor shown before the open is replaced',
+        ...(options?.timeout === undefined ? {} : { timeout: options.timeout }),
+      })
+  } finally {
+    await Promise.all(shown.map((editor) => editor.dispose()))
+  }
+  await waitForDocumentEditor(application, page, options)
+}
+
 export const APP_STATE_TIMEOUT = 7000
 // This Playwright build treats Promise-valued waitForFunction predicates as
 // truthy before they resolve. Evaluate and await async checks in the host.
@@ -1073,9 +1173,10 @@ export async function waitForAsync(
   let attempts = 0
   let deadlineTimer
   let pollTimer
+  let unsynced = ''
   const timedOut = () =>
     new Error(
-      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}`,
+      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}${unsynced}`,
     )
   const expired = new Promise((_, reject) => {
     deadlineTimer = setTimeout(() => reject(timedOut()), timeout)
@@ -1084,7 +1185,16 @@ export async function waitForAsync(
     for (;;) {
       if (performance.now() >= deadline) throw timedOut()
       attempts++
-      const ready = await Promise.race([page.evaluate(predicate, arg), expired])
+      const ready = await Promise.race([
+        page.evaluate(predicate, arg).catch((error) => {
+          // A read raced the renderer's newer edits to main; the next check sees them.
+          if (!/local edits waiting to synchronize/.test(error?.message))
+            throw error
+          unsynced = ` (last check: ${error.message})`
+          return false
+        }),
+        expired,
+      ])
       if (performance.now() >= deadline) throw timedOut()
       if (ready) return
       await Promise.race([

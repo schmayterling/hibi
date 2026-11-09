@@ -132,6 +132,10 @@ test('local history snapshots on save, previews, and restores without overwritin
     'original',
   )
   await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(
+    app,
+    () => globalThis.historyWriteCounts.syncs.length === 1,
+  )
   await page.waitForFunction(
     () => document.querySelector('.app').getAttribute('aria-busy') !== 'true',
   )

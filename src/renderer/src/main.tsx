@@ -39,8 +39,9 @@ import { startupMark } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { DialogProvider, useDialogService } from '../../ui/DialogProvider'
 import { MenuHost } from '../../ui/MenuHost'
-import { ToastProvider, useToasts } from '../../ui/Sonner'
+import { ToastProvider, useToastService } from '../../ui/Sonner'
 import type { ToastHandle } from '../../ui/toasts'
+import type { PrepareMediaInsert } from './FormattingToolbar'
 import { createWorkspaceView, type WorkspaceView } from './workspace-view'
 import './styles.css'
 import '../../ui/ui-case'
@@ -102,6 +103,7 @@ import {
 } from './flavors'
 import type { HistoryResult } from './History'
 import { LoadingScreen } from './LoadingScreen'
+import { LikelyAddonError, likelyAddonsNotices } from './likely-addons'
 import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
 import {
@@ -263,7 +265,9 @@ function App() {
   }, [settingTarget, settingsCategory])
   const dialogService = useDialogService()
   const dialogs = dialogService.api
-  const toasts = useToasts()
+  const toastService = useToastService()
+  const toasts = toastService.api
+  const [showLikelyAddons] = useState(() => likelyAddonsNotices(toastService))
   // An addon's failure is not the open document's, so each has its own
   // notice: the next document operation clears a document error only.
   const errorNotices = useRef<
@@ -280,9 +284,15 @@ function App() {
     [toasts],
   )
   const openUpdates = useRef(() => {})
+  const heldNotice = useRef<ToastHandle | null>(null)
   const setNotice = useCallback(
-    (message: string, target?: 'updates') => {
-      if (message)
+    (message: string, target?: 'updates' | 'held') => {
+      if (target === 'held') {
+        heldNotice.current?.dismiss()
+        heldNotice.current = message
+          ? toasts.show({ message, duration: 0 })
+          : null
+      } else if (message)
         toasts.show({
           message,
           ...(target === 'updates' && {
@@ -398,9 +408,6 @@ function App() {
           return pane && !documentFormats.isMarkdown(pane.name)
         })
       ))
-  const DocumentEditor = markdownDocument
-    ? richEditor.Component
-    : formatEditor.Component
   useLayoutEffect(() => {
     startupMark('app-layout-effect')
     editorDocument.publish(documentRuntime.get() ?? document)
@@ -587,7 +594,7 @@ function App() {
   // Commands, clicks and requests that arrive during a file operation, the
   // latest of each kind, with the tab shown when they came; they run in order
   // when it finishes. One that arrives behind a file dialog or prompt drops,
-  // as main drops its commands then.
+  // as main drops its commands then, and so does one while editing is paused.
   // Each runs with true, or drops with false.
   type Waiting = (go: boolean) => unknown
   const waiting = useRef(
@@ -595,10 +602,12 @@ function App() {
   )
   const fileDialogOpen = useRef(false)
   const runWhenIdle = useRef<() => void>(undefined)
+  // The editor is writable again for this, so busy no longer holds the queue.
+  const insertingMedia = useRef(false)
   const shownTab = () =>
     addonViews.snapshot().activeTab ?? currentDocument.current?.tabId
   function wait(key: string | symbol, run: Waiting, forTab = false): void {
-    if (fileDialogOpen.current) {
+    if (fileDialogOpen.current || focusUnsafe.current) {
       run(false)
       return
     }
@@ -607,7 +616,7 @@ function App() {
     waiting.current.set(key, [run, forTab ? shownTab() : undefined])
   }
   function waitFor<T>(
-    key: string,
+    key: string | symbol,
     run: () => Promise<T>,
     dropped: T,
     forTab?: boolean,
@@ -617,6 +626,7 @@ function App() {
     )
   }
   function runWaiting() {
+    if (insertingMedia.current) return
     for (const [key, [run, tab]] of waiting.current) {
       if (busyRef.current) return
       if (pendingSave.current) break
@@ -629,15 +639,12 @@ function App() {
     if (pendingSave.current) void pendingSave.current.finally(runWaiting)
     else if (!busyRef.current) runWhenIdle.current?.()
   }
-  useEffect(() => {
-    const side = focusSplitSide.current
-    if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
-    focusSplitSide.current = null
-    if (window.document.activeElement?.matches('.document-tabs [role="tab"]'))
-      return
-    focusEditor({ preventScroll: true })
-  }, [busy, DocumentEditor, splitTabs?.active])
-  const autosaveStatus = useAutosave(document, busy)
+  const splitWasBusy = useRef(busy)
+  // Child layout effects read the previous committed busy state first.
+  useLayoutEffect(() => {
+    splitWasBusy.current = busy
+  }, [busy])
+  const autosaveStatus = useAutosave(document, busy, toasts)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')
     return saved && isDocumentView(saved) ? saved : 'normal'
@@ -1047,12 +1054,14 @@ function App() {
         }
       },
       error: (error) =>
-        setError(
-          error instanceof Error
-            ? error.message
-            : 'The addon could not complete this action.',
-          'addon',
-        ),
+        error instanceof LikelyAddonError
+          ? showLikelyAddons(error)
+          : setError(
+              error instanceof Error
+                ? error.message
+                : 'The addon could not complete this action.',
+              'addon',
+            ),
     },
     document?.name,
     documentFormat?.views
@@ -1457,6 +1466,35 @@ function App() {
     }
   }, [documentLoaded, dialogs, setError])
 
+  // Text an earlier run left unsaved. Its dialog isn't part of the first load.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opening reads live refs.
+  useEffect(() => {
+    if (!documentLoaded) return
+    void window.hibi
+      .waitingRecovery()
+      .then(async (waiting) => {
+        if (!waiting.copies.length && !waiting.newer) return
+        const { offerRecovery } = await import('./recovery-offer')
+        await offerRecovery(waiting, {
+          dialogs,
+          toasts,
+          tabsEnabled: currentDocument.current?.tabsEnabled ?? true,
+          open: async (id) => {
+            while (busyRef.current || dialogs.isOpen())
+              await new Promise((resolve) => setTimeout(resolve, 100))
+            await applyDocumentOperation(
+              () => window.hibi.restoreRecovery(id),
+              true,
+              true,
+            )
+            return currentDocument.current?.tabId
+          },
+          show: selectTab,
+        })
+      })
+      .catch(setError)
+  }, [documentLoaded])
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: recovery reads live refs while this command handler must stay stable across renders.
   const performCommand = useCallback(
     async (command: DocumentCommand) => {
@@ -1558,7 +1596,13 @@ function App() {
         const forTab = waitsForOperation[command]
         return forTab === undefined
           ? Promise.resolve(false)
-          : waitFor(`run ${command}`, () => runCommand(command), false, forTab)
+          : // Each new note or open asked for waits; a tab's command waits once.
+            waitFor(
+              forTab ? `run ${command}` : Symbol(),
+              () => runCommand(command),
+              false,
+              forTab,
+            )
       }
       const operation = performCommand(command)
       if (command === 'save' || command === 'saveAs') {
@@ -1786,9 +1830,15 @@ function App() {
     files: File[] | null,
     tabId: string,
     side: PaneSide,
-  ): Promise<MediaAttachment[] | null> {
-    if (busyRef.current)
-      return waitFor('attach', () => attachMedia(files, tabId, side), null)
+    prepare: PrepareMediaInsert,
+  ): Promise<void> {
+    if (busyRef.current || insertingMedia.current)
+      return waitFor(
+        // Each drop waits; a press of the picker waits once.
+        files ? Symbol() : 'attach',
+        () => attachMedia(files, tabId, side, prepare),
+        undefined,
+      )
     const target = currentDocument.current
     const split = splitTabsRef.current
     if (
@@ -1797,17 +1847,27 @@ function App() {
       target.tabId !== tabId ||
       (split ? split[side] !== tabId || split.active !== side : side !== 'left')
     )
-      return null
+      return
+    const insert = prepare()
     startBusy()
+    let attachments: MediaAttachment[] | null = null
     try {
       const result = await window.hibi.attachMedia(files, target.revision)
-      if (!result) return null
+      if (!result) return
       await acceptOperationDocument(result.document)
       refreshWorkspaceView()
-      return result.attachments
+      attachments = result.attachments
+      insertingMedia.current = true
     } finally {
-      // Restore editor editability before the caller inserts its captured selection.
+      // Restore editor editability before inserting at the captured selection.
       flushSync(endBusy)
+    }
+    // What waits, another drop among them, goes after these files are in the note.
+    try {
+      await insert(attachments)
+    } finally {
+      insertingMedia.current = false
+      runWaiting()
     }
   }
 
@@ -2022,10 +2082,16 @@ function App() {
   }
 
   async function closeSplit() {
-    await focusQueue.current
+    // Not when settled: replayed, it starts before what waits behind it.
+    if (focusPending.current) await focusQueue.current
     const current = splitTabsRef.current
     if (!current) return
     if (focusUnsafe.current && !(await retryDocumentFocus())) return
+    // A file operation, or what waited for the retry, goes first.
+    if (busyRef.current) {
+      wait('close-split', (go) => go && closeSplit())
+      return
+    }
     const active =
       current.left !== current.right &&
       currentDocument.current?.tabId === current.right
@@ -2182,6 +2248,16 @@ function App() {
       void applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
   }
 
+  // Like a note's tab, latest click wins; it runs while the addon tab is open.
+  function selectAddonTab(id: string): void {
+    if (busyRef.current) wait('select', (go) => go && selectAddonTab(id))
+    else
+      addonViews
+        .snapshot()
+        .instances.find((entry) => entry.id === id)
+        ?.handle.show()
+  }
+
   // A waiting close runs only while all of its tabs are still open.
   function closeTabs(ids: string[], preferred?: string): void {
     if (busyRef.current) {
@@ -2191,6 +2267,31 @@ function App() {
     if (ids.concat(preferred ?? []).every(tabOpen))
       void applyDocumentOperation(
         () => window.hibi.closeDocumentTabs(ids, preferred),
+        false,
+      )
+  }
+
+  // A key's move is worked out when it runs, so each press moves one place.
+  function moveTab(id: string, before: string | null | 1 | -1): void {
+    if (busyRef.current) {
+      wait(Symbol(), (go) => go && moveTab(id, before))
+      return
+    }
+    const tabs = currentDocument.current?.tabs ?? []
+    const index = tabs.findIndex((tab) => tab.id === id)
+    const beforeId =
+      before === -1
+        ? tabs[index - 1]?.id
+        : before === 1
+          ? (tabs[index + 2]?.id ?? null)
+          : before
+    if (
+      index >= 0 &&
+      beforeId !== undefined &&
+      (!beforeId || tabOpen(beforeId))
+    )
+      void applyDocumentOperation(
+        () => window.hibi.moveDocumentTab(id, beforeId),
         false,
       )
   }
@@ -2212,6 +2313,22 @@ function App() {
     else selectTab(id)
   }
 
+  /** Restores a saved version History returned. */
+  async function restoreChosen(chosen: HistoryResult) {
+    if (!chosen.large) return chosen.restore(setError)
+    const intent = settingsIntent.current
+    startBusy()
+    try {
+      const next = await window.hibi.restoreVersion(chosen.version)
+      if (!next) return
+      await acceptOperationDocument(next, true)
+      showDocument(intent)
+    } catch (error) {
+      setError(String(error))
+    } finally {
+      endBusy()
+    }
+  }
   function runAction(command: AppCommand) {
     if (dialogs.isOpen()) return
     if (command === 'palette') {
@@ -2220,7 +2337,11 @@ function App() {
     }
     setPaletteOpen(false)
     const forTab = waitsForOperation[command]
-    if (busyRef.current && forTab !== undefined) {
+    if (
+      busyRef.current &&
+      forTab !== undefined &&
+      !(command === 'save' && savingCommand.current)
+    ) {
       // Each new note or open waits; a tab's command waits once.
       wait(
         forTab ? command : Symbol(),
@@ -2260,32 +2381,22 @@ function App() {
               </Suspense>
             ),
           })
-          .result.then(async (chosen) => {
-            if (!chosen || busyRef.current) return
-            if (!chosen.large) {
-              // The saved text comes back as an edit, which undo takes back.
-              try {
-                documentRuntime.replace(
-                  await window.hibi.previewVersion(chosen.version),
-                  'visual',
-                )
-              } catch (error) {
-                setError(String(error))
-              }
-              return
-            }
-            const intent = settingsIntent.current
-            startBusy()
-            try {
-              const next = await window.hibi.restoreVersion(chosen.version)
-              if (!next) return
-              await acceptOperationDocument(next, true)
-              showDocument(intent)
-            } catch (error) {
-              setError(String(error))
-            } finally {
-              endBusy()
-            }
+          .result.then((chosen) => {
+            if (!chosen) return
+            // Chosen while a file operation runs, it follows that, in the
+            // tab it was chosen in.
+            if (busyRef.current)
+              wait(
+                'history-restore',
+                (go) =>
+                  go
+                    ? restoreChosen(chosen)
+                    : setError(
+                        'The version wasn’t restored. Restore it again.',
+                      ),
+                true,
+              )
+            else void restoreChosen(chosen)
           })
         break
       case 'new':
@@ -2892,7 +3003,9 @@ function App() {
           <Suspense fallback={<LoadingScreen />}>
             <PaneAdapter
               Component={PaneEditor}
-              {...(splitTabs ? { viewId: side } : {})}
+              splitWasBusy={splitWasBusy}
+              busy={busy}
+              {...(splitTabs ? { viewId: side, focusSplitSide } : {})}
               focused={active}
               autoFocus={!splitTabs}
               markdown={paneMarkdown}
@@ -2923,7 +3036,9 @@ function App() {
               document={paneDocument}
               format={paneFormat}
               formatName={paneSourceName}
-              onAttach={(files) => attachMedia(files, paneDocument.tabId, side)}
+              onAttach={(files, prepare) =>
+                attachMedia(files, paneDocument.tabId, side, prepare)
+              }
               onLink={(href) => void openLink(href, paneDocument.tabId, side)}
               flavors={paneChosen}
               sourceExtensions={addonHost.sourceExtensions}
@@ -3143,17 +3258,11 @@ function App() {
         onSelectTab={selectTab}
         onCloseTab={(id) => closeTabs([id])}
         onCloseTabs={closeTabs}
-        onMoveTab={(id, beforeId) =>
-          void applyDocumentOperation(
-            () => window.hibi.moveDocumentTab(id, beforeId),
-            false,
-          )
-        }
+        onMoveTab={moveTab}
+        paused={focusRecoveryNeeded}
         addonTabs={addonTabs}
         activeAddonTab={activeAddonTab?.id ?? null}
-        onSelectAddonTab={(id) =>
-          addonTabs.find((tab) => tab.id === id)?.handle.show()
-        }
+        onSelectAddonTab={selectAddonTab}
         onCloseAddonTab={(id) =>
           addonTabs.find((tab) => tab.id === id)?.handle.close()
         }

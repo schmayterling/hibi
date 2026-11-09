@@ -196,7 +196,18 @@ test('a save leaves other split panes read-only until it finishes', {
   await page.waitForFunction(
     () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
   )
+  await app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:save')
+    globalThis.shortcutSaveFinished = false
+    ipcMain._invokeHandlers.set('document:save', async (...args) => {
+      ipcMain._invokeHandlers.set('document:save', save)
+      const result = await save(...args)
+      globalThis.shortcutSaveFinished = true
+      return result
+    })
+  })
   await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(app, () => globalThis.shortcutSaveFinished)
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).tabs.every((tab) => !tab.dirty),
   )
@@ -504,7 +515,8 @@ for (const canceled of [true, false]) {
     await waitForAsync(app, () => globalThis.saveDialog.dialogs === 1)
     await clickMenu(app, 'Save')
     await clickMenu(app, 'Save')
-    await waitForAsync(page, () => window.saveCommands === 3)
+    // Main drops commands sent behind the file dialog.
+    assert.equal(await page.evaluate(() => window.saveCommands), 1)
     await app.evaluate(() => globalThis.saveDialog.release())
     await waitForAsync(app, () => globalThis.saveDialog.settled >= 1)
     await page.waitForFunction(

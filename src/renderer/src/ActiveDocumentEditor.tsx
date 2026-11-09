@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+} from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
@@ -8,6 +13,8 @@ import {
   editorDocumentUpdates,
   largeOpening,
 } from './document-shell'
+import { focusEditor } from './editor-focus'
+import { focusEditor as focusEditorNow } from './editor-focus-restore'
 import type { MarkdownEditor } from './FormattedEditor'
 import { type FlavorChoice, flavorMatches } from './flavors'
 import { projectMarkdown } from './markdown-projection'
@@ -20,6 +27,9 @@ export type DocumentFlavorStatus = { label: string; unsupported: boolean }
 /** Keep live content and flavor detection below the app's metadata boundary. */
 export function ActiveDocumentEditor({
   Component,
+  focusSplitSide,
+  splitWasBusy,
+  busy,
   markdown,
   knownFlavors,
   chosenFlavors,
@@ -30,6 +40,9 @@ export function ActiveDocumentEditor({
   ...props
 }: Omit<EditorProps, 'value'> & {
   Component: typeof MarkdownEditor
+  focusSplitSide?: { current: 'left' | 'right' | null }
+  splitWasBusy?: { current: boolean }
+  busy?: boolean
   markdown: boolean
   knownFlavors: readonly (MarkdownFlavor & { addonId: string })[]
   chosenFlavors: readonly MarkdownFlavor[]
@@ -55,6 +68,44 @@ export function ActiveDocumentEditor({
       mountedDocumentEdits.bindView,
     )
   }, [props.document.tabId, documentTarget, viewId])
+  // Finish requested split focus after child editors restore their editability.
+  useLayoutEffect(() => {
+    const side = focusSplitSide?.current
+    if (
+      !splitWasBusy?.current ||
+      busy ||
+      !props.focused ||
+      !side ||
+      side !== props.viewId
+    )
+      return
+    const target = documentRuntime.captureView(props.viewId as ViewId)
+    if (
+      !documentTarget ||
+      target?.documentId !== documentTarget.documentId ||
+      target?.documentGeneration !== documentTarget.documentGeneration
+    )
+      return
+    focusSplitSide.current = null
+    if (window.document.activeElement?.matches('.document-tabs [role="tab"]'))
+      return
+    focusEditorNow({ preventScroll: true })
+  }, [
+    busy,
+    focusSplitSide,
+    splitWasBusy,
+    props.focused,
+    props.viewId,
+    documentTarget,
+  ])
+  useEffect(() => {
+    const side = focusSplitSide?.current
+    if (busy || !props.focused || !side || side !== props.viewId) return
+    focusSplitSide.current = null
+    if (window.document.activeElement?.matches('.document-tabs [role="tab"]'))
+      return
+    focusEditor({ preventScroll: true })
+  }, [busy, focusSplitSide, props.focused, props.viewId])
   const protectionFlavors = useMemo(
     () =>
       knownFlavors.filter(

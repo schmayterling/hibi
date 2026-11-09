@@ -373,6 +373,102 @@ test('ENG24: one prefix edit visits bounded tree paths without source materializ
   assert.equal(old.sliceRaw(0, 20), source.slice(0, 20))
 })
 
+test('an edit at every line of a megabyte rebuilds the tree once, and so does its undo', () => {
+  const lines = 16384
+  const source = Array.from({ length: lines }, (_, n) =>
+    `${n}`.padEnd(63, 'x'),
+  ).join('\n')
+  const store = new SourceStore(source, key)
+  let scanned = 0
+  const copied = () => {
+    const counters = store.counters(true)
+    scanned = counters.unitsScanned
+    return counters.pieceDescriptorsCopied + counters.metricSlotsCopied
+  }
+  copied()
+  const indent = apply(
+    store,
+    Array.from({ length: lines }, (_, n) => ({
+      from: n * 64,
+      to: n * 64,
+      insert: '\t',
+    })),
+  )
+  // An edit at a time copied about 7 million pieces and metric slots.
+  assert.ok(copied() < 4 * lines)
+  // Each one-unit tab piece read two stride prefixes, 32 units a line.
+  assert.ok(scanned < 3 * lines, `${scanned} units scanned`)
+  assert.equal(store.snapshot().materialize(), source.replace(/^/gm, '\t'))
+  apply(store, indent.inverse, 'undo')
+  assert.ok(copied() < 4 * lines)
+  assert.equal(store.snapshot().materialize(), source)
+  assert.deepEqual(store.inspect().problems, [])
+  // ASCII text needs no reads to find edit boundaries, but CRLF still has one.
+  assert.equal(
+    new SourceStore('a\r\nb', key).snapshot().isEditBoundary(2),
+    false,
+  )
+})
+
+test('multi-range operations match an oracle in every tree shape', () => {
+  for (const [fanout, leafCapacity, chunkUnits] of [
+    [4, 4, 4],
+    [4, 8, 8],
+    [16, 32, 4096],
+  ]) {
+    const random = generator(0x7ab1)
+    let source = randomSource(random, 200)
+    const store = new SourceStore(source, key, 0, {
+      fanout,
+      leafCapacity,
+      chunkUnits,
+    })
+    for (let iteration = 0; iteration < 300; iteration++) {
+      const before = store.snapshot()
+      const legal = Array.from(
+        { length: source.length + 1 },
+        (_, n) => n,
+      ).filter((n) => before.isEditBoundary(n))
+      const ends = [
+        ...new Set(
+          Array.from(
+            { length: 2 + random(40) },
+            () => legal[random(legal.length)],
+          ),
+        ),
+      ].sort((a, b) => a - b)
+      const changes = []
+      for (let index = 0; index + 1 < ends.length; index += 2)
+        changes.push({
+          from: ends[index],
+          to: random(3) ? ends[index + 1] : ends[index],
+          insert: randomSource(random, 4),
+        })
+      if (
+        changes.every(
+          ({ from, to, insert }) => source.slice(from, to) === insert,
+        )
+      )
+        continue
+      const previous = source
+      for (const { from, to, insert } of changes.toReversed())
+        source = source.slice(0, from) + insert + source.slice(to)
+      const prepared = apply(store, changes)
+      const where = `${fanout}/${leafCapacity}/${chunkUnits}, edit ${iteration}`
+      assert.equal(store.snapshot().materialize(), source, where)
+      assert.deepEqual(store.snapshot().metrics, oracle(source), where)
+      assert.deepEqual(store.inspect().problems, [], where)
+      if (iteration % 7 === 0) {
+        apply(store, prepared.inverse, 'undo')
+        assert.equal(store.snapshot().materialize(), previous, where)
+        apply(store, changes, 'redo')
+        assert.equal(store.snapshot().materialize(), source, where)
+      }
+    }
+    checkSnapshot(store.snapshot(), source)
+  }
+})
+
 test('exact equality skips shared regions and survives different piece partitions', () => {
   const source = 'abcdefgh\n'.repeat(100_000)
   const store = new SourceStore(source, key)

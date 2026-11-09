@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   startupDiagnostics,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -95,12 +96,13 @@ test('editor command shares rich and source action menus with guarded selection'
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+  })
   const rich = page.locator(
     '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
   )

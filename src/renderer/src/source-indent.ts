@@ -5,11 +5,15 @@ import { detectIndentUnit } from './indentation.ts'
 
 type Indented = { unit: string; from: number; to: number } | null
 const firstIndented = (doc: Text, pos = 0, end = doc.length): Indented => {
-  while (pos <= end) {
-    const line = doc.lineAt(pos)
-    const unit = detectIndentUnit(line.text)
-    if (unit) return { unit, from: line.from, to: line.to }
-    pos = line.to + 1
+  if (pos > end) return null
+  const first = doc.lineAt(pos),
+    lines = doc.iterLines(first.number)
+  pos = first.from
+  while (pos <= end && !lines.next().done) {
+    const line = lines.value
+    const unit = detectIndentUnit(line)
+    if (unit) return { unit, from: pos, to: pos + line.length }
+    pos += line.length + 1
   }
   return null
 }

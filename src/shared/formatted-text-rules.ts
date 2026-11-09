@@ -241,11 +241,17 @@ export function formattedClosedFence(node: SyntaxNode) {
     cursor.from > openEnd
   )
 }
+/** Display math with a formula: closed or not, as Obsidian draws it, and within the formula limit. */
 export function formattedMathBlock(node: SyntaxNode) {
-  return (
-    node.getChildren('MathMark').length >= 2 &&
-    node.getChildren('MathText').length > 0
-  )
+  return !!node.getChild('MathText')
+}
+/**
+ * Display math that selects and takes keys as one node: drawn as a formula
+ * and closed. Without a closing line a block can hold the rest of the note,
+ * which a selection meant for one formula must not take.
+ */
+export function formattedMathAtom(node: SyntaxNode) {
+  return formattedMathBlock(node) && node.getChildren('MathMark').length >= 2
 }
 
 /** Feature-selected atomic widgets never contribute their source to formatted find. */

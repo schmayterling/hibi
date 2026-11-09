@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { availableParallelism, totalmem } from 'node:os'
 import { join, posix, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -17,16 +18,51 @@ const git = (root, ...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd()
 const paths = (text) => text.split('\0').filter(Boolean)
+// GitHub Actions runs every test under tests/ except tests/dev/, which holds
+// tests of developer tooling and which only check:dev selects.
+const hostedTest = /^tests\/(?!dev\/).*\.test\.mjs$/
+const devTest = /^tests\/dev\/.*\.test\.mjs$/
+// Without --no-renames, a moved file lists only its new path.
+const changedFiles = (root, ...revisions) =>
+  paths(
+    git(root, 'diff', '--name-only', '--no-renames', '-z', ...revisions, '--'),
+  )
 const appInput =
   /^(src\/|build\/|scripts\/|docs\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|\.nvmrc$|\.npmrc$)/
 const globalInput =
   /^(\.github\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|biome\.json$|\.gitattributes$|\.nvmrc$|\.npmrc$|scripts\/ci\.mjs$)/
 // Typechecked by the tsconfigs but never bundled into the app.
 const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
+// Real use of what one machine has only one of: the system clipboard and global
+// shortcuts. `// ci: alone (why)` marks any other test that a neighbour can break.
+const alone =
+  /^\/\/ ci: alone\b|\bclipboard\.(?:read|write|clear|has)|\bnavigator\.clipboard\b|\bglobalShortcut\b|\bwebContents\.(?:paste|copy|cut)\(|['"`](?:Control|ControlOrMeta|Meta)\+[cvx]['"`]/m
+
+// Hosted runners with 4 cores have no room for a second app: at 2 workers tests ran
+// 1.5 times slower at the median, and reds went up. Node test files share better.
+export function testWorkers({
+  cores = availableParallelism(),
+  memory = totalmem(),
+  override = process.env.CI_WORKERS,
+} = {}) {
+  const apps = override
+    ? Number(override)
+    : Math.max(1, Math.min(cores - 4, Math.floor(memory / 2 ** 30 / 3)))
+  // Node reads 0 or a word as no limit, and would start an app per core.
+  if (!Number.isInteger(apps) || apps < 1)
+    throw new Error(`Invalid CI_WORKERS: ${override}`)
+  return { apps, node: Math.max(1, Math.floor(cores / 2)) }
+}
 
 export function planChecks(
   root,
-  { changed, previousTests, force = false, outputAvailable = true },
+  {
+    changed,
+    previousTests,
+    force = false,
+    outputAvailable = true,
+    dev = false,
+  },
 ) {
   const untracked = paths(
     git(root, 'ls-files', '-z', '--others', '--exclude-standard'),
@@ -38,7 +74,7 @@ export function planChecks(
     ),
   )
   const tests = [...files]
-    .filter((file) => /^tests\/.*\.test\.mjs$/.test(file))
+    .filter((file) => hostedTest.test(file) || (dev && devTest.test(file)))
     .sort()
   const full =
     force ||
@@ -63,11 +99,19 @@ export function planChecks(
         /^docs\/.*\.(md|png|jpe?g|gif|webp|avif|svg)$/.test(file) &&
         !file.startsWith('docs/licenses/'),
     )
-  const dataChanged = [...changes].some(
+  // Nothing in tests/dev/ can reach what check:ci runs.
+  const reaching = [...changes].filter(
+    (file) => dev || !file.startsWith('tests/dev/'),
+  )
+  const dataChanged = reaching.some(
     (file) =>
       !file.startsWith('tests/') ||
       file.startsWith('tests/fixtures/') ||
       !/\.[cm]?[jt]sx?$/.test(file),
+  )
+  // Nothing imports a test file, so changing one can't reach another test.
+  const beyondTests = reaching.some(
+    (file) => !hostedTest.test(file) && !devTest.test(file),
   )
   const modules = new Map()
   function dependencies(file, seen = new Set()) {
@@ -92,8 +136,10 @@ export function planChecks(
             source,
           ))
       const readsFiles = /['"](?:node:)?fs(?:\/promises)?['"]/.test(source)
+      // The harness starts the app, and `build` already covers what the app reads.
       let dynamic =
-        /['"](?:node:)?child_process['"]/.test(source) ||
+        (file !== 'tests/electron.mjs' &&
+          /['"](?:node:)?child_process['"]/.test(source)) ||
         /\b(?:import|require)\s*\(\s*[^'"\s]/.test(source)
       const local = imports
         .filter((name) => name.startsWith('.'))
@@ -118,7 +164,14 @@ export function planChecks(
           if (!resolved) dynamic = true
           return resolved ? [resolved] : []
         })
-      modules.set(file, { local, dynamic, readsFiles, serial })
+      modules.set(file, {
+        local,
+        dynamic,
+        readsFiles,
+        serial,
+        alone: file !== 'tests/electron.mjs' && alone.test(source),
+        app: imports.some((name) => /electron|playwright/.test(name)),
+      })
     }
     const module = modules.get(file)
     let { dynamic, readsFiles } = module
@@ -144,7 +197,10 @@ export function planChecks(
           [...graph.files].some((file) => changes.has(file)) ||
           ((build || dataChanged) && graph.files.has('tests/electron.mjs')) ||
           (dataChanged && graph.readsFiles) ||
-          (changes.size > 0 && graph.dynamic)
+          (beyondTests && graph.dynamic) ||
+          // This test reads every test file against its ledger.
+          (test === 'tests/formatted-engine-gaps.test.mjs' &&
+            [...changes].some((file) => /^tests\/[^/]*\.test\.mjs$/.test(file)))
         )
       })
   const unitTests = selected.filter((test) =>
@@ -153,7 +209,27 @@ export function planChecks(
       return module && !module.dynamic && !module.serial
     }),
   )
-  return { full, build, typecheck, tests: selected, unitTests, allTests: tests }
+  const aloneTests = selected.filter(
+    (test) =>
+      !unitTests.includes(test) &&
+      [...dependencies(test).files].some((file) => modules.get(file)?.alone),
+  )
+  const appTests = selected.filter(
+    (test) =>
+      !unitTests.includes(test) &&
+      !aloneTests.includes(test) &&
+      [...dependencies(test).files].some((file) => modules.get(file)?.app),
+  )
+  return {
+    full,
+    build,
+    typecheck,
+    tests: selected,
+    unitTests,
+    aloneTests,
+    appTests,
+    allTests: tests,
+  }
 }
 
 export function shardTests(selected, all, index, total) {
@@ -163,10 +239,11 @@ export function shardTests(selected, all, index, total) {
   return selected.filter((test) => assigned.has(test))
 }
 
-function runCI() {
+export function runCI({ dev = false } = {}) {
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
-  const stateFile = join(directory, 'success.json')
+  // Each answers for different tests, so neither can stand in for the other.
+  const stateFile = join(directory, dev ? 'success-dev.json' : 'success.json')
   const shard = process.env.CI_SHARD ?? '0/1'
   const [index, total] = shard.split('/').map(Number)
   if (
@@ -179,6 +256,7 @@ function runCI() {
     throw new Error(`Invalid CI shard: ${shard}`)
   const runtime = `${process.platform}/${process.arch}/${process.version}/${process.env.ImageVersion ?? 'local'}/${shard}`
   const clean = ['true', '1'].includes(process.env.CI_CLEAN ?? '')
+  const force = clean || process.env.CI_FULL === 'true'
   let previous
   try {
     previous = JSON.parse(readFileSync(stateFile, 'utf8'))
@@ -191,42 +269,50 @@ function runCI() {
   } catch {
     /* A cold or invalid cache always runs the full suite. */
   }
-  const baseline = process.env.CI_BASE || previous?.sha
+  // A pull request answers for its own diff; main's full runs answer for its base.
+  const pullRequestBase = /^[a-f0-9]{40}$/.test(process.env.CI_BASE ?? '')
+    ? process.env.CI_BASE
+    : undefined
+  const baseline =
+    pullRequestBase ??
+    (/^[a-f0-9]{40}$/.test(previous?.sha ?? '') ? previous.sha : undefined)
   let changed
-  if (
-    previous &&
-    /^[a-f0-9]{40}$/.test(previous.sha) &&
-    /^[a-f0-9]{40}$/.test(baseline ?? '')
-  ) {
+  let previousTests = previous?.tests
+  if (baseline) {
     try {
       changed = [
         ...new Set([
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', baseline, 'HEAD', '--'),
-          ),
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', previous.sha, 'HEAD', '--'),
-          ),
-          ...paths(git(root, 'diff', '--name-only', '-z', 'HEAD', '--')),
+          ...changedFiles(root, baseline, 'HEAD'),
+          ...changedFiles(root, 'HEAD'),
         ]),
       ]
+      if (pullRequestBase)
+        previousTests = paths(
+          git(root, 'ls-tree', '-r', '-z', '--name-only', baseline, 'tests/'),
+        )
     } catch {
       /* Unavailable history after a force-push requires full checks. */
     }
   }
+  const outputAvailable = [
+    'out/main/index.js',
+    'out/preload/index.cjs',
+    'out/renderer/index.html',
+    'out/site/template.html',
+  ].every((file) => existsSync(join(root, file)))
   const plan = planChecks(root, {
     changed,
-    previousTests: previous?.tests,
-    force: clean,
-    outputAvailable: [
-      'out/main/index.js',
-      'out/preload/index.cjs',
-      'out/renderer/index.html',
-      'out/site/template.html',
-    ].every((file) => existsSync(join(root, file))),
+    previousTests,
+    force,
+    dev,
+    // A pull request's diff picks its tests even when it has to build first.
+    outputAvailable: outputAvailable || !!pullRequestBase,
   })
   const selected = shardTests(plan.tests, plan.allTests, index, total)
   const unitTests = shardTests(plan.unitTests, plan.allTests, index, total)
+  const aloneTests = shardTests(plan.aloneTests, plan.allTests, index, total)
+  const appTests = shardTests(plan.appTests, plan.allTests, index, total)
+  const workers = testWorkers()
   if (clean) {
     rmSync(join(root, 'out'), { recursive: true, force: true })
     rmSync(directory, { recursive: true, force: true })
@@ -263,18 +349,54 @@ function runCI() {
         '--tsBuildInfoFile',
         `.cache/ci/${target}.tsbuildinfo`,
       )
-  if (plan.build) npm('run', 'build:app')
+  // The cache can hold another revision's app, and a pull request's diff can't say.
+  const outputStale = () => {
+    if (!/^[a-f0-9]{40}$/.test(previous?.sha ?? '')) return true
+    try {
+      return changedFiles(root, previous.sha, 'HEAD').some((file) =>
+        appInput.test(file),
+      )
+    } catch {
+      return true
+    }
+  }
+  if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
+    npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
-  if (unitTests.length)
-    run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])
-  const serialTests = selected.filter((test) => !unitTests.includes(test))
-  if (serialTests.length)
-    run([
-      '--test',
-      '--test-reporter=tap',
-      '--test-concurrency=1',
-      ...serialTests,
-    ])
+  const runTests = (tests, concurrency) => {
+    if (tests.length)
+      run([
+        '--import',
+        './tests/file-limit.mjs',
+        '--test',
+        '--test-reporter=tap',
+        `--test-concurrency=${concurrency}`,
+        ...tests,
+      ])
+  }
+  runTests(unitTests, availableParallelism())
+  // A red here must not hide the reds of the groups after it.
+  const failures = []
+  for (const [tests, concurrency] of [
+    [
+      selected.filter(
+        (test) =>
+          !unitTests.includes(test) &&
+          !aloneTests.includes(test) &&
+          !appTests.includes(test),
+      ),
+      workers.node,
+    ],
+    [appTests, workers.apps],
+    [aloneTests, 1],
+  ]) {
+    try {
+      runTests(tests, concurrency)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  if (failures.length) throw failures[0]
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (

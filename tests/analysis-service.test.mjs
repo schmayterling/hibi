@@ -1,3 +1,4 @@
+// ci: alone (asserts typing stays under a wall-clock limit)
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
@@ -9,6 +10,7 @@ import unit from 'node:test'
 import { validateAnalysisProjection } from '../src/shared/analysis.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForElectronExit,
   waitForFormattedEditor,
@@ -284,8 +286,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     const c = window.analysisFixtures['probe-addon']
     window.analysisPending = c.analysis.run(c.editor.getTextProjection())
   })
-  await clickMenu(app, 'New')
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'New'))
   await replaceRichText(page, editor, 'another document')
   assert.equal(
     (await page.evaluate(() => window.analysisPending)).status,

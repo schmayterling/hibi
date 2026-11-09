@@ -93,6 +93,7 @@ function harness(t) {
     pendingFileOperations: new Set(),
     fileOperationHasDialog: () => false,
     fileOperationDialogOpened: () => null,
+    recoverySettled: () => {},
     withinFileOperation: async (operation) => operation(),
     rendererUrl: frame.url,
     isTrustedRendererUrl: (url, expected) => url === expected,
@@ -113,7 +114,8 @@ function harness(t) {
         state.trashed.push(file)
       },
     },
-    realpath: async (file) => `/real/${file}`,
+    realpath: async (file) =>
+      (state.realpath ?? ((file) => `/real/${file}`))(file),
     removeUndoHistory: async (file) => state.removed.push(file),
     workspaceRoot: () => '/notes',
     join: (...parts) => parts.join('/'),
@@ -242,12 +244,15 @@ for (const name of mutations)
 
 test('renameFile moves the kept undo history of a note an addon moved', async (t) => {
   const h = harness(t)
+  // A case-insensitive disk: the addon spells the folder as 'B', which is 'b'.
+  h.state.realpath = (file) => file.replace('/B/', '/b/')
   const moved = (sourceRemoved) => ({
     ok: true,
-    value: { path: 'a.md', destinationPath: 'b/a.md', sourceRemoved },
+    value: { path: 'a.md', destinationPath: 'B/a.md', sourceRemoved },
   })
   h.state.result = moved(true)
   assert.equal(await h.invoke('renameFile'), h.state.result)
+  // The history goes by the note's real path, as Hibi opens it.
   assert.deepEqual(h.state.relocated, [['/notes/a.md', '/notes/b/a.md']])
   // A move that kept both names, or that failed, moves nothing.
   h.state.result = moved(false)

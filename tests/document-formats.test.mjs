@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 test('plain text stays literal and disabled addons stay out of formats', {
@@ -52,7 +52,14 @@ test('plain text stays literal and disabled addons stay out of formats', {
     await page.getByRole('button', { name: /^bold$/i, exact: true }).count(),
     0,
   )
+  await page.evaluate(() => {
+    window.normalCommands = 0
+    window.hibi.onCommand((command) => {
+      if (command === 'normal') window.normalCommands++
+    })
+  })
   await pressShortcut(app, `${mod}+Shift+[`)
+  await waitForAsync(page, () => window.normalCommands === 1)
   assert.equal(await source.isVisible(), true)
   assert.equal(await source.textContent(), '# plain **text**$x^2$')
   assert.equal(

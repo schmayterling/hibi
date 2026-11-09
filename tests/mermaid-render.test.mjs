@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { after, test } from 'node:test'
 import { createServer } from 'vite'
+import { waitForProgress } from './worker-progress.mjs'
 
 // A gated stand-in for pele/lazy: every render costs 3 ms on a fake clock.
 const fakes = await mkdtemp(join(tmpdir(), 'hibi-mermaid-render-'))
@@ -117,22 +118,22 @@ const element = (name, index = 0, width = 800) => ({
 let writes = []
 const errors = []
 const failed = (name) => (error) => errors.push(`${name}: ${error.message}`)
-// Module loading takes event-loop turns; poll turns, not time.
-async function until(predicate) {
-  for (let turn = 0; turn < 1000 && !predicate(); turn++)
-    await new Promise((resolve) => setTimeout(resolve))
-  assert.ok(predicate(), String(predicate))
-}
-const turns = async () => {
-  for (let turn = 0; turn < 3; turn++)
-    await new Promise((resolve) => setTimeout(resolve))
-}
-const settle = async (type, outcome = 'resolve') => {
+const until = (predicate) =>
+  waitForProgress(
+    predicate,
+    () =>
+      fake.loads.length + fake.renders.length + writes.length + errors.length,
+    3000,
+    `Diagram made no progress: ${predicate}`,
+  )
+// Already-loaded engines queue one synchronous drain microtask in mountDiagram.
+const turns = () => Promise.resolve()
+const settle = async (type, ready, outcome = 'resolve') => {
   await until(() => fake.pending.some((entry) => entry.type === type))
   for (const entry of fake.pending.filter((entry) => entry.type === type))
     entry[outcome](new Error(`${type} failed to load`))
   fake.pending = fake.pending.filter((entry) => entry.type !== type)
-  await turns()
+  await until(ready)
 }
 const run = (queue) => {
   const callbacks = queue.splice(0)
@@ -152,7 +153,7 @@ test('diagrams draw nothing after cleanup, visible ones first, and the rest in b
   const stopOpen = mountDiagram(open, 'flowchart LR\n  C --> D', failed('open'))
   stopClosed()
   assert.deepEqual(writes, [])
-  await settle('flowchart')
+  await settle('flowchart', () => open.children !== null)
   assert.deepEqual(writes, ['open'])
   assert.deepEqual(open.children, ['flowchart LR\n  C --> D at 600'])
   stopOpen()
@@ -258,13 +259,13 @@ test('diagrams draw nothing after cleanup, visible ones first, and the rest in b
   const live = element('live')
   const stopLive = mountDiagram(live, 'classDiagram\n  A', failed('live'))
   mountDiagram(element('gone'), 'classDiagram\n  B', failed('gone'))()
-  await settle('class', 'reject')
+  await settle('class', () => errors.length === 1, 'reject')
   assert.deepEqual(errors, ['live: class failed to load'])
   assert.deepEqual(live.children, [])
   stopLive()
   const retry = element('retry')
   const stopRetry = mountDiagram(retry, 'classDiagram\n  C', failed('retry'))
-  await settle('class')
+  await settle('class', () => retry.children !== null)
   assert.deepEqual(retry.children, ['classDiagram\n  C at 600'])
   stopRetry()
 })

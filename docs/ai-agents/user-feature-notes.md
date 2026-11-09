@@ -8,7 +8,7 @@ Switching views must preserve the original source. Rich-text edits may normalize
 
 Open tabs retain unsaved drafts during a renderer reload. Clean files refresh from disk when revisited; dirty tabs keep their saved baseline for external-change checks. Moving workspace files updates open paths. Folder deletion checks every affected tab. Quitting does not restore open tabs on the next launch.
 
-Saves write and sync a temporary file before renaming it over the destination. Existing permissions are preserved. Draft recovery in the main process does not protect against a full process or machine crash.
+Saves write and sync a temporary file before renaming it over the destination. Existing permissions are preserved. Draft recovery in the main process covers a renderer crash. For a killed process or a power cut, the recovery journal (`src/main/recovery-journal.ts`) keeps unsaved text in app data: at most one copy per dirty tab, written about once a second, each as a new file with a checksum, so a cut-off write leaves the copy before it. Copies go after a save or an explicit discard. Restoring never writes the note; a copy over a file that changed outside Hibi opens as a separate note.
 
 ## Selection and scrolling
 

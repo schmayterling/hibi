@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   stopElectronTree,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -51,12 +52,13 @@ test('large outline follows rich and source carets with bounded rows and ignores
       filePaths: [file],
     })
   }, file)
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
 
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).name === 'headings.md',
   )
+  await waitForDocumentEditor(app, page)
   await rich.press('ControlOrMeta+End')
   await rich.evaluate((element) => element.blur())
 
@@ -272,7 +274,7 @@ test('source outline resolves references through its worker and preserves native
       },
     })
   })
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
 
   // Read rendered labels with the caret outside the heading.
   await waitForDocumentEditor(app, page)
@@ -300,9 +302,15 @@ test('source outline resolves references through its worker and preserves native
   const checkFormattedHeadings = async () => {
     await page
       .waitForFunction(() => {
+        // By name: a note opens with its caret in its last block, and a heading
+        // the caret is in shows its marker once the window has focus.
         const headings = [
           ...document.querySelectorAll('.rich-pane :is(h1, .hibi-lp-h1)'),
-        ].map((heading) => heading.textContent)
+        ].map(
+          (heading) =>
+            heading.closest('[role="heading"]')?.getAttribute('aria-label') ??
+            heading.textContent,
+        )
         return (
           JSON.stringify(headings) ===
           JSON.stringify(['**literal** label', 'real'])

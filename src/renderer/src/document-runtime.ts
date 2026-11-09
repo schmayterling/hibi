@@ -577,7 +577,12 @@ export class DocumentRuntime {
         this.#detach.set(id, [
           session.subscribeOperations((prepared) => {
             this.#changes.set(id, prepared.operation.changes)
-            for (const versions of this.#saves.get(id)?.pending.values() ?? [])
+            const pending = this.#saves.get(id)?.pending
+            if (!pending?.size) return
+            // A save waiting behind another file operation writes the version
+            // there is when its turn comes, so it may take any of these.
+            retained.sealHistory()
+            for (const versions of pending.values())
               versions.set(prepared.after.version, prepared.after)
           }),
           session.subscribe(() => this.#publish(id)),
@@ -695,7 +700,7 @@ export class DocumentRuntime {
           throw new Error(
             'The saved document version is not owned by this request.',
           )
-        session.markSaved(saved)
+        session.markSaved(saved, document.versionsKept ?? 'none')
       } else if ('savedMarkdown' in document) {
         const prepared = loadedDocument(document)
         session.importSaved(prepared ? prepared.saved : document.savedMarkdown)
@@ -805,7 +810,10 @@ export const documentRuntime = new DocumentRuntime({
     }
   },
   enqueue: (operation) => {
-    void window.hibi.appendSourceOperation(operation).catch(reportError)
+    // The preload holds the admitted operation: only its id crosses again.
+    void window.hibi
+      .appendSourceOperation(operation.operationId)
+      .catch(reportError)
   },
   onError: reportError,
   opened: (tabId, session) => {

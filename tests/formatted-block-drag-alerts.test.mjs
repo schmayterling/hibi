@@ -7,6 +7,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -52,14 +53,20 @@ async function open(name, doc, token) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    name,
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  })
   await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
+  // A note's text shows before the block drag addon adds its handle; a
+  // pointer already resting there gets no handle until it moves again.
+  await page
+    .locator('.rich-pane .block-drag-handle')
+    .waitFor({ state: 'attached' })
 }
 async function menu(token) {
   const line = page.locator('.rich-pane .cm-line', { hasText: token })

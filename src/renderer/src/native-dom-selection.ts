@@ -96,6 +96,10 @@ const samePoints = (a: Points | null, b: Points | null) =>
   a?.focusNode === b?.focusNode &&
   a?.focusOffset === b?.focusOffset
 
+/** What a point's offset counts in its node. */
+const contentOf = (node: Node | null | undefined) =>
+  node?.nodeValue ?? node?.childNodes.length
+
 const writable = (state: EditorState) =>
   !state.readOnly && state.facet(EditorView.editable)
 
@@ -191,10 +195,20 @@ export const nativeDOMSelection = ViewPlugin.fromClass(
       // can also read that pick first, as a selection at the widget's edge.
       if (this.armed && !writable(update.state)) {
         const points = pointsOf(this.document.getSelection())
-        if (!update.selectionSet || !samePoints(points, this.taken))
+        if (!update.selectionSet || !samePoints(points, this.taken)) {
+          // A key the view does not take is in the DOM until a redraw takes
+          // it out: an offset read before that is not a place in the note.
+          const anchor = contentOf(points?.anchorNode)
+          const focus = contentOf(points?.focusNode)
           queueMicrotask(() => {
-            if (!this.destroyed) this.read(points)
+            if (
+              !this.destroyed &&
+              anchor === contentOf(points?.anchorNode) &&
+              focus === contentOf(points?.focusNode)
+            )
+              this.read(points)
           })
+        }
       }
       if (!this.armed || !writable(update.state) || writable(update.startState))
         return

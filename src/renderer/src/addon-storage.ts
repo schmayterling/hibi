@@ -71,6 +71,15 @@ export function createAddonStorageScope(
     for (const handle of handles.values()) {
       if (handle.key !== change.key || !sameScope(handle.scope, change.scope))
         continue
+      // A write's notice can arrive after its reply, or after a later write's
+      // reply or notice: what the handle holds is that commit or a newer one.
+      if (
+        change.current.status === 'ready' &&
+        (handle.current.status === 'ready' ||
+          handle.current.status === 'version-mismatch') &&
+        change.current.revision <= handle.current.revision
+      )
+        continue
       handle.changeCounter++
       handle.current =
         change.current.status === 'ready' &&

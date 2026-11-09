@@ -88,7 +88,8 @@ export type MarkdownEditorProps = {
   flavors: readonly MarkdownFlavor[]
   onAttach: (
     files: File[] | null,
-  ) => Promise<import('../../shared/media').MediaAttachment[] | null>
+    prepare: import('./FormattingToolbar').PrepareMediaInsert,
+  ) => Promise<void>
   onLink: (href: string) => void
   onOutline: (headings: OutlineHeading[]) => void
   onOutlineUnavailable?: (reason: string | null) => void
@@ -219,6 +220,7 @@ export function MarkdownEditor({
         (flavor) => flavor.id === 'text-extras.text-extras',
       ),
       math: flavors.some((flavor) => flavor.id === 'math.latex'),
+      mathBlocks: markdownSyntax.enabled('math.block'),
       frontmatter: markdownExtensions.some(
         (extension) => extension.id === 'frontmatter.metadata',
       ),
@@ -520,7 +522,9 @@ export function MarkdownEditor({
       view.state.selection.main.head !== 0 ||
       (active &&
         active !== window.document.body &&
-        !content.current?.contains(active))
+        !content.current?.contains(active)) ||
+      // A control in the note the reader reached before the view was ready.
+      (active !== view.contentDOM && view.contentDOM.contains(active))
     )
       return
     // As its Selection.atEnd: the end of the last text, or the last block

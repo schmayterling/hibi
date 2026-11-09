@@ -1,3 +1,4 @@
+// ci: alone (asserts a tab closes under a wall-clock limit)
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {
@@ -6,12 +7,14 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { UNDO_HISTORY_CHANNELS } from '../src/shared/undo-history.ts'
 import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, redoKey, replaceRichText } from './keyboard.mjs'
 import { renameDocument } from './rename.mjs'
@@ -195,6 +198,94 @@ test("Don't save leaves no trace of the discarded text in kept history", {
   assert.equal(await second.restored(), false)
   await second.undo('original')
   await second.redo('kept draft')
+})
+
+test('a save waiting its turn keeps the version it wrote, with typing going on behind it', {
+  timeout: 90000,
+}, async (t) => {
+  const { launch, file } = await note(t)
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('draft')
+  // The save's handler waits, as it does behind another file operation, and
+  // its reply waits too, so nothing has to race it or read the file meanwhile.
+  await hibi.app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:save')
+    const turn = new Promise((resolve) => {
+      globalThis.saveTurn = resolve
+    })
+    const reply = new Promise((resolve) => {
+      globalThis.saveReply = resolve
+    })
+    globalThis.saveWrote = new Promise((resolve) => {
+      ipcMain._invokeHandlers.set('document:save', async (...args) => {
+        await turn
+        ipcMain._invokeHandlers.set('document:save', save)
+        const result = await save(...args).finally(resolve)
+        await reply
+        return result
+      })
+    })
+  })
+  await pressShortcut(hibi.app, `${mod}+s`)
+  await hibi.page.locator('.app[aria-busy="true"]').waitFor()
+  await hibi.page.keyboard.type('x')
+  await hibi.shows('draftx')
+  await hibi.app.evaluate(() => globalThis.saveTurn())
+  // The save wrote what there was when its turn came. More typing joins that
+  // typing's group while the reply is on its way.
+  await hibi.app.evaluate(() => globalThis.saveWrote)
+  assert.equal(await readFile(file, 'utf8'), 'draftx')
+  await hibi.page.keyboard.type('y')
+  await hibi.shows('draftxy')
+  await hibi.app.evaluate(() => globalThis.saveReply())
+  await hibi.page.locator('.app[aria-busy="false"]').waitFor()
+  await hibi.undo('draftx')
+  await pressShortcut(hibi.app, `${mod}+w`)
+  await hibi.shows('')
+  await hibi.open('draftx')
+  await hibi.restored()
+  await hibi.undo('draft')
+  await hibi.undo('original')
+})
+
+test('kept undo steps that reach a reopened note late still enable Undo', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch } = await note(t)
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('draft')
+  await hibi.save('draft')
+  await pressShortcut(hibi.app, `${mod}+w`)
+  await hibi.shows('')
+  // The read waits behind other notes' writes; the toolbar has looked by then.
+  await hibi.app.evaluate(({ ipcMain }, channel) => {
+    const read = ipcMain._invokeHandlers.get(channel)
+    const late = new Promise((resolve) => {
+      globalThis.releaseRead = resolve
+    })
+    ipcMain._invokeHandlers.set(channel, async (...args) => {
+      const result = await read(...args)
+      await late
+      return result
+    })
+  }, UNDO_HISTORY_CHANNELS.read)
+  await hibi.open('draft')
+  const undo = hibi.page.locator(
+    '[aria-label="Editor toolbar"] button[aria-label="Undo"]',
+  )
+  await undo.waitFor()
+  await hibi.page.evaluate(
+    () =>
+      new Promise((frame) =>
+        requestAnimationFrame(() => setTimeout(frame, 100)),
+      ),
+  )
+  assert.equal(await undo.isDisabled(), true)
+  await hibi.app.evaluate(() => globalThis.releaseRead())
+  await hibi.restored()
+  await hibi.undo('original')
 })
 
 test('clearing undo history forgets open and kept steps, and keeping it can be turned off', {
@@ -403,7 +494,11 @@ test('a quit after the editor stopped still waits for kept undo history writes',
   await waitForAsync(app, () => globalThis.writes.held >= 1)
   await hibi.quit(({ BrowserWindow }) => {
     setTimeout(() => globalThis.writes.release(), 1000)
-    BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()
+    // Stop the renderer without waiting for the operating system's crash dump.
+    process.kill(
+      BrowserWindow.getAllWindows()[0].webContents.getOSProcessId(),
+      'SIGKILL',
+    )
   })
   const name = `${createHash('sha256')
     .update(await realpath(file))
@@ -412,4 +507,116 @@ test('a quit after the editor stopped still waits for kept undo history writes',
     await readFile(join(profile, 'undo-history', name), 'utf8'),
     /first draft/,
   )
+})
+
+test('a note missing at one launch reopens with its history when it comes back', {
+  timeout: 120000,
+}, async (t) => {
+  const { file, profile, launch } = await note(t, 'original', 'notes')
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await waitForAsync(
+    hibi.app,
+    async (_electron, profile) => {
+      const { readdir } = process.getBuiltinModule('node:fs/promises')
+      const { join } = process.getBuiltinModule('node:path')
+      return (await readdir(join(profile, 'undo-history')).catch(() => []))
+        .length
+    },
+    profile,
+  )
+  await hibi.quit()
+  // As a switch to a Git branch without the note does.
+  await writeFile(join(dirname(file), 'other.md'), 'still here')
+  await rm(file)
+  const index = join(profile, 'undo-history-notes.json')
+  const records = async () =>
+    JSON.parse(await readFile(index, 'utf8')).filter((entry) => entry.path)
+  const away = await launch()
+  // The prune starts 15 s into the launch and looks again 10 s later.
+  const started = Date.now()
+  while (!(await records()).length && Date.now() - started < 60000)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.deepEqual(
+    (await records()).map(({ path }) => path),
+    [await realpath(dirname(file)).then((folder) => join(folder, 'note.md'))],
+  )
+  await away.quit()
+  await writeFile(file, 'first draft')
+  const back = await launch()
+  await back.open('first draft')
+  assert.equal(await back.restored(), false)
+  await back.undo('original')
+  // Open or not, this launch's look clears the record.
+  const seen = Date.now()
+  while ((await records()).length && Date.now() - seen < 60000)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.deepEqual(await records(), [])
+})
+
+test('a launch lets go of the kept history of a note missing for 30 days, and keeps one on a drive that is not mounted', {
+  timeout: 120000,
+}, async (t) => {
+  const { file, profile, launch } = await note(t, 'original', 'notes')
+  const away = join(profile, 'drive', 'away.md')
+  await mkdir(dirname(away))
+  await writeFile(away, 'far away')
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await hibi.app.evaluate(({ dialog }, away) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [away],
+    })
+  }, away)
+  await hibi.open('far away')
+  await hibi.edit('further away')
+  await pressShortcut(hibi.app, `${mod}+s`)
+  await waitForAsync(
+    hibi.page,
+    async () => !(await window.hibi.getDocument()).dirty,
+  )
+  await hibi.page.locator('.app[aria-busy="false"]').waitFor()
+  const kept = (path) =>
+    `${createHash('sha256').update(path).digest('hex')}.json`
+  const deleted = kept(await realpath(file)),
+    unmounted = kept(await realpath(away))
+  const folder = join(profile, 'undo-history')
+  await waitForAsync(
+    hibi.app,
+    async (_electron, [folder, names]) => {
+      const { readdir } = process.getBuiltinModule('node:fs/promises')
+      const files = await readdir(folder).catch(() => [])
+      return names.every((name) => files.includes(name))
+    },
+    [folder, [deleted, unmounted]],
+  )
+  await hibi.quit()
+  await writeFile(join(dirname(file), 'other.md'), 'still here')
+  await rm(file)
+  await rename(dirname(away), `${dirname(away)} unmounted`)
+  const index = join(profile, 'undo-history-notes.json')
+  await writeFile(
+    index,
+    JSON.stringify(
+      JSON.parse(await readFile(index, 'utf8')).map((path) => ({
+        path,
+        missingSince: Date.now() - 31 * 24 * 60 * 60 * 1000,
+      })),
+    ),
+  )
+  const started = Date.now()
+  await launch()
+  // The prune starts 15 s into the launch and looks again 10 s later.
+  while (
+    (await readdir(folder)).includes(deleted) &&
+    Date.now() - started < 90000
+  )
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.ok(Date.now() - started > 15000, 'let go too early')
+  assert.deepEqual(await readdir(folder), [unmounted])
 })

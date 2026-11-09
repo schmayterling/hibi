@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { setImmediate as nextTask } from 'node:timers/promises'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 import { EditorState } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
@@ -13,6 +15,9 @@ import { sourceWhitespace } from '../src/renderer/src/source-whitespace.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
+// The test runner passes no --expose-gc.
+setFlagsFromString('--expose-gc')
+const gc = runInNewContext('gc')
 const key = { tabId: 'whitespace', revision: 0 }
 const textFor = (snapshot) =>
   sourceEditorTextCooperatively(snapshot, {
@@ -118,9 +123,7 @@ async function compactableView(t, source) {
   return { session, bridge, view }
 }
 
-test('live mixed-tail Enter survives storage compaction and garbage collection', {
-  skip: !globalThis.gc,
-}, async (t) => {
+test('live mixed-tail Enter survives storage compaction and garbage collection', async (t) => {
   for (const visible of [true, false])
     await t.test(
       visible ? 'shown' : 'hidden without pending edits',
@@ -163,7 +166,7 @@ test('live mixed-tail Enter survives storage compaction and garbage collection',
         assert.equal(session.snapshot().storageEpoch, epoch + 1)
         for (let i = 0; i < 20; i++) {
           await nextTask()
-          globalThis.gc()
+          gc()
         }
         assert.equal(oldSnapshot.deref(), undefined)
         assert.equal(view.state.doc, doc)
@@ -174,9 +177,7 @@ test('live mixed-tail Enter survives storage compaction and garbage collection',
     )
 })
 
-test('storage replacement does not bind stale hidden text to newer same-length content', {
-  skip: !globalThis.gc,
-}, async (t) => {
+test('storage replacement does not bind stale hidden text to newer same-length content', async (t) => {
   const { session, bridge, view } = await compactableView(
     t,
     `x\n${' \t\n'.repeat(1400)}`,
@@ -191,7 +192,7 @@ test('storage replacement does not bind stale hidden text to newer same-length c
   assert.equal(session.snapshot().storageEpoch, epoch + 1)
   for (let i = 0; i < 20; i++) {
     await nextTask()
-    globalThis.gc()
+    gc()
   }
   assert.equal(view.state.doc, doc)
   assert.equal(before.isWhitespace(from), true)
@@ -229,9 +230,7 @@ test('indexed whitespace proofs keep bounded reads at 1 and 50 MiB', async (t) =
   }
 })
 
-test('whitespace bindings do not retain disposed source snapshots', {
-  skip: !globalThis.gc,
-}, async () => {
+test('whitespace bindings do not retain disposed source snapshots', async () => {
   const make = async () => {
     const store = new SourceStore('x\n \t'.repeat(1000), key)
     return {
@@ -242,7 +241,7 @@ test('whitespace bindings do not retain disposed source snapshots', {
   const { text, snapshot } = await make()
   for (let tries = 0; tries < 20; tries++) {
     await nextTask()
-    globalThis.gc()
+    gc()
     if (!snapshot.deref()) break
   }
   assert.equal(snapshot.deref(), undefined)

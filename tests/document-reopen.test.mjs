@@ -13,6 +13,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -91,10 +92,13 @@ async function setup(t) {
     await done()
     await idle()
   }
+  // Every call selects another tab, so its editor is replaced.
   const select = async (id) => {
-    const done = await replied(app, 'document:select-tab')
-    await page.locator(`#document-tab-${id}`).click()
-    await done()
+    await openInDocumentEditor(app, page, async () => {
+      const done = await replied(app, 'document:select-tab')
+      await page.locator(`#document-tab-${id}`).click()
+      await done()
+    })
     await idle()
   }
   const answer = (choice, path = null) =>
@@ -114,6 +118,8 @@ async function setup(t) {
     return { tabId, markdown, dirty, ephemeral }
   }
   const type = async (text) => {
+    // A selected tab's editor takes input only once ready; until then focus stays on the tab.
+    await waitForDocumentEditor(app, page)
     await replaceRichText(
       page,
       page.locator('.rich-pane [aria-label="Document editor"]'),
@@ -619,9 +625,7 @@ test('reopening a dirty document prompts before discarding external or local tex
   const { app, page, file, read, open, content } = await setup(t)
   const editor = page.locator('.rich-pane [aria-label="Document editor"]')
   await replaceRichText(page, editor, 'local draft')
-  await page.waitForFunction(
-    async () => (await window.hibi.getDocument()).dirty,
-  )
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
   await writeFile(file, 'external replacement\n')
   const before = await read()
   await open()
@@ -639,9 +643,7 @@ test('reopening a dirty document prompts before discarding external or local tex
   assert.equal(await readFile(file, 'utf8'), 'external replacement\n')
 
   await replaceRichText(page, editor, 'saved local draft')
-  await page.waitForFunction(
-    async () => (await window.hibi.getDocument()).dirty,
-  )
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
   await writeFile(file, 'another external replacement\n')
   await app.evaluate(() => {
     globalThis.reopenChoice = 0
@@ -979,7 +981,7 @@ test('closing a tab checks the tab shown next for outside changes', {
   const { answer, prompts, state, type } = setupState
   const note = (await read()).tabId
   const close = async () => {
-    const done = await replied(app, 'document:close-tab')
+    const done = await replied(app, 'document:close-tabs')
     await page.getByRole('button', { name: /^close other\.md$/i }).click()
     await done()
     await idle()
@@ -1030,7 +1032,7 @@ test('closing a tab still shows the next tab when its file cannot be read', {
   // Another app puts a folder where the next tab's file was.
   await rm(file)
   await mkdir(file)
-  const done = await replied(app, 'document:close-tab')
+  const done = await replied(app, 'document:close-tabs')
   await page.getByRole('button', { name: /^close other\.md$/i }).click()
   await done()
   await idle()
@@ -1076,7 +1078,7 @@ test('a tab that changes while Hibi asks about the next tab stays open and says 
       cancel: answered.resolve,
     }
   })
-  const done = await replied(app, 'document:close-tab')
+  const done = await replied(app, 'document:close-tabs')
   await page.getByRole('button', { name: /^close other\.md$/i }).click()
   await app.evaluate(() => globalThis.closePrompt.asked)
   // The closing tab changes meanwhile, as a late keystroke or an addon can.
@@ -1138,8 +1140,9 @@ test('a link to a heading of another note or the note itself moves to the headin
     const from = markdown.indexOf('## Far away') + 3
     await waitForAsync(
       page,
+      // Between notes the pane has no editor for a moment.
       (from) =>
-        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+        document.querySelector('.rich-pane .cm-content')?.cmTile.root.view.state
           .selection.main.head === from,
       from,
     )
@@ -1163,6 +1166,108 @@ test('a link to a heading of another note or the note itself moves to the headin
   await follow('down')
   assert.equal((await read()).tabId, note)
   await atHeading(self)
+})
+
+test('a link up to a heading takes a reader away from the end of the note', {
+  timeout: 150000,
+}, async (t) => {
+  const { app, page, file, idle, open } = await setup(t)
+  const lines = Array.from(
+    { length: 512 },
+    (_, index) => `word ${index} ${'word '.repeat(50)}`,
+  ).join('\n')
+  const fence = `\n\n~~~text\n${lines}\n~~~\n\n`
+  const text = `[down](note.md#far-away)${fence}## Middle${fence}## Far away\n\n[up](note.md#middle)\n`
+  await writeFile(file, text)
+  await open()
+  const editor = page.locator('.rich-pane [aria-label="Document editor"]')
+  // The pane once the link's scroll and the heights it draws are done. The
+  // link can give the pane a new view, so each frame looks it up.
+  const follow = async (name, heading, label = null) => {
+    const done = await replied(app, 'document:link')
+    await editor
+      .getByRole('link', { name, exact: true })
+      .click({ modifiers: ['Shift'] })
+    await done()
+    await idle()
+    const target = { from: heading, label }
+    return page.evaluate(async ({ from, label }) => {
+      let last = ''
+      let still = 0
+      while (still < 4) {
+        await new Promise(requestAnimationFrame)
+        const pane = document.querySelector('.rich-pane')
+        const view = pane.querySelector('.cm-content')?.cmTile.root.view
+        if (view?.state.selection.main.head !== from) continue
+        const now = `${pane.scrollTop} ${pane.scrollHeight} ${view.viewport.from}`
+        still = now === last ? still + 1 : 0
+        last = now
+      }
+      const pane = document.querySelector('.rich-pane')
+      const oracle = {
+        height: pane.clientHeight,
+        bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+      }
+      if (!label) return oracle
+      // The distance to the end depends on heights the view still estimates:
+      // the heading itself shows that the link took the reader there.
+      const view = pane.querySelector('.cm-content').cmTile.root.view
+      const box = ({ top, bottom, left, right }) => ({
+        top,
+        bottom,
+        left,
+        right,
+      })
+      const paneBox = pane.getBoundingClientRect()
+      const line = view.state.doc.lineAt(from)
+      return {
+        ...oracle,
+        seen: {
+          source: { text: line.text, from: line.from, to: line.to },
+          head: view.state.selection.main.head,
+          viewport: { from: view.viewport.from, to: view.viewport.to },
+          visibleRanges: view.visibleRanges.map(({ from, to }) => ({
+            from,
+            to,
+          })),
+          scrollTop: pane.scrollTop,
+          scrollHeight: pane.scrollHeight,
+          port: {
+            ...box(paneBox),
+            top: paneBox.top + pane.clientTop,
+            bottom: paneBox.top + pane.clientTop + pane.clientHeight,
+          },
+          lines: [...view.contentDOM.querySelectorAll('.cm-line')]
+            .filter((element) =>
+              [label, `## ${label}`].includes(element.textContent.trim()),
+            )
+            .map((element) => ({
+              text: element.textContent.trim(),
+              className: element.className,
+              connected: element.isConnected,
+              ...box(element.getBoundingClientRect()),
+            })),
+        },
+      }
+    }, target)
+  }
+  const end = await follow('down', text.indexOf('## Far away') + 3)
+  assert.ok(end.bottom < end.height, JSON.stringify(end))
+  const up = await follow('up', text.indexOf('## Middle') + 3, 'Middle')
+  assert.ok(up.bottom > up.height, JSON.stringify({ end, up }))
+  const { seen } = up
+  assert.equal(seen.source.text, '## Middle', JSON.stringify(seen))
+  assert.equal(seen.head, text.indexOf('## Middle') + 3, JSON.stringify(seen))
+  assert.ok(
+    seen.lines.some(
+      ({ top, bottom, left, right }) =>
+        right > left &&
+        bottom > top &&
+        bottom > seen.port.top &&
+        top < seen.port.bottom,
+    ),
+    JSON.stringify(seen),
+  )
 })
 
 test('a missing Finder file and a moved note folder get plain messages', {

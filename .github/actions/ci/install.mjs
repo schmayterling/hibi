@@ -91,7 +91,7 @@ export async function installDependencies({
       stream?.on('data', (chunk) => {
         const output = outputTail + chunk
         downloadFailed ||=
-          /TypeError: fetch failed|\b(?:EAI_AGAIN|ENOTFOUND|ECONNRESET|ETIMEDOUT)\b/.test(
+          /TypeError: fetch failed|HTTPError: Response code 504\b|\b(?:EAI_AGAIN|ENOTFOUND|ECONNRESET|ETIMEDOUT)\b/.test(
             output,
           )
         outputTail = output.slice(-128)

@@ -276,7 +276,8 @@ for (const phase of ['construct', 'load', 'print', 'write']) {
 }
 
 for (const event of ['owner-close', 'renderer-gone']) {
-  test(`${event} settles an in-flight print so shutdown cannot wait forever`, async () => {
+  test(`${event} settles an in-flight print so shutdown cannot wait forever`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
     let printing
     const started = new Promise((resolve) => {
       printing = resolve
@@ -292,18 +293,7 @@ for (const event of ['owner-close', 'renderer-gone']) {
     if (event === 'owner-close') owner.emit('close')
     else
       window.webContents.emit('render-process-gone', {}, { reason: 'crashed' })
-    let timer
-    const result = await Promise.race([
-      pending.then(
-        () => 'saved',
-        () => 'canceled',
-      ),
-      new Promise((resolve) => {
-        timer = setTimeout(() => resolve('stuck'), 100)
-      }),
-    ])
-    clearTimeout(timer)
-    assert.equal(result, 'canceled')
+    await assert.rejects(pending)
     assert.deepEqual(state.handlers, {})
     assert.equal(window.destroyed, true)
     assert.equal(state.writes.length, 0)

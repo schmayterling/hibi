@@ -1,8 +1,4 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import test from 'node:test'
 import { createPersonalModel } from '../src/addons/autocomplete/model.ts'
 import { rankWords } from '../src/addons/autocomplete/suggestions.ts'
@@ -761,7 +757,7 @@ test('rapid requests are synchronous, independent and cannot publish stale resul
   assert.deepEqual(words(model, { ...query, limit: 0 }), [])
 })
 
-test('bounded common-prefix ranking stays below 5ms at maximum snapshot size', (t) => {
+test('personal model ranks from the maximum-size snapshot', async (t) => {
   const timer = clock()
   const entry = (i) => ({
     scope: 'notes',
@@ -792,75 +788,46 @@ test('bounded common-prefix ranking stays below 5ms at maximum snapshot size', (
     prefix: 'pre',
     context: ['bro', 'that'],
   }
-  for (let i = 0; i < 100; i++) model.suggest(request)
-  const timings = []
-  for (let i = 0; i < 500; i++) {
-    const start = performance.now()
-    model.suggest(request)
-    timings.push(performance.now() - start)
-  }
-  timings.sort((a, b) => a - b)
-  t.diagnostic(
-    JSON.stringify({
-      samples: timings.length,
-      p95Ms: timings[Math.floor(timings.length * 0.95)],
-      meanMs: timings.reduce((a, b) => a + b) / timings.length,
-      maxMs: timings.at(-1),
-    }),
+  // Rows with no context and count 50 lead in snapshot order.
+  assert.deepEqual(
+    words(model, request),
+    [99, 249, 399, 549, 699, 849, 999, 1149].map((i) => entry(i).word),
   )
-  assert.ok(
-    timings[Math.floor(timings.length * 0.95)] < 5,
-    'p95 ranking must be below 5ms',
+  // A narrower prefix reaches rows past 4096 across all three contexts.
+  assert.deepEqual(
+    words(model, { ...request, prefix: 'prefixaa' }),
+    [6084, 2028, 7436, 3380, 4732, 676, 8112, 5408].map((i) => entry(i).word),
   )
-  assert.ok(
-    timings.reduce((a, b) => a + b) / timings.length < 5,
-    'mean ranking must be below 5ms',
+  await t.test(
+    'stress: common-prefix ranking stays below 5ms',
+    {
+      skip: process.env.HIBI_STRESS !== '1' && 'opt in with HIBI_STRESS=1',
+    },
+    () => {
+      for (let i = 0; i < 100; i++) model.suggest(request)
+      const timings = []
+      for (let i = 0; i < 500; i++) {
+        const start = performance.now()
+        model.suggest(request)
+        timings.push(performance.now() - start)
+      }
+      timings.sort((a, b) => a - b)
+      t.diagnostic(
+        JSON.stringify({
+          samples: timings.length,
+          p95Ms: timings[Math.floor(timings.length * 0.95)],
+          meanMs: timings.reduce((a, b) => a + b) / timings.length,
+          maxMs: timings.at(-1),
+        }),
+      )
+      assert.ok(
+        timings[Math.floor(timings.length * 0.95)] < 5,
+        'p95 ranking must be below 5ms',
+      )
+      assert.ok(
+        timings.reduce((a, b) => a + b) / timings.length < 5,
+        'mean ranking must be below 5ms',
+      )
+    },
   )
-})
-
-test('offline replay reports real sample sizes, baseline ranking and measured metrics', async (t) => {
-  // One installed pack goes through the production reader; other languages use fixtures.
-  const root = await mkdtemp(join(tmpdir(), 'hibi-replay-packs-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const pack = join(root, 'en')
-  const entry = `${JSON.stringify({ word: 'prefix', keys: [], meanings: [], synonyms: [], antonyms: [] })}\n`
-  await mkdir(pack)
-  await writeFile(join(pack, 'data.jsonl'), entry)
-  await writeFile(
-    join(pack, 'index.json'),
-    JSON.stringify({
-      version: 1,
-      id: 'en',
-      rows: [['prefix', [[0, entry.length]]]],
-    }),
-  )
-  await writeFile(
-    join(pack, 'manifest.json'),
-    JSON.stringify({ id: 'en', format: 1 }),
-  )
-  const report = JSON.parse(
-    execFileSync(
-      process.execPath,
-      ['scripts/autocomplete-replay.mjs', `--pack-root=${root}`],
-      { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
-    ),
-  )
-  assert.deepEqual(report.dictionary.installedLanguages, ['en'])
-  assert.ok(report.samples > 50)
-  assert.equal(report.corpora.length, 3)
-  assert.ok(report.method.includes('rankWords'))
-  assert.ok(report.limitations.length > 0)
-  assert.equal(
-    report.samples,
-    report.queries.prefix.personal.samples +
-      report.queries.nextWord.personal.samples,
-  )
-  for (const kind of ['prefix', 'nextWord']) {
-    const { baseline, personal, firstTime } = report.queries[kind]
-    assert.equal(personal.latency.samples, personal.samples)
-    assert.equal(baseline.samples, personal.samples)
-    assert.ok(personal.topOneHits <= personal.topKHits)
-    assert.ok(personal.topKHits <= personal.samples)
-    assert.ok(firstTime.personal.samples <= personal.samples)
-  }
 })

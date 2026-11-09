@@ -33,6 +33,7 @@ import { imageExtensions, isImageDocument } from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
+import { fileHeldOpen, PATIENT_RENAME, retryRename } from './atomic-rename'
 import { documentExtensions, isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
 import {
@@ -42,8 +43,8 @@ import {
   writeMarkdown,
   writeText,
 } from './files'
-import { recordVersions } from './history'
-import { MAX_IMAGE_BYTES } from './images'
+import { recordVersions, sourceHash } from './history'
+import type { UnsavedNote } from './recovery-journal'
 import {
   flushUndoHistory,
   relocateUndoHistory,
@@ -103,11 +104,6 @@ async function readSource(file: string, tabId = activeTab, version = 0) {
     const info = await stat(file)
     if (!info.isFile())
       throw new Error('Choose an image file, not a folder or device.')
-    // The viewer would read nothing past the limit, so refuse before a tab opens.
-    if (info.size > MAX_IMAGE_BYTES)
-      throw new Error(
-        `${basename(file)} is larger than 8 MiB, so Hibi can’t display it.`,
-      )
     return SourceStore.load(noText(), { tabId, revision }, version)
   }
   try {
@@ -422,6 +418,29 @@ export function getDocumentTabs(): DocumentTab[] {
         : draft.untitledName,
     dirty: updateTabDirty(id, draft),
   }))
+}
+/** Tabs with text the recovery journal keeps; an empty new note has none. */
+export function getUnsavedNotes(): UnsavedNote[] {
+  storeTab()
+  return [...tabs].flatMap(([tabId, draft]) => {
+    const text = draft.source.snapshot()
+    return dirty(draft.source, draft.saved) &&
+      (text.utf16Length || draft.saved.utf16Length)
+      ? [
+          {
+            tabId,
+            path: draft.path ?? draft.pendingPath,
+            named: !!draft.path,
+            name:
+              draft.path || draft.pendingPath
+                ? basename((draft.path ?? draft.pendingPath)!)
+                : draft.untitledName,
+            text,
+            saved: draft.saved,
+          },
+        ]
+      : []
+  })
 }
 export function hasUnsavedDocuments() {
   storeTab()
@@ -940,13 +959,57 @@ async function recordSaveHistory(
       previous === null ? [content] : [previous, content],
       automatic,
     )
+    return true
   } catch (error) {
     console.error('local history failed:', error)
     window.webContents.send(
       HISTORY_CHANNELS.notice,
       'File saved, but Hibi could not add it to version history.',
     )
+    return false
   }
+}
+
+/** Says what a step of a save waits for once a program has refused it for 1.5 s. */
+async function sayingWhenHeld<T>(
+  window: BrowserWindow,
+  path: string,
+  step: (refused: () => void) => Promise<T>,
+) {
+  const name = basename(path)
+  let since = 0,
+    said = false
+  try {
+    return await step(() => {
+      since ||= Date.now()
+      // The first of these comes one retry delay after the first refusal.
+      if (said || Date.now() - since < 1400) return
+      said = true
+      window.webContents.send(
+        HISTORY_CHANNELS.notice,
+        `Another program is using ${name}. Hibi keeps trying to save it.`,
+        'held',
+      )
+    })
+  } finally {
+    if (said && !window.isDestroyed())
+      window.webContents.send(HISTORY_CHANNELS.notice, '', 'held')
+  }
+}
+/** A program holding a note shut refuses reads as well as the rename. */
+const patiently = <T>(
+  window: BrowserWindow,
+  path: string,
+  read: () => Promise<T>,
+) =>
+  sayingWhenHeld(window, path, (refused) =>
+    retryRename(read, refused, undefined, PATIENT_RENAME),
+  )
+const heldNote = (error: unknown): never => {
+  if (!fileHeldOpen(error)) throw error
+  throw new Error(
+    'Could not save because another program is using this file, or Windows does not allow changes to it. Your text is still here and the file is unchanged. Close the other program and save again.',
+  )
 }
 
 export async function saveDocument(
@@ -1010,10 +1073,18 @@ export async function saveDocument(
   if (destination === path || appeared) {
     let unchanged =
       !appeared &&
-      (await matchesMarkdown(destination, saved).catch(missingFile))
+      (await patiently(window, destination, () =>
+        matchesMarkdown(destination, saved),
+      )
+        .catch(missingFile)
+        .catch(heldNote))
     previous = unchanged
       ? saved
-      : ((await readSource(destination).catch(missingFile))?.snapshot() ?? null)
+      : ((
+          await patiently(window, destination, () => readSource(destination))
+            .catch(missingFile)
+            .catch(heldNote)
+        )?.snapshot() ?? null)
     while (!unchanged) {
       if (automatic) return null
       const choice = await runFileDialog(() =>
@@ -1031,20 +1102,43 @@ export async function saveDocument(
       // Another app can write again while the prompt is open; ask about that text too.
       const shown = previous
       previous =
-        (await readSource(destination).catch(missingFile))?.snapshot() ?? null
+        (
+          await patiently(window, destination, () => readSource(destination))
+            .catch(missingFile)
+            .catch(heldNote)
+        )?.snapshot() ?? null
       unchanged =
         shown === null
           ? previous === null
           : previous !== null && (await sameSource(shown, previous))
     }
   }
-  await writeMarkdown(destination, content, exclusive && !appeared)
+  await sayingWhenHeld(window, destination, (refused) =>
+    writeMarkdown(
+      destination,
+      content,
+      exclusive && !appeared,
+      undefined,
+      PATIENT_RENAME,
+      refused,
+    ),
+  ).catch(heldNote)
+  // A new path, or a file another app changed, keeps no copy of the text last saved.
+  const replacedSaved = previous === saved
   path = destination
   pendingPath = null
   saved = saving
-  refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, previous, content)
-  return getDocument()
+  // Edits made during the write were compared with the old baseline.
+  updateDocumentEdited(window)
+  const recorded = await recordSaveHistory(
+    window,
+    destination,
+    previous,
+    content,
+  )
+  return Object.assign(getDocument(), {
+    versionsKept: !recorded ? 'none' : replacedSaved ? 'both' : 'written',
+  } satisfies Pick<DocumentState, 'versionsKept'>)
 }
 
 export async function autosaveDocument(
@@ -1077,6 +1171,8 @@ export async function autosaveDocument(
   const destination = draft.path
   const saving = draft.source.snapshot()
   const content = saving
+  // A kept tab's draft is the tab itself, whose saved text changes below.
+  const replaced = draft.saved
   const unchanged = await matchesMarkdown(destination, draft.saved).catch(
     missingFile,
   )
@@ -1101,9 +1197,24 @@ export async function autosaveDocument(
     if (retained?.source === draft.source) retained.saved = saving
   }
   storeTab()
-  refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content, automatic)
-  return { status: 'saved', document: getDocumentForTab(id) }
+  if (id === activeTab) updateDocumentEdited(window)
+  else refreshDirtyIndicator(window)
+  const recorded = await recordSaveHistory(
+    window,
+    destination,
+    replaced,
+    content,
+    automatic,
+  )
+  const state = getDocumentForTab(id)
+  return {
+    status: 'saved',
+    document:
+      state &&
+      Object.assign(state, {
+        versionsKept: recorded ? 'both' : 'none',
+      } satisfies Pick<DocumentState, 'versionsKept'>),
+  }
 }
 
 /** Saves one already-named tab without selecting it or opening a file dialog. */
@@ -1166,6 +1277,40 @@ export async function restoreDocument(
   return getDocument()
 }
 
+/**
+ * Opens text a crash left unsaved, never touching the note's file. Over the
+ * text it began from, the note opens with it as unsaved edits. Otherwise it
+ * opens as a separate new note, so autosave can't replace what's there now.
+ */
+export async function openRecovered(
+  window: BrowserWindow,
+  copy: Readonly<{
+    path: string | null
+    named: boolean
+    name: string
+    savedHash: string
+  }>,
+  text: () => AsyncIterable<string>,
+): Promise<DocumentState | null> {
+  if (copy.named && copy.path) {
+    const opened = await loadDocument(window, copy.path).catch(() => null)
+    if (
+      opened &&
+      !dirty(source, saved) &&
+      (await sourceHash(saved)).hash === copy.savedHash
+    )
+      return restoreDocument(window, text())
+  }
+  if (!isEmptyTab()) rememberLocation()
+  if (!(await startTab(window, true))) return null
+  clearDocument(window, false)
+  const extension = extname(copy.name)
+  untitledName = copy.named
+    ? `${basename(copy.name, extension)} (recovered)${extension}`
+    : basename(copy.name)
+  return restoreDocument(window, text())
+}
+
 export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {
   if (
     !pendingPath &&
@@ -1200,6 +1345,7 @@ async function saveRetained(window: BrowserWindow) {
       name: document.name,
       ephemeral: document.ephemeral,
       canAutosave: document.canAutosave,
+      versionsKept: document.versionsKept,
     } satisfies DocumentSaved)
   return document
 }

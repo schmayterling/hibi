@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -41,19 +45,18 @@ test('closing find returns focus to its own source pane', {
         filePaths: [path],
       })
     }, files[i])
-    await pressShortcut(app, `${mod}+o`)
+    await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`))
     await waitForAsync(
       page,
       async (text) => (await window.hibi.getDocument()).markdown === text,
       texts[i],
     )
     opened.push(await page.evaluate(() => window.hibi.getDocument()))
-    await waitForDocumentEditor(app, page)
   }
   await splitTab(app, page, opened[0].tabId)
   for (const side of ['left', 'right']) {
     const pane = page.locator(`.editor-page[data-side="${side}"]`)
-    await pane.locator('.rich-pane .cm-content').focus()
+    await pane.locator('.rich-pane .cm-content[contenteditable="true"]').focus()
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     await pane
       .locator(

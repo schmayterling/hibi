@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
+  waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -98,12 +100,14 @@ test('custom body preference scopes match native text', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForDocumentEditor(app, page)
-    await page.waitForFunction(
-      async (source) => (await window.hibi.getDocument()).markdown === source,
-      `${source}\n\ntail`,
-    )
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (source) => (await window.hibi.getDocument()).markdown === source,
+        `${source}\n\ntail`,
+      )
+    })
     if (counted !== undefined) {
       const totals = await count(`${counted}\ntail`)
       const expected = `${totals.words} words · ${totals.characters} characters`
@@ -211,7 +215,8 @@ test('custom body preference scopes match native text', {
         await editor.focus()
         await page.keyboard.insertText(' proof')
         const modified = `${fixture.source}\n\ntail proof`
-        await page.waitForFunction(
+        await waitForAsync(
+          page,
           async (source) =>
             (await window.hibi.getDocument()).markdown === source,
           modified,
@@ -226,7 +231,8 @@ test('custom body preference scopes match native text', {
         await editor.press(
           `${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`,
         )
-        await page.waitForFunction(
+        await waitForAsync(
+          page,
           async (source) =>
             (await window.hibi.getDocument()).markdown === source,
           `${fixture.source}\n\ntail`,

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, openInDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -140,7 +140,8 @@ test('discarded edits, stale graph pages, and superseded failures leave current 
     .getByRole('tree', { name: /workspace files/i })
     .getByRole('treeitem', { name: 'b.md', exact: true })
     .waitFor()
-  const open = async (name) => {
+  // `editor` is the one the window's current view shows the note in.
+  const open = async (name, editor = 'Document editor') => {
     await app.evaluate(
       ({ dialog }, file) => {
         dialog.showOpenDialog = async () => ({
@@ -151,11 +152,18 @@ test('discarded edits, stale graph pages, and superseded failures leave current 
       join(root, name),
     )
     await page.locator('.titlebar[aria-busy="false"]').waitFor()
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
+    await openInDocumentEditor(
+      app,
       page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      name,
+      async () => {
+        await clickMenu(app, 'Open…')
+        await waitForAsync(
+          page,
+          async (name) => (await window.hibi.getDocument()).name === name,
+          name,
+        )
+      },
+      { name: editor },
     )
   }
   const choose = async (name) => {
@@ -198,7 +206,7 @@ test('discarded edits, stale graph pages, and superseded failures leave current 
   await summary(61)
   assert.equal(await readFile(join(root, 'a.md'), 'utf8'), alpha)
   // Likewise for an unsaved tag.
-  await open('a.md')
+  await open('a.md', 'Markdown editor')
   await edit(`${alpha} #new`)
   await choose('Browse tags')
   const added = tags.getByRole('button', { name: /^#new 1$/i, exact: true })
@@ -248,7 +256,7 @@ test('discarded edits, stale graph pages, and superseded failures leave current 
   await hold()
   await choose('Open workspace graph')
   await inMain(() => globalThis.graphHold.held)
-  await open('c.md')
+  await open('c.md', 'Markdown editor')
   await app.evaluate(() => globalThis.graphHold.release())
   await summary(61)
   assert.ok((await app.evaluate(() => globalThis.graphReads)) >= 2)

@@ -1,27 +1,32 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import nodeTest from 'node:test'
 import { DocumentWorkerClient } from '../src/renderer/src/document-worker-client.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { MarkdownSemanticCache } from '../src/shared/markdown-semantic-cache.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
+import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
 
+const test = (name, run) =>
+  nodeTest(name, { timeout: WORKER_HANG_TIMEOUT }, run)
 const syntax = { gfm: true, alerts: true, textExtras: true }
-const wait = async (predicate) => {
-  const end = Date.now() + 4000
-  while (!predicate()) {
-    if (Date.now() > end) throw new Error('Missing semantic worker reply')
-    await new Promise((resolve) => setTimeout(resolve, 2))
-  }
-}
+let progress = 0
+const wait = (predicate) =>
+  waitForProgress(
+    predicate,
+    () => progress,
+    4000,
+    'Missing semantic worker progress',
+  )
 function fixture(t, initial) {
   const messages = []
   let source = initial,
     version = 0,
     id = 0
-  const worker = new DocumentWorkerService((reply) =>
-    messages.push(structuredClone(reply)),
-  )
+  const worker = new DocumentWorkerService((reply) => {
+    messages.push(structuredClone(reply))
+    progress++
+  })
   t.after(() => worker.dispose())
   const load = (body = source) => {
     source = body
@@ -282,27 +287,25 @@ test('semantic transport caps region counts and payload size without truncating 
 test('semantic cancellation yields between rows and never publishes partial packets', async (t) => {
   const f = fixture(t, '# heading\n\n'.repeat(50)),
     read = MarkdownSemanticCache.prototype.read
-  let canceled = false
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock)
   t.mock.method(MarkdownSemanticCache.prototype, 'read', function (...args) {
     const result = read.apply(this, args)
-    if (!canceled) {
-      canceled = true
-      setTimeout(
-        () =>
-          f.worker.receive({
-            type: 'cancel-metadata',
-            epoch: 'semantic',
-            id: 1,
-            release: false,
-          }),
-        0,
-      )
-    }
-    const end = performance.now() + 1
-    while (performance.now() < end) {}
+    clock += 2
     return result
   })
   f.send()
+  await wait(() =>
+    f.messages.some(
+      (reply) => reply.type === 'metadata-progress' && reply.id === 1,
+    ),
+  )
+  f.worker.receive({
+    type: 'cancel-metadata',
+    epoch: 'semantic',
+    id: 1,
+    release: false,
+  })
   await wait(() =>
     f.messages.some((reply) => reply.type === 'metadata-canceled'),
   )
@@ -321,7 +324,7 @@ test('containing-region backward probes yield and cancel before lexical work', a
   const source = '[ref]: /target\n'.repeat(80),
     f = fixture(t, source),
     read = MarkdownSemanticCache.prototype.read
-  let cancel = true,
+  let clock = 0,
     probes = 0,
     reads = 0,
     cache
@@ -333,27 +336,25 @@ test('containing-region backward probes yield and cancel before lexical work', a
   await f.request({ from: 0, to: 0, limit: 1 })
   reads = 0
   const region = cache.region
+  t.mock.method(performance, 'now', () => clock)
   t.mock.method(cache, 'region', function (...args) {
     probes++
-    if (cancel) {
-      cancel = false
-      setTimeout(
-        () =>
-          f.worker.receive({
-            type: 'cancel-metadata',
-            epoch: 'semantic',
-            id: 2,
-            release: false,
-          }),
-        0,
-      )
-    }
-    const end = performance.now() + 1
-    while (performance.now() < end) {}
+    clock += 2
     return region.apply(this, args)
   })
   const range = { from: source.length - 5, to: source.length - 4, limit: 1 }
   f.send(range)
+  await wait(() =>
+    f.messages.some(
+      (reply) => reply.type === 'metadata-progress' && reply.id === 2,
+    ),
+  )
+  f.worker.receive({
+    type: 'cancel-metadata',
+    epoch: 'semantic',
+    id: 2,
+    release: false,
+  })
   await wait(() =>
     f.messages.some((reply) => reply.type === 'metadata-canceled'),
   )
@@ -388,6 +389,7 @@ test('client forwards semantic syntax and discards stale epoch, request and sour
       terminate: () => {},
       postMessage(message) {
         sent.push(message)
+        progress++
         if (message.type === 'load-start' || message.type === 'load-chunk')
           setImmediate(() =>
             worker.onmessage({

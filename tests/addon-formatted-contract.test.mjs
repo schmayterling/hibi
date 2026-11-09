@@ -1,27 +1,6 @@
 import assert from 'node:assert/strict'
-import { readdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
-
-test('bundled addons register no rich editor features', async () => {
-  const rich = []
-  for (const entry of await readdir('src/addons', { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name.startsWith('_')) continue
-    const folder = join('src/addons', entry.name)
-    const files = (await readdir(folder, { recursive: true })).filter((file) =>
-      /\.(ts|tsx)$/.test(file),
-    )
-    const source = (
-      await Promise.all(
-        files.map((file) => readFile(join(folder, file), 'utf8')),
-      )
-    ).join('\n')
-    if (/\b(?:registerRich\s*\(|richExtensions\s*:)/.test(source))
-      rich.push(entry.name)
-  }
-  assert.deepEqual(rich.sort(), [])
-})
 
 test('formatted sdk shares the host Lezer common runtime', async () => {
   const { outputFiles } = await build({

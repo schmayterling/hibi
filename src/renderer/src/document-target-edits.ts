@@ -6,6 +6,7 @@ import {
   type DocumentSaveResult,
   type OpenDocumentMetadata,
   parseSourceEditRequest,
+  retriesSourceEdit,
   type SourceEditRequest,
   type TargetDocumentSaveResult,
   type TargetSourceEditRequest,
@@ -159,11 +160,7 @@ export function createDocumentTargetEditScope(
     result: TargetSourceEditResult,
   ) => {
     if (!receipts.has(requestId)) claim(requestId, fingerprint)
-    if (
-      result.status !== 'busy' &&
-      result.status !== 'composing' &&
-      result.status !== 'unsupported-view'
-    ) {
+    if (!retriesSourceEdit(result)) {
       const receipt = receipts.get(requestId)
       if (receipt) receipt.result = result
     }

@@ -10,6 +10,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -142,7 +143,19 @@ async function open(name) {
     },
     join(folder, 'notes', name),
   )
-  await pressShortcut(app, `${mod}+o`)
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async ({ name, revision }) => {
+        const current = await window.hibi.getDocument()
+        return current.name === name && current.revision > revision
+      },
+      { name, revision },
+    )
+  })
   await waitForAsync(
     page,
     async (name) => (await window.hibi.getDocument()).name === name,

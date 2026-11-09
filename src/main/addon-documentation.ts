@@ -40,7 +40,7 @@ export async function readDocumentation(
   const markdown = /\.md$/i.test(path)
   if (!markdown && !/\.(png|jpe?g|gif|webp|avif|svg)$/i.test(path))
     throw new Error('Only Markdown and images can be shown here.')
-  const limit = markdown ? 512 * 1024 : 8 * 1024 * 1024
+  const markdownLimit = 512 * 1024
   let content: string
   if (directory) {
     const key = posix.join(directory, path)
@@ -52,7 +52,7 @@ export async function readDocumentation(
     const load = (markdown ? documents : images)[key]
     if (!load) throw new Error('This documentation file is unavailable.')
     content = await load()
-    if (Buffer.byteLength(content) > (markdown ? limit : limit * 1.4))
+    if (markdown && Buffer.byteLength(content) > markdownLimit)
       throw new Error('This documentation file is too large to preview.')
   } else {
     const target = await installedDocumentationPath(id, path)
@@ -60,7 +60,7 @@ export async function readDocumentation(
     const file = await open(target, 'r')
     try {
       const stat = await file.stat()
-      if (!stat.isFile() || stat.size > limit)
+      if (!stat.isFile() || (markdown && stat.size > markdownLimit))
         throw new Error('This documentation file is too large to preview.')
       const data = Buffer.alloc(stat.size + 1)
       const { bytesRead } = await file.read(data, 0, data.length, 0)

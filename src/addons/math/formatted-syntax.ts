@@ -6,14 +6,16 @@ import type {
   Line,
   MarkdownConfig,
 } from '@lezer/markdown'
-import { readAhead } from '../../shared/chunked-markdown.ts'
+import { blockInput, readAhead } from '../../shared/chunked-markdown.ts'
+import { lazyItemEnd } from '../_shared/block-start.ts'
+import { blockMathClose, blockMathRun } from './grammar.ts'
 import {
   type Closers,
   formulaLimit,
   inlineDisplayMathEnd,
   inlineMathEnd,
 } from './inline-display.ts'
-import { blockMath } from './syntax.ts'
+import { contentStart, type Level } from './seams.ts'
 
 export { inlineMathEnd }
 
@@ -21,33 +23,69 @@ export { inlineMathEnd }
  * Math syntax for the formatted view. It decides like the math addon's Marked
  * tokenizers (./syntax.ts) and the source outline: `$…$` and `$$…$$` inside a
  * line, and `$$…$$` blocks that start a line, also inside quotes and lists. A
- * `$$` line is math only when its closing `$$` follows within the formula
- * limit; other `$$` lines stay paragraph text.
+ * `$$` line opens a block as in Obsidian, which runs to its closing line or
+ * to the end of its quote, list item or note; over the formula limit, the
+ * block keeps its lines and shows as text.
  */
 
 /**
  * The input of the parse that is running, so the block parser can read past
  * the current line, and past the parsed range, as a whole-document parse does.
  */
-let current: Input | null = null
-const wrap = (inner: PartialParse, input: Input): PartialParse => ({
-  get parsedPos() {
-    return inner.parsedPos
-  },
-  get stoppedAt() {
-    return inner.stoppedAt
-  },
-  stopAt: (pos) => inner.stopAt(pos),
-  advance() {
-    const outer = current
-    current = input
-    try {
-      return inner.advance()
-    } finally {
-      current = outer
-    }
-  },
-})
+type MathParse = {
+  input: Input
+  block?: { cx: BlockContext; line: Line }
+  itemEnd?: number
+}
+let current: MathParse | null = null
+const wrap = (inner: PartialParse, input: Input): PartialParse => {
+  const frame: MathParse = { input }
+  return {
+    get parsedPos() {
+      return inner.parsedPos
+    },
+    get stoppedAt() {
+      return inner.stoppedAt
+    },
+    stopAt: (pos) => inner.stopAt(pos),
+    advance() {
+      const outer = current
+      current = frame
+      try {
+        // Composite contexts close before block readers run. Keep a lazy math
+        // candidate in its item after an empty item, heading or fence too, so
+        // its forward scan ends with the item rather than taking the note.
+        // Capture the context from our callback: another addon can wrap inner.
+        const block = frame.block
+        if (block) {
+          const { cx, line } = block
+          if (
+            line.next === 36 &&
+            lineDepth(line) < cx.depth &&
+            frame.itemEnd !== cx.parsedPos
+          ) {
+            const opening = rawLine(blockInput(input), cx.parsedPos)
+            readAhead(
+              input,
+              Math.min(input.length, cx.parsedPos + opening.length + 1),
+            )
+            if (blockMathRun(opening, line.pos)) {
+              const depth = keptDepth(cx, line)
+              for (let index = lineDepth(line); index < depth; index++)
+                if (cx.parentType(index).name === 'ListItem') {
+                  ;(line as Line & { depth: number }).depth = depth
+                  break
+                }
+            }
+          }
+        }
+        return inner.advance()
+      } finally {
+        current = outer
+      }
+    },
+  }
+}
 
 /** The text of the line starting at `pos`. */
 function rawLine(input: Input, pos: number) {
@@ -63,189 +101,195 @@ function rawLine(input: Input, pos: number) {
   return text
 }
 
-/** How later lines continue the containers of a `$$` line: quote markers, list item columns. */
-type Level = { quote: true } | { quote: false; column: number }
+/** How many contexts, the document included, the line read last continues. */
+const lineDepth = (line: Line) =>
+  (line as typeof line & { depth: number }).depth
 
-const space = (code: number) => code === 32 || code === 9
-const nextColumn = (column: number, code: number) =>
-  code === 9 ? column + 4 - (column % 4) : column + 1
+/** Lezer's open contexts; a list item's value is its content column past its base. */
+const contexts = (cx: BlockContext) =>
+  (cx as unknown as { stack: readonly { from: number; value: number }[] }).stack
 
-function containerLevels(cx: BlockContext, line: Line): Level[] {
-  const names: string[] = []
-  for (let depth = 1; depth < cx.depth; depth++)
-    names.push(cx.parentType(depth).name)
+/** The containers of a line inside the first `depth` contexts. */
+function containerLevels(cx: BlockContext, depth: number): Level[] {
   const levels: Level[] = []
-  const { text } = line
-  let pos = 0,
-    column = 0
-  const skip = (to: number) => {
-    for (; pos < to; pos++) column = nextColumn(column, text.charCodeAt(pos))
+  for (let index = 1; index < depth; index++) {
+    const name = cx.parentType(index).name
+    if (name === 'Blockquote') levels.push({ quote: true })
+    else if (name === 'ListItem')
+      levels.push({ quote: false, value: contexts(cx)[index]!.value })
   }
-  const skipSpace = () => {
-    let to = pos
-    while (to < line.basePos && space(text.charCodeAt(to))) to++
-    skip(to)
-  }
-  names.forEach((name, index) => {
-    if (name === 'Blockquote') {
-      skipSpace()
-      if (text[pos] === '>')
-        skip(pos + (space(text.charCodeAt(pos + 1)) ? 2 : 1))
-      levels.push({ quote: true })
-    } else if (name === 'ListItem') {
-      if (
-        !names
-          .slice(index + 1)
-          .some((other) => other === 'Blockquote' || other === 'ListItem')
-      ) {
-        pos = line.basePos
-        column = line.baseIndent
-      } else {
-        // An item opened on this line has its marker before the next container's.
-        const marker = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(
-          text.slice(pos, line.basePos),
-        )
-        skip(pos + (marker?.[0].length ?? 0))
-        skipSpace()
-      }
-      levels.push({ quote: false, column })
-    }
-  })
   return levels
 }
 
-/** Where a later line's content starts inside the containers, or -1 when they end before it. */
-function contentStart(levels: readonly Level[], text: string) {
-  let pos = 0,
-    column = 0
-  for (const level of levels) {
-    if (level.quote) {
-      while (space(text.charCodeAt(pos)))
-        column = nextColumn(column, text.charCodeAt(pos++))
-      if (text[pos] !== '>') return -1
-      pos++
-      column++
-      if (space(text.charCodeAt(pos)))
-        column = nextColumn(column, text.charCodeAt(pos++))
-    } else {
-      if (/^[ \t]*$/.test(text.slice(pos))) return text.length
-      while (column < level.column && space(text.charCodeAt(pos)))
-        column = nextColumn(column, text.charCodeAt(pos++))
-      if (column < level.column) return -1
-    }
+/**
+ * A display block decided on its opening line: the length of its opening `$`
+ * run, and whether its formula is over the limit, which shows it as text.
+ */
+type Found = { size: number; over: boolean }
+
+const blankText = (text: string, from: number) =>
+  /^[ \t\r]*$/.test(text.slice(from))
+/**
+ * Where a line that its innermost list items do not continue starts its
+ * content, when Obsidian keeps it in them as lazy text, or -1. A blank line
+ * before it, a quote it leaves or a line in lazyItemEnd ends them.
+ */
+function lazyStart(levels: readonly Level[], text: string) {
+  for (let keep = levels.length; keep-- > 0 && !levels[keep]!.quote; ) {
+    const base = contentStart(levels.slice(0, keep), text)
+    if (base >= 0) return lazyItemEnd.test(text.slice(base)) ? -1 : base
   }
-  return pos
+  return -1
 }
 
-/** A display block found from its opening line, in the text of its lines inside their containers. */
-type Found = {
-  /** Lines after the opening one, through the closing one: their offset in the text and content start. */
-  lines: { offset: number; base: number }[]
-  /** Offsets of the body and of the closing `$$`. */
-  body: number
-  close: number
+/** The contexts a line stays in as its parser reads it: all but those from the first quote it leaves. */
+function keptDepth(cx: BlockContext, line: Line) {
+  for (let index = lineDepth(line); index < cx.depth; index++)
+    if (cx.parentType(index).name === 'Blockquote') return index
+  return cx.depth
+}
+
+const listMarker = /^(?:[-+*]|\d{1,9}([.)]))(?=[ \t]|$)/
+
+/**
+ * Whether `text` starts the next item of the list around the innermost item
+ * of the first `depth` contexts: its marker of the same kind, as far into its
+ * line, after the containers around the list.
+ */
+function nextItem(
+  cx: BlockContext,
+  depth: number,
+  levels: readonly Level[],
+  input: Input,
+  text: string,
+) {
+  // ponytail: lezer keeps where a context starts internal; read the item's
+  // marker there, within 256 units of its line start.
+  const item = contexts(cx)[depth - 1]
+  if (!item || contentStart(levels.slice(0, -1), text) < 0) return false
+  const before = input.read(Math.max(0, item.from - 256), item.from)
+  const at = before.length - 1 - before.lastIndexOf('\n')
+  if (at > 255) return false
+  const mine = listMarker.exec(input.read(item.from, item.from + 11))
+  const theirs = /^[ \t>]*$/.test(text.slice(0, at))
+    ? listMarker.exec(text.slice(at))
+    : null
+  return !!mine && !!theirs && (mine[1] ?? mine[0]) === (theirs[1] ?? theirs[0])
 }
 
 /**
- * Whether the `$$` at `line.pos` opens display math. Reads the next lines
- * inside the same containers until the first `$$` outside a backslash pair,
- * or past the formula limit, which is as far as the tokenizer can match, and
- * lets it decide.
+ * Whether the `$` run at `line.pos` opens display math, as Obsidian 1.13.7
+ * reads block math (./grammar.ts blockMath): a line must follow inside the
+ * same containers, where an item's trailing blank lines do not count. Reads
+ * the next lines up to the closing one or past the formula limit.
  */
 function findBlock(
   cx: BlockContext,
   line: Line,
   input: Input,
+  depth: number,
 ): { found: Found | null; read: number } {
   // The parsed range can end inside this line; decisions read the document.
   const opening = rawLine(input, cx.parsedPos)
   const indent = opening.slice(line.basePos, line.pos)
   /** Where the lines read after the opening one end, if any were read. */
   let read = -1
-  if (
-    indent.length > 3 ||
-    /[^ ]/.test(indent) ||
-    !opening.startsWith('$$', line.pos)
-  )
-    return { found: null, read }
-  const levels = cx.depth > 1 ? containerLevels(cx, line) : []
-  let text = opening.slice(line.pos)
-  const lines: Found['lines'] = []
-  let next = cx.parsedPos + opening.length + 1
-  let i = 2
-  while (space(text.charCodeAt(i))) i++
-  // The body starts after the opening line's spaces, or after its line break.
-  let body = i < text.length ? i : -1
-  scan: for (;;) {
-    while (i < text.length) {
-      if (body >= 0 && i - body > formulaLimit) break scan
-      const code = text.charCodeAt(i)
-      if (code === 36 && text.charCodeAt(i + 1) === 36) break scan
-      i += code === 92 ? 2 : 1
-    }
-    if (next > input.length) break
+  const size =
+    indent.length > 3 || /[^ ]/.test(indent)
+      ? 0
+      : blockMathRun(opening, line.pos)
+  if (!size) return { found: null, read }
+  const levels = depth > 1 ? containerLevels(cx, depth) : []
+  const inItem = levels.at(-1)?.quote === false
+  let at = line.pos + size
+  while (opening.charCodeAt(at) === 32) at++
+  let body = opening.length - at,
+    follows = false,
+    blanks = false,
+    blank = false
+  for (let next = cx.parsedPos + opening.length + 1; next <= input.length; ) {
     const raw = rawLine(input, next)
     read = Math.min(input.length, next + raw.length + 1)
-    const base = levels.length ? contentStart(levels, raw) : 0
-    if (base < 0) break
-    text += '\n'
-    if (body < 0) i = body = text.length
-    lines.push({ offset: text.length, base })
-    text += raw.slice(base)
+    let base = levels.length ? contentStart(levels, raw) : 0
+    if (base < 0 && !blank) base = lazyStart(levels, raw)
+    if (base < 0) {
+      // Obsidian keeps an item's blank lines when the list's next item follows.
+      follows ||= blanks && inItem && nextItem(cx, depth, levels, input, raw)
+      break
+    }
+    blank = blankText(raw, base)
+    blanks ||= blank
+    follows ||= !inItem || !blank
+    const close = blockMathClose(raw, base, raw.length, size)
+    body += 1 + (close < 0 ? raw.length : close) - base
+    if (close >= 0 || (follows && body > formulaLimit)) break
     next += raw.length + 1
   }
-  const token = blockMath(text)
-  if (!token) return { found: null, read }
-  const close = token.raw.trimEnd().length - 2
   return {
-    found: {
-      lines: lines.filter((entry) => entry.offset <= close),
-      body,
-      close,
-    },
+    found: follows ? { size, over: body > formulaLimit } : null,
     read,
   }
 }
 
-/** A display block over its lines, with their quote markers, as `BlockMath`. */
+/**
+ * A display block over its lines, with their quote markers, as `BlockMath`;
+ * the formula is `MathText` unless it is over the limit.
+ */
 function parseBlock(cx: BlockContext, line: Line, found: Found) {
   const from = cx.lineStart + line.pos
-  const marks: Element[] = [cx.elt('MathMark', from, from + 2)]
+  const marks: Element[] = [cx.elt('MathMark', from, from + found.size)]
   const texts: { from: number; to: number }[] = []
   const add = (start: number, end: number) => {
+    if (found.over) return
     const last = texts.at(-1)
     if (last?.to === start) last.to = end
     else if (end > start) texts.push({ from: start, to: end })
   }
-  // Document position of offset `offset` on the current line is `base`.
-  let base = from,
-    offset = 0
-  const at = (target: number) => base + target - offset
-  for (let index = 0; ; index++) {
-    const end = cx.lineStart + line.text.length
-    const start = Math.max(base, at(found.body))
-    if (index === found.lines.length) {
-      // A parsed range that ends before the closing `$$` leaves the block open.
-      const close = at(found.close)
-      add(start, Math.min(close, end))
-      if (close + 2 <= end) marks.push(cx.elt('MathMark', close, close + 2))
-      cx.nextLine()
-      break
-    }
-    add(start, end)
-    const entry = found.lines[index]!
-    if (!cx.nextLine() || line.basePos !== entry.base) break
+  add(
+    cx.lineStart + line.skipSpace(line.pos + found.size),
+    cx.lineStart + line.text.length,
+  )
+  // As fenced code, the block ends with its quote or list item, past the
+  // lazy text Obsidian keeps in the item.
+  let blank = false
+  while (
+    cx.nextLine() &&
+    (lineDepth(line) >= cx.depth ||
+      (!blank &&
+        keptDepth(cx, line) === cx.depth &&
+        !lazyItemEnd.test(line.text.slice(line.basePos))))
+  ) {
+    blank = blankText(line.text, line.basePos)
     // Line breaks inside the body are body text.
-    if (at(found.body) <= end) add(end, end + 1)
+    if (texts.length) add(cx.lineStart - 1, cx.lineStart)
     marks.push(...line.markers)
-    base = cx.lineStart + line.basePos
-    offset = entry.offset
+    const close = blockMathClose(
+      line.text,
+      line.basePos,
+      line.text.length,
+      found.size,
+    )
+    const start = cx.lineStart + line.basePos
+    if (close < 0) {
+      add(start, cx.lineStart + line.text.length)
+      continue
+    }
+    add(start, cx.lineStart + close)
+    let end = close
+    while (line.text.charCodeAt(end) === 36) end++
+    marks.push(cx.elt('MathMark', cx.lineStart + close, cx.lineStart + end))
+    cx.nextLine()
+    break
   }
   const children = [
     ...marks,
     ...texts.map((text) => cx.elt('MathText', text.from, text.to)),
   ].sort((a, b) => a.from - b.from)
   cx.addElement(cx.elt('BlockMath', from, cx.prevLineEnd(), children))
+  // This scan already found the item's blank-line boundary; a later opener
+  // there belongs to a new block rather than continuing the old item.
+  if (current && blank && lineDepth(line) < cx.depth)
+    current.itemEnd = cx.parsedPos
 }
 
 /** The last decision, shared by the paragraph interruption check and the block parser. */
@@ -256,20 +300,20 @@ let last: {
   found: Found | null
   read: number
 } | null = null
-function decide(cx: BlockContext, line: Line) {
+function decide(cx: BlockContext, line: Line, depth = cx.depth) {
   const at = cx.parsedPos + line.pos
   if (!current) return null
-  // A lazy line is checked inside its quote, then parsed after the quote ends.
-  if (last?.input !== current || last.at !== at || last.depth !== cx.depth)
+  // A lazy line is checked inside its containers, then parsed in those it stays in.
+  if (last?.input !== current.input || last.at !== at || last.depth !== depth)
     last = {
-      input: current,
+      input: current.input,
       at,
-      depth: cx.depth,
-      ...findBlock(cx, line, current),
+      depth,
+      ...findBlock(cx, line, blockInput(current.input), depth),
     }
   // The decision read later lines: an edit before their end parses this
   // line's chunk again, as a whole-document parse would decide anew.
-  if (last.read >= 0) readAhead(current, last.read)
+  if (last.read >= 0) readAhead(current.input, last.read)
   return last.found
 }
 
@@ -468,7 +512,7 @@ export const inlineMathSyntax: MarkdownConfig = {
       parse(cx: InlineContext, next: number, pos: number) {
         if (next !== 36) return -1
         const display = cx.char(pos + 1) === 36
-        const starts = current && contentStarts.get(current)
+        const starts = current && contentStarts.get(current.input)
         const end = display
           ? inlineDisplayMathEnd(cx.text, pos - cx.offset)
           : inlineMathEnd(
@@ -506,6 +550,7 @@ export const blockMathSyntax: MarkdownConfig = {
       name: 'BlockMath',
       before: 'FencedCode',
       parse(cx, line) {
+        if (current) current.block ??= { cx, line }
         if (line.next !== 36) return false
         const found = decide(cx, line)
         if (!found) return false
@@ -514,14 +559,20 @@ export const blockMathSyntax: MarkdownConfig = {
       },
       endLeaf(cx, line) {
         if (line.baseIndent && current) {
-          let starts = contentStarts.get(current)
+          let starts = contentStarts.get(current.input)
           if (!starts) {
             starts = new Set()
-            contentStarts.set(current, starts)
+            contentStarts.set(current.input, starts)
           }
           starts.add(cx.lineStart + line.basePos)
         }
-        return line.next === 36 && decide(cx, line) !== null
+        if (line.next !== 36) return false
+        // A lazy line opens a block after the quotes it leaves end; list
+        // items keep it, as Obsidian reads their lazy text.
+        const depth = keptDepth(cx, line)
+        if (!decide(cx, line, depth)) return false
+        ;(line as typeof line & { depth: number }).depth = depth
+        return true
       },
     },
   ],

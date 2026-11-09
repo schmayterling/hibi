@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { resolveOwn } from './resolve-own.mjs'
 
 // CodeMirror view 6.43 gives the space below a block wrapper's lines, such as
 // a code box's scrollbar, to the block after the wrapper. A viewport starting
@@ -7,18 +7,7 @@ import { fileURLToPath } from 'node:url'
 // space to nothing: the note lost the scrollbar's height until the wrapper was
 // drawn again. A block that starts the measured range outside any wrapper now
 // keeps the space above it from when it was measured with what precedes it.
-let path
-try {
-  path = fileURLToPath(import.meta.resolve('@codemirror/view'))
-} catch (error) {
-  // Packaged apps already contain the patched renderer and omit dev dependencies.
-  if (
-    error.code === 'ERR_MODULE_NOT_FOUND' &&
-    process.env.NODE_ENV === 'production'
-  )
-    process.exit(0)
-  throw error
-}
+const path = resolveOwn('@codemirror/view')
 const patches = [
   [
     `                    if (spaceAbove > 0)
@@ -81,6 +70,206 @@ const patches = [
     }
     gapSize(line, from, to, structure) {`,
   ],
+  // The measure loop gives up after its seventh pass, as when a very long
+  // wrapped line's gaps move with each new height. It stopped right after
+  // measuring, before drawing what that pass found: the view then named text
+  // as drawn, and placed gaps, that the page did not have, and anything
+  // reading positions in that frame, as the reading place does, read the
+  // text a gap's height away. The last pass now draws what it measured
+  // before the loop stops.
+  [
+    `                if (i > 5) {
+                    console.warn(this.measureRequests.length
+                        ? "Measure loop restarted more than 5 times"
+                        : "Viewport failed to stabilize");
+                    break;
+                }`,
+    `                let last = i > 5;
+                if (last)
+                    console.warn(this.measureRequests.length
+                        ? "Measure loop restarted more than 5 times"
+                        : "Viewport failed to stabilize");`,
+  ],
+  [
+    `                if (redrawn)
+                    this.docView.updateSelection(true);
+                if (!update.viewportChanged && this.measureRequests.length == 0) {`,
+    `                if (redrawn)
+                    this.docView.updateSelection(true);
+                if (last)
+                    break;
+                if (!update.viewportChanged && this.measureRequests.length == 0) {`,
+  ],
+  // A widget that throws while it draws, as any addon's can, fails the whole
+  // update: the text is ahead of the DOM, and redrawing fails the same way
+  // after CodeMirror has dropped its old plugins and content, which leaves the
+  // view dead. Each widget method now fails alone: the widget shows an empty
+  // element or its default, and the failure goes to the exception sink with
+  // the context "widget", which is how the app tells the user.
+  [
+    `    if (handler.length)
+        handler[0](exception);
+    else if (window.onerror`,
+    `    if (handler.length)
+        handler[0](exception, context);
+    else if (window.onerror`,
+  ],
+  [
+    `function widgetsEq(a, b) {
+    return a == b || !!(a && b && a.compare(b));
+}`,
+    `function logWidgetException(state, exception) {
+    if (state)
+        logException(state, exception, "widget");
+    else
+        console.error("widget:", exception);
+}
+function widgetsEq(a, b) {
+    try {
+        return a == b || !!(a && b && a.compare(b));
+    }
+    catch (e) {
+        logWidgetException(null, e);
+        return false;
+    }
+}
+function widgetHeight(widget) {
+    try {
+        let height = widget.estimatedHeight;
+        return Number.isFinite(height) ? height : -1;
+    }
+    catch (e) {
+        logWidgetException(null, e);
+        return -1;
+    }
+}
+function widgetLineBreaks(widget) {
+    try {
+        let breaks = widget.lineBreaks;
+        return Number.isInteger(breaks) && breaks > 0 ? breaks : 0;
+    }
+    catch (e) {
+        logWidgetException(null, e);
+        return 0;
+    }
+}
+function widgetIgnoresEvent(widget, event, view) {
+    try {
+        return widget.ignoreEvent(event);
+    }
+    catch (e) {
+        logWidgetException(view.state, e);
+        return true;
+    }
+}`,
+  ],
+  [
+    `hasHeight() { return this.widget ? this.widget.estimatedHeight > -1 : false; }`,
+    `hasHeight() { return this.widget ? widgetHeight(this.widget) > -1 : false; }`,
+  ],
+  [
+    `(this.widget.estimatedHeight >= 5 || this.widget.lineBreaks > 0)`,
+    `(widgetHeight(this.widget) >= 5 || widgetLineBreaks(this.widget) > 0)`,
+  ],
+  [
+    `            let height = deco.widget ? deco.widget.estimatedHeight : 0;
+            let breaks = deco.widget ? deco.widget.lineBreaks : 0;`,
+    `            let height = deco.widget ? widgetHeight(deco.widget) : 0;
+            let breaks = deco.widget ? widgetLineBreaks(deco.widget) : 0;`,
+  ],
+  [
+    `        let custom = this.widget.coordsAt(this.dom, pos, side);
+        if (custom)`,
+    `        let custom = null;
+        try {
+            custom = this.widget.coordsAt(this.dom, pos, side);
+        }
+        catch (e) {
+            let { root } = this;
+            logWidgetException(root && root.view.state, e);
+        }
+        if (custom)`,
+  ],
+  [
+    `        super.destroy();
+        this.widget.destroy(this.dom);`,
+    `        let { root } = this;
+        super.destroy();
+        try {
+            this.widget.destroy(this.dom);
+        }
+        catch (e) {
+            logWidgetException(root && root.view.state, e);
+        }`,
+  ],
+  [
+    `            dom = widget.toDOM(view);
+            if (!widget.editable)
+                dom.contentEditable = "false";`,
+    `            try {
+                dom = widget.toDOM(view);
+                if (!dom || dom.nodeType != 1)
+                    throw new TypeError("A widget must draw an element.");
+                if (!widget.editable)
+                    dom.contentEditable = "false";
+            }
+            catch (e) {
+                logWidgetException(view.state, e);
+                dom = document.createElement("span");
+                dom.contentEditable = "false";
+            }`,
+  ],
+  [
+    `                    (pass == 0 ? tile.widget.compare(widget)
+                        : tile.widget.constructor == widget.constructor && widget.updateDOM(tile.dom, this.view, tile.widget))) {`,
+    `                    (pass == 0 ? widgetsEq(tile.widget, widget)
+                        : tile.widget.constructor == widget.constructor && widgetUpdatesDOM(widget, tile, this.view))) {`,
+  ],
+  [
+    `function fallbackRect(tile) {`,
+    `function widgetUpdatesDOM(widget, tile, view) {
+    try {
+        return widget.updateDOM(tile.dom, view, tile.widget);
+    }
+    catch (e) {
+        logWidgetException(view.state, e);
+        return false;
+    }
+}
+function fallbackRect(tile) {`,
+  ],
+  [
+    `tile.isWidget() && !tile.isHidden && tile.widget.ignoreEvent(event)))`,
+    `tile.isWidget() && !tile.isHidden && widgetIgnoresEvent(tile.widget, event, view)))`,
+  ],
+  [
+    `context && context.isWidget() && context.widget.ignoreEvent(event)) {`,
+    `context && context.isWidget() && widgetIgnoresEvent(context.widget, event, view)) {`,
+  ],
+  // Drawing a mark around a note's first text moves its text node, and Chromium
+  // collapses a selection inside it at the start of the line. Soon after focus
+  // that looks like the browser placing the selection, so CodeMirror resets it
+  // from the editor state, but skips the write when its cached range, which the
+  // move did not change, already matches. The next read then took the collapsed
+  // selection for the user's: the selected text was lost.
+  [
+    `            this.view.inputState.lastFocusTime = 0;
+            view.docView.updateSelection();
+            return false;`,
+    `            this.view.inputState.lastFocusTime = 0;
+            view.docView.forceSelection = true;
+            view.docView.updateSelection();
+            return false;`,
+  ],
+  // A quiet pass after a viewport change still has to anchor the heights
+  // measured in the preceding pass. Stopping before that scroll correction
+  // briefly moves a restored source view by the newly drawn lines' height.
+  [
+    `                if (!changed && !this.measureRequests.length && this.viewState.scrollTarget == null)
+                    break;`,
+    `                if (!changed && !updated && !this.measureRequests.length && this.viewState.scrollTarget == null)
+                    break;`,
+  ],
 ]
 
 let source = await readFile(path, 'utf8')
@@ -89,7 +278,7 @@ for (const [before, after] of patches)
   if (!source.includes(after)) {
     if (source.split(before).length !== 2)
       throw new Error(
-        'CodeMirror view changed. Review the wrapper height and line gap patches before updating it.',
+        'CodeMirror view changed. Review the patches in this script before updating it.',
       )
     source = source.replace(before, after)
   }

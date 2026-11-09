@@ -143,12 +143,21 @@ export async function gather<T>(
   ) => Promise<T | null>,
 ): Promise<Gathered<T>> {
   const result: Gathered<T> = { found: [], installable: [] }
+  const fail = (error: unknown) => {
+    result.failure ??=
+      error instanceof DictionaryError ? error.reason : 'unavailable'
+  }
   const candidates = []
   for (const lang of langs) {
-    const providers = await registry.providers(lang, need)
-    if (!providers.length && (await registry.installable(lang)))
-      result.installable.push(lang)
-    candidates.push({ lang, providers })
+    try {
+      const providers = await registry.providers(lang, need)
+      if (!providers.length && (await registry.installable(lang)))
+        result.installable.push(lang)
+      candidates.push({ lang, providers })
+    } catch (error) {
+      // Packs that cannot say whether they are installed, as while closing.
+      fail(error)
+    }
   }
   for (const kind of ['offline', 'online'] as const) {
     for (const { lang, providers } of candidates) {
@@ -162,8 +171,7 @@ export async function gather<T>(
           result.found.push({ lang, value })
           break
         } catch (error) {
-          result.failure ??=
-            error instanceof DictionaryError ? error.reason : 'unavailable'
+          fail(error)
         }
       }
     }

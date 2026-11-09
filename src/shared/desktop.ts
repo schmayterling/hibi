@@ -47,6 +47,8 @@ export const DOCUMENT_CHANNELS = {
   fileDialog: 'document:file-dialog',
 } as const
 
+/** Which texts a save kept as saved versions; the replaced one is the text last saved here. */
+export type VersionsKept = 'none' | 'written' | 'both'
 export type DocumentState = {
   /** Stable window-local tab identity, including across save and rename. */
   tabId: string
@@ -59,6 +61,8 @@ export type DocumentState = {
   ephemeral: boolean
   markdown: string
   savedMarkdown: string
+  /** Set on the state a save returns. */
+  versionsKept?: VersionsKept | undefined
   /** Main explicitly replaced this tab's source, rather than only its metadata. */
   replaced?: boolean
   /** Native source generation already transferred to this renderer. */
@@ -81,6 +85,7 @@ export type DocumentSaved = Pick<
   | 'name'
   | 'ephemeral'
   | 'canAutosave'
+  | 'versionsKept'
 >
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
@@ -93,6 +98,10 @@ export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentSaveReply | null
 }
+/** Held: a program had the file open. Autosave tries again; the text is kept. */
+export type AutosaveReply =
+  | AutosaveResult
+  | { status: 'held'; document: null; message?: string }
 export type DocumentCommand =
   | 'new'
   | 'open'
@@ -334,9 +343,24 @@ export type DesktopApi = {
   getKeepUndoHistory: () => Promise<boolean>
   setKeepUndoHistory: (keep: boolean) => Promise<void>
   clearUndoHistory: () => Promise<void>
-  /** `updates` notices lead to the update settings. */
+  waitingRecovery: () => Promise<import('./recovery').RecoveryWaiting>
+  restoreRecovery: (id: string) => Promise<DocumentState | null>
+  discardRecovery: (id: string) => Promise<void>
+  dismissRecovery: () => Promise<void>
+  getRecoverySettings: () => Promise<import('./recovery').RecoverySettings>
+  /** The names of the copies these settings would remove; null for one that can't be read. */
+  previewRecoverySettings: (
+    next: import('./recovery').RecoverySettings,
+  ) => Promise<(string | null)[]>
+  setRecoverySettings: (
+    next: import('./recovery').RecoverySettings,
+  ) => Promise<void>
+  /**
+   * `updates` notices lead to the update settings. A `held` notice stays until
+   * the next one replaces it; an empty one only removes it.
+   */
   onNotice: (
-    callback: (message: string, target?: 'updates') => void,
+    callback: (message: string, target?: 'updates' | 'held') => void,
   ) => () => void
   getLicenses: () => Promise<import('./about').LicenseInfo[]>
   getLicense: (id: string) => Promise<string>
@@ -610,8 +634,9 @@ export type DesktopApi = {
   appendDocumentChange: (
     change: import('./document-journal').DocumentChange,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
+  /** An operation, or the id of one admitted, which then need not cross again. */
   appendSourceOperation: (
-    operation: import('./source-operations').SourceOperation,
+    operation: import('./source-operations').SourceOperation | string,
   ) => Promise<import('./document-journal').DocumentAcknowledgment>
   admitSourceOperation: (
     operation: import('./source-operations').SourceOperation,
@@ -653,7 +678,7 @@ export type DesktopApi = {
     revision: number,
     contentVersion: number,
   ) => Promise<import('./document-edits').DocumentSaveResult>
-  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveResult>
+  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveReply>
   renameDocument: (name: string) => Promise<DocumentState>
   readDocumentImage: (
     source: string,

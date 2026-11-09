@@ -13,6 +13,7 @@ import {
 } from '../src/addons/frontmatter/markdown.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -384,7 +385,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })
   assert.equal(await readFile(fixture, 'utf8'), await read())
-  await clickMenu(app, 'New')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'New'))
 
   await waitForDocumentEditor(app, page)
   await waitForAsync(
@@ -598,8 +599,7 @@ unit(
         },
         join(folder, name),
       )
-      await clickMenu(app, 'Open…')
-      await waitForDocumentEditor(app, page)
+      await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
       await page.getByRole('tab', { name, exact: true }).waitFor()
       const title = properties.getByRole('textbox', {
         name: /^title$/i,
@@ -636,6 +636,21 @@ unit(
       // Select all still stops at the body: the frontmatter, and the header
       // the adapter owns, stay outside it.
       await pressShortcut(app, `${mod}+a`)
+      await page.waitForFunction(
+        (prefix) => {
+          const { state } = document.querySelector('.rich-pane .cm-content')
+            .cmTile.root.view
+          return (
+            state
+              .sliceDoc(0, state.selection.main.from)
+              .replace(/^\uFEFF/, '') === prefix &&
+            state.selection.main.to === state.doc.length
+          )
+        },
+        expected
+          .slice(1, expected.indexOf('A paragraph'))
+          .replaceAll('\r\n', '\n'),
+      )
       assert.equal(
         await page.locator('.rich-pane .cm-content').evaluate(({ cmTile }) => {
           const { state } = cmTile.root.view

@@ -37,6 +37,7 @@
     "export:docs": "npm run docs && npm run build:site && node scripts/export-docs.mjs",
     "check": "npm run lint && npm run docs:check && npm run copy:check && npm test",
     "check:ci": "node scripts/ci.mjs",
+    "check:dev": "node scripts/ci-dev.mjs",
     "package": "npm run build && electron-builder --dir -c.mac.identity=-",
     "dist": "npm run check && electron-builder --publish never"
   },
@@ -81,7 +82,7 @@
     "@vitejs/plugin-react": "5.2.0",
     "d3-force": "3.0.0",
     "dompurify": "3.4.17",
-    "electron": "45.0.0",
+    "electron": "45.2.1",
     "electron-builder": "26.18.0",
     "electron-vite": "6.0.0",
     "geist": "1.8.2",

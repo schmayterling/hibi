@@ -98,9 +98,11 @@ test('formatted highlight window clamps stale layouts to the current document', 
         parentElement: null,
       },
       viewport: { from: 0, to: 43 },
+      visibleRanges: [{ from: 0, to: 43 }],
     }
     assert.deepEqual(formattedFindViewport(view), { from: 0, to: 31 })
     view.viewport = { from: 40, to: 43 }
+    view.visibleRanges = [view.viewport]
     assert.deepEqual(formattedFindViewport(view), { from: 31, to: 31 })
   } finally {
     if (original === undefined) delete globalThis.window

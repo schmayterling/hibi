@@ -26,22 +26,6 @@ async function setup(t, keepAlive = false) {
   })
   const page = await app.firstWindow()
   await waitForFormattedEditor(app, page)
-  // The editor reports its initial value and schedules an empty draft write.
-  // Drain that real writer before injecting draft requests from the test.
-  await app.evaluate(({ ipcMain }) => {
-    const channel = 'addon-windows:invoke'
-    const invoke = ipcMain._invokeHandlers.get(channel)
-    const saved = Promise.withResolvers()
-    globalThis.initialDraftSaved = saved.promise
-    ipcMain._invokeHandlers.set(channel, (...args) => {
-      const pending = invoke(...args)
-      if (args[1] === 'saveDraft') {
-        ipcMain._invokeHandlers.set(channel, invoke)
-        pending.then(saved.resolve, saved.reject)
-      }
-      return pending
-    })
-  })
   const opened = app.waitForEvent('window')
   await page.evaluate(
     (keepAlive) =>
@@ -70,9 +54,6 @@ async function setup(t, keepAlive = false) {
     1,
     'quick note uses the selected formatted engine',
   )
-  assert.deepEqual(await app.evaluate(() => globalThis.initialDraftSaved), {
-    keptAs: null,
-  })
   await app.evaluate(({ BrowserWindow, ipcMain, dialog }) => {
     dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })
     const windows = BrowserWindow.getAllWindows()
@@ -571,8 +552,9 @@ test('opening and quitting an untouched capture preserves the previous draft', {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-capture-mount-'))
   const markdown = 'draft from the previous session'
   const draftPath = join(profile, 'quick-note-draft.json')
+  const draft = `${JSON.stringify({ markdown }, null, 2)}\n`
   await writeFile(join(profile, 'addons.json'), '{"quick-note":true}')
-  await writeFile(draftPath, JSON.stringify({ markdown }))
+  await writeFile(draftPath, draft)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -586,8 +568,7 @@ test('opening and quitting an untouched capture preserves the previous draft', {
   await app.evaluate(({ ipcMain }) => {
     const channel = 'addon-windows:invoke'
     const invoke = ipcMain._invokeHandlers.get(channel)
-    const saved = Promise.withResolvers()
-    globalThis.captureMount = { events: [], saved: saved.promise }
+    globalThis.captureMount = { events: [] }
     ipcMain._invokeHandlers.set(channel, async (...args) => {
       const method = args[1]
       if (!['openDraft', 'saveDraft'].includes(method)) return invoke(...args)
@@ -595,10 +576,10 @@ test('opening and quitting an untouched capture preserves the previous draft', {
       events.push([method, 'start', args[2]?.markdown ?? null])
       const value = await invoke(...args)
       events.push([method, 'done', value])
-      if (method === 'saveDraft') saved.resolve({ input: args[2], value })
       return value
     })
   })
+  await page.clock.install()
   const opened = app.waitForEvent('window')
   await clickMenu(app, 'Command palette')
   await page
@@ -620,15 +601,14 @@ test('opening and quitting an untouched capture preserves the previous draft', {
     'quick note uses the selected formatted engine',
   )
   assert.equal(await editor.textContent(), markdown)
-  const saved = await app.evaluate(() => globalThis.captureMount.saved)
-  assert.deepEqual(saved, { input: { markdown }, value: { keptAs: null } })
+  // An unchanged initial report must not write, even after the draft debounce.
+  await capture.clock.runFor(1000)
   const events = await app.evaluate(() => globalThis.captureMount.events)
   t.diagnostic(`capture mount: ${JSON.stringify(events)}`)
-  assert.deepEqual(events.slice(0, 2), [
+  assert.deepEqual(events, [
     ['openDraft', 'start', null],
     ['openDraft', 'done', { status: 'ready', draft: { markdown } }],
   ])
-  assert.deepEqual(events[2], ['saveDraft', 'start', markdown])
   await app.close()
-  assert.equal(JSON.parse(await readFile(draftPath, 'utf8')).markdown, markdown)
+  assert.equal(await readFile(draftPath, 'utf8'), draft)
 })

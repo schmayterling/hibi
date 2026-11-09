@@ -31,6 +31,7 @@ import {
 } from '../../shared/source-projection.ts'
 import type { SourceSelection } from '../../shared/source-selection.ts'
 import { bindSourceText } from './source-whitespace.ts'
+import { deadViews, isViewDead } from './view-death.ts'
 
 export const sourceOperationEcho = Annotation.define<string>()
 /** View state restored alongside the session's text and selection history. */
@@ -196,6 +197,31 @@ const editorSelection = (
     selection.mainIndex,
   )
 
+const deathListeners = new WeakMap<object, (error: unknown) => void>()
+export const onViewDeath = (view: object, listener: (error: unknown) => void) =>
+  deathListeners.set(view, listener)
+/** What a view still knows only until it is redrawn. */
+const redrawListeners = new WeakMap<object, () => void>()
+export const onRedraw = (view: object, listener: () => void) =>
+  redrawListeners.set(view, listener)
+export { isViewDead }
+export function viewDied(view: object, error: unknown) {
+  if (deadViews.has(view)) return
+  deadViews.add(view)
+  deathListeners.get(view)?.(error)
+}
+
+/** Draws a state anew. A view this fails on is dead, unless it refused because it is still updating (internal; 0 is idle). */
+export function redraw(view: Pick<EditorView, 'setState'>, state: EditorState) {
+  redrawListeners.get(view)?.()
+  try {
+    view.setState(state)
+  } catch (error) {
+    if ((view as unknown as { updateState?: number }).updateState) throw error
+    viewDied(view, error)
+  }
+}
+
 /**
  * A view whose update throws, as when an extension fails while it draws, may
  * hold the new text while its DOM keeps the old, and would read the next
@@ -210,7 +236,7 @@ function update(
   try {
     view.update(transactions)
   } catch (error) {
-    view.setState(transactions.at(-1)?.state ?? view.state)
+    redraw(view, transactions.at(-1)?.state ?? view.state)
     throw error
   }
 }

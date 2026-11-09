@@ -287,11 +287,24 @@ function InsertForm({
   )
 }
 
+const mediaNotInserted = () =>
+  new Error(
+    'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
+  )
+
+/** Takes the place to insert at; its result puts the saved files there. */
+export type PrepareMediaInsert = () => (
+  attachments: MediaAttachment[],
+) => Promise<void>
+
 export function useFormattingToolbar(
   mode: ViewMode,
   focusedPane: 'rich' | 'source',
   disabled: boolean,
-  onAttach: (files: File[] | null) => Promise<MediaAttachment[] | null>,
+  onAttach: (
+    files: File[] | null,
+    prepare: PrepareMediaInsert,
+  ) => Promise<void>,
   focusOwnedByEditor: () => boolean,
   markdownMode = true,
   format?: DocumentFormat,
@@ -327,7 +340,8 @@ export function useFormattingToolbar(
       coords?: { x: number; y: number },
     ) => {
       const { mode, focusedPane, disabled, onAttach } = latest.current
-      if (disabled) return
+      // Dropped files wait their turn: a pane busy with other files can't lose them.
+      if (disabled && !files) return
       if (
         !latest.current.markdownMode &&
         !latest.current.format?.insertMedia &&
@@ -342,34 +356,43 @@ export function useFormattingToolbar(
             : mode === 'normal'
               ? 'rich'
               : focusedPane)) === 'source'
-      const codeMirror = useSource ? source.current : rich.current
       if (!useSource && !rich.current) return
-      const sourceSelection = codeMirror?.capture(coords) ?? null
+      const editor = () => (useSource ? source.current : rich.current)
+      // Dropped where the pointer is now: the note may scroll while these wait.
+      const place = coords && editor()?.place(coords)
       try {
-        const attachments = await onAttach(files)
-        if (!attachments) return
-        await new Promise(requestAnimationFrame)
-        let inserted = false
-        if (
-          useSource &&
-          latest.current.format?.formatting &&
-          latest.current.format.formatting !== 'markdown'
-        )
-          inserted = sourceSelection?.insertMedia(attachments) ?? false
-        else if (useSource || rich.current)
-          inserted =
-            sourceSelection?.insertMarkdown(
-              latest.current.format?.insertMedia?.(attachments) ??
-                attachmentMarkdown(attachments),
-            ) ?? false
-        if (!inserted)
-          throw new Error(
-            'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
-          )
+        await onAttach(files, () => {
+          // Read when these files start, past any drop that waited ahead of them.
+          const at = place ? place() : coords
+          const sourceSelection =
+            at === null ? null : (editor()?.capture(at) ?? null)
+          return async (attachments) => {
+            await new Promise(requestAnimationFrame)
+            let inserted = false
+            if (
+              useSource &&
+              latest.current.format?.formatting &&
+              latest.current.format.formatting !== 'markdown'
+            )
+              inserted = sourceSelection?.insertMedia(attachments) ?? false
+            else if (useSource || rich.current)
+              inserted =
+                sourceSelection?.insertMarkdown(
+                  latest.current.format?.insertMedia?.(attachments) ??
+                    attachmentMarkdown(attachments),
+                ) ?? false
+            if (!inserted) throw mediaNotInserted()
+          }
+        })
       } catch (error) {
+        // Edits made while the files were saved, as another drop's, keep this
+        // note's text in place of the one the files came back with.
+        const shown = /local edits waiting/.test(String(error))
+          ? mediaNotInserted()
+          : error
         toasts.show({
           message:
-            error instanceof Error ? error.message : 'Could not attach media.',
+            shown instanceof Error ? shown.message : 'Could not attach media.',
           variant: 'error',
         })
       }

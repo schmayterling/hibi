@@ -1,10 +1,16 @@
-import { contextBridge, ipcRenderer as transport, webUtils } from 'electron'
+import {
+  contextBridge,
+  ipcRenderer as transport,
+  webFrame,
+  webUtils,
+} from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS } from '../shared/about'
 import { ADDON_HOTKEY_CHANNELS } from '../shared/addon-hotkeys'
 import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
+import { admittedOperations } from '../shared/admitted-operations'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { BACKGROUND_CHANNELS } from '../shared/background'
 import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
@@ -34,8 +40,10 @@ import { HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
+import { parseSourceOperation } from '../shared/source-operations'
 import type {
   SourceTransferChunk,
   SourceTransferRequest,
@@ -61,6 +69,14 @@ import {
 } from './local-diagnostics'
 
 if (process.isMainFrame) {
+  // A trusted native cut is a user gesture even after page activation expires.
+  ;(globalThis as unknown as EventTarget).addEventListener(
+    'cut',
+    (event) => {
+      if (event.isTrusted) void webFrame.executeJavaScript('void 0', true)
+    },
+    true,
+  )
   try {
     const diagnostics = new DiagnosticProducer((operation, token, body) =>
       transport.invoke(DIAGNOSTIC_CHANNEL, operation, token, body),
@@ -133,6 +149,10 @@ if (process.isMainFrame) {
         }
       },
     },
+  )
+  const admitted = admittedOperations(
+    parseSourceOperation,
+    journal.assertCapacity,
   )
   const invoke: typeof transport.invoke = (channel, ...args) =>
     journal.hasPending()
@@ -343,8 +363,11 @@ if (process.isMainFrame) {
     cancelAnalysis: (owner) =>
       ipcRenderer.invoke(ANALYSIS_CHANNELS.cancel, owner),
     appendDocumentChange: journal.append,
-    appendSourceOperation: journal.appendOperation,
-    admitSourceOperation: journal.assertCapacity,
+    appendSourceOperation: async (operation) =>
+      journal.appendOperation(
+        typeof operation === 'string' ? admitted.take(operation) : operation,
+      ),
+    admitSourceOperation: admitted.admit,
     getDocumentRecoveryState: journal.state,
     onDocumentCheckpoint: (callback, read, close) => {
       checkpoint = callback
@@ -477,12 +500,21 @@ if (process.isMainFrame) {
     setKeepUndoHistory: (keep) =>
       ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.setKeep, keep),
     clearUndoHistory: () => ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.clear),
+    waitingRecovery: () => ipcRenderer.invoke(RECOVERY_CHANNELS.list),
+    restoreRecovery: (id) => ipcRenderer.invoke(RECOVERY_CHANNELS.restore, id),
+    discardRecovery: (id) => ipcRenderer.invoke(RECOVERY_CHANNELS.discard, id),
+    dismissRecovery: () => ipcRenderer.invoke(RECOVERY_CHANNELS.later),
+    getRecoverySettings: () => ipcRenderer.invoke(RECOVERY_CHANNELS.settings),
+    previewRecoverySettings: (next) =>
+      ipcRenderer.invoke(RECOVERY_CHANNELS.preview, next),
+    setRecoverySettings: (next) =>
+      ipcRenderer.invoke(RECOVERY_CHANNELS.setSettings, next),
     onNotice: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
         message: string,
-        target?: 'updates',
-      ) => callback(message, target === 'updates' ? target : undefined)
+        target?: 'updates' | 'held',
+      ) => callback(message, target)
       ipcRenderer.on(HISTORY_CHANNELS.notice, listener)
       return () => {
         ipcRenderer.removeListener(HISTORY_CHANNELS.notice, listener)

@@ -3,11 +3,13 @@ import test from 'node:test'
 import {
   EditorSelection,
   EditorState,
+  RangeSet,
   StateEffect,
   Transaction,
 } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
+import { formattedFrontmatter } from '../src/renderer/src/formatted-frontmatter.ts'
 import {
   formattedProjection,
   formattedProjectionSource,
@@ -128,6 +130,44 @@ test('frontmatter and custom projections protect the same ordered prefix', () =>
     f.view.state.selection.main.from,
     normalizedSource(updated + prefix).length,
   )
+})
+
+test('frontmatter hidden by both its own view and a projection is one block', () => {
+  const doc = '---\ntags: [work]\n---\n\nbody\n'
+  const projection = (snapshot) =>
+    formattedProjection(
+      [
+        {
+          id: 'frontmatter',
+          preservation: { level: 'verbatim', version: '1' },
+          parse: parseFrontmatter,
+        },
+      ],
+      snapshot,
+    )
+  const { session } = fixture(doc, adapter)
+  const from = doc.indexOf('body')
+  // Either can load first. Two blocks would leave the height map a block apart
+  // from what's drawn, with every click on the note a line off.
+  for (const order of [
+    [formattedFrontmatter, projection(session.snapshot)],
+    [projection(session.snapshot), formattedFrontmatter],
+  ]) {
+    const blocks = []
+    RangeSet.spans(
+      EditorState.create({ doc, extensions: order }).facet(
+        EditorView.decorations,
+      ),
+      0,
+      doc.length,
+      {
+        point: (start, end, decoration) =>
+          decoration.spec.block && blocks.push([start, end]),
+        span() {},
+      },
+    )
+    assert.deepEqual(blocks, [[0, from - 1]])
+  }
 })
 
 test('50 mib unmatched notes defer one proof to input and map interior echoes and history', () => {

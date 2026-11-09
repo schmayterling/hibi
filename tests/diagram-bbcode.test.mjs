@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -50,6 +51,12 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
       })
     }, path)
     await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
     if (label !== 'Markdown')
       await page
         .getByRole('textbox', { name: `${label} editor`, exact: true })
@@ -268,10 +275,18 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, note)
-  await pressShortcut(
-    app,
-    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+    )
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      markdown,
+    )
+  })
   return { app, page }
 }
 test('Mermaid is on by default and keeps diagram links, images, and markup inert', {

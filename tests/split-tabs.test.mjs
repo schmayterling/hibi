@@ -588,6 +588,20 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
   )
   assert.equal(await page.locator('.editor-page[data-side]').count(), 2)
+  // Both panes show one document: its outer heading switches without going busy.
+  for (const side of ['right', 'left']) {
+    await page
+      .locator(`.editor-page[data-side="${side}"] > .split-tab-heading > span`)
+      .click()
+    await page.waitForFunction(
+      (side) =>
+        document.activeElement ===
+        document.querySelector(
+          `.editor-page[data-side="${side}"] .source-pane .cm-content`,
+        ),
+      side,
+    )
+  }
   await page.getByRole('button', { name: 'Close split' }).click()
   await page.waitForFunction(
     () => !document.querySelector('.editor-page[data-side]'),

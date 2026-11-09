@@ -6,6 +6,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -53,8 +54,9 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
       file === a ? 'a.md' : 'b.md',
     )
   }
-  await page.getByRole('tab', { name: 'a.md' }).click()
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () =>
+    page.getByRole('tab', { name: 'a.md' }).click(),
+  )
   // Hosted windows sometimes never save a.md; record each autosave outcome.
   await app.evaluate(({ ipcMain }) => {
     const outcomes = []
@@ -99,6 +101,15 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).name,
     'b.md',
+  )
+  // Saved in the background, it kept the text it replaced and the text it wrote.
+  await page.getByRole('tab', { name: 'a.md' }).click()
+  await waitForDocumentEditor(app, page)
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.listVersions())).map(
+      ({ automatic }) => automatic ?? false,
+    ),
+    [true, false],
   )
 })
 
@@ -265,8 +276,10 @@ test('autosave waits while an input method composes, then saves the committed te
       [file, text],
       { label: `the file holds ${JSON.stringify(text)}` },
     )
-  await clickMenu(app, 'Open…')
-  await shows('x')
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await shows('x')
+  })
   await page.locator('[data-status-id="autosave"]').click()
   await page.getByRole('checkbox', { name: /^autosave$/i }).check()
   await page.getByLabel(/^save after$/i).selectOption('1000')

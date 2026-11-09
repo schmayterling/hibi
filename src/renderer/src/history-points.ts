@@ -136,8 +136,13 @@ export function historyPoints(
     walk(step, 0)
     if (after.length !== 1 || distance >= TINY) kept.add(step)
   }
+  // An empty start holds no text to go back to; All steps still reaches it.
+  const empty = steps[0]!.group.beforeLength === 0
   const points = [...kept]
-    .filter((step) => step !== tree.current && !saved.has(step))
+    .filter(
+      (step) =>
+        step !== tree.current && !saved.has(step) && !(step === -1 && empty),
+    )
     .map((step) => ({ step, time: time(step), reason: reasons.get(step)! }))
     .sort((a, b) => b.time - a.time || b.step - a.step)
   // Past a day, the newest point an hour; past a week, the newest a day.
@@ -203,10 +208,13 @@ function thinning(now: number) {
 }
 
 /**
- * The saved versions the list shows, newest first. Every save the user asked
- * for shows; autosaved versions thin as points do: one less than a pause
- * before the next save merges into it, and past a day the newest an hour
- * stays, past a week the newest a day. The files themselves stay.
+ * The saved versions the list shows, newest first, beside the points it
+ * shows, by time. Every save the user asked for and the newest version show;
+ * other autosaved versions thin as points do. Within a day, one that holds no
+ * point shows only 3 minutes or more from every entry listed, as steady typing
+ * gets a point every 3 minutes. Past a day, one less than a pause before the
+ * next save merges into it, the newest an hour stays, and past a week the
+ * newest a day. The files themselves stay.
  */
 export function shownVersions<
   Version extends Readonly<{ savedAt: number; automatic?: true }>,
@@ -214,6 +222,7 @@ export function shownVersions<
   versions: readonly Version[],
   now: number,
   tree: HistoryTree | null = null,
+  points: readonly number[] = [],
 ): Version[] {
   const sorted = [...versions].sort((a, b) => b.savedAt - a.savedAt)
   // A state saved as a version is not listed as a point (historyPoints), so
@@ -228,16 +237,30 @@ export function shownVersions<
         : [],
     ),
   )
+  // The last text saved stays reachable when no step holds it, as after
+  // another app overwrites the note.
+  holding.add(sorted[0])
   const keep = thinning(now)
+  // Entries listed whatever their neighbours: points, saves asked for, and
+  // versions holding a point; then autosaves as they are listed, newest first.
+  const listed = [
+    ...points,
+    ...sorted.flatMap((version) =>
+      !version.automatic || holding.has(version) ? [version.savedAt] : [],
+    ),
+  ]
   return sorted.filter((version, index) => {
     if (!version.automatic) return true
-    const newer = sorted[index - 1]
-    if (
-      newer &&
-      newer.savedAt - version.savedAt < PAUSE &&
-      !holding.has(version)
-    )
-      return false
+    if (!holding.has(version)) {
+      if (now - version.savedAt <= DAY) {
+        if (listed.some((time) => Math.abs(time - version.savedAt) < TYPING))
+          return false
+        listed.push(version.savedAt)
+      } else {
+        const newer = sorted[index - 1]
+        if (newer && newer.savedAt - version.savedAt < PAUSE) return false
+      }
+    }
     return keep(version.savedAt)
   })
 }

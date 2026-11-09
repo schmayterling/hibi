@@ -1,3 +1,4 @@
+import type { VersionsKept } from './desktop.ts'
 import {
   type PreparedSourceOperation,
   type SourceBufferOptions,
@@ -95,6 +96,8 @@ export class DocumentSession {
   readonly #branches = new Map<object, HistoryGroup[][]>()
   /** The oldest state history reaches. */
   #root: object = {}
+  /** The content identity of that state once steps before it went. */
+  #rootIdentity: object | null = null
   readonly #opening = this.#root
   readonly #openingLength: number
   #restored = false
@@ -102,8 +105,11 @@ export class DocumentSession {
   readonly #steps = new WeakMap<SourceSnapshot, StepAt>()
   /** The state the last save wrote, with how many steps were made by then. */
   #savedAt: StepAt | null = null
-  /** Edits no longer merge into the step leading to the state a save took. */
-  #sealed: object | null = null
+  /**
+   * How many steps were made when the newest save took its text: edits no
+   * longer merge into those steps, which saves keep as they took them.
+   */
+  #sealed = 0
   /** Every state a save took, landed or still writing: no step joins over one. */
   readonly #taken = new WeakSet<object>()
   /** When saves kept a state's text as a version, by its identity. */
@@ -325,7 +331,7 @@ export class DocumentSession {
   }
   /** Whether a kept step still leads to the state a snapshot held. */
   #holds({ step, after }: StepAt) {
-    if (step === this.#root) return true
+    if (step === this.#root) return !after || after === this.#rootIdentity
     for (const [group] of this.#kept())
       if (group.step === step) return !after || group.afterIdentity === after
     return false
@@ -443,7 +449,11 @@ export class DocumentSession {
         this.#undo.length - undone + this.#redo.length > maximumGroups)
     )
       bytes -= this.#undo[undone++]!.bytes
-    if (undone) this.#root = this.#undo.splice(0, undone).at(-1)!.step
+    if (undone) {
+      const last = this.#undo.splice(0, undone).at(-1)!
+      this.#root = last.step
+      this.#rootIdentity = last.afterIdentity
+    }
     let redone = 0
     while (
       redone < this.#redo.length &&
@@ -469,10 +479,11 @@ export class DocumentSession {
       previous.origin === operation.origin &&
       previous.operations < 256 &&
       previous.bytes + editBytes(forward) + editBytes(inverse) < 128 * 1024 &&
-      // A merge changes the state its step leads to: never one a save took
-      // or other steps leave from. A composition stays one step, as undo
-      // takes it back, so a save during it keeps no history until the next.
-      (previous.step !== this.#sealed || operation.origin === 'composition') &&
+      // A merge changes the state its step leads to: never one made before a
+      // save took its text, landed or still writing, nor one other steps
+      // leave from. A composition stays one step, as undo takes it back, so a
+      // save during it keeps no history until the next.
+      (previous.order > this.#sealed || operation.origin === 'composition') &&
       !this.#redo.length &&
       !this.#branches.has(previous.step)
     if (merge) {
@@ -798,7 +809,8 @@ export class DocumentSession {
       this.#operation(group.forward, 'redo', group.id),
       () => {
         this.#redo.pop()
-        this.#undo.push(group)
+        // A later save can have kept this step: no edit goes on in it.
+        this.#undo.push(Object.freeze({ ...group, id: crypto.randomUUID() }))
         this.#contentIdentity = group.afterIdentity
       },
       reconcile,
@@ -806,8 +818,8 @@ export class DocumentSession {
       group.viewId,
     )
   }
-  /** `versioned`: the save kept the text it replaced and the text it wrote as saved versions. */
-  markSaved(snapshot: SourceSnapshot, versioned = true) {
+  /** `kept`: which of the text it replaced and the text it wrote the save kept as saved versions. */
+  markSaved(snapshot: SourceSnapshot, kept: VersionsKept = 'both') {
     const current = this.#store.ownsCurrentSnapshot(snapshot)
     const identity = current
       ? this.#contentIdentity
@@ -815,24 +827,25 @@ export class DocumentSession {
     if (!identity)
       throw new Error('Saved snapshot does not belong to this session.')
     const time = this.#options.now?.() ?? Date.now()
-    if (versioned) {
-      // The replaced text was kept already if an earlier save wrote it.
-      if (!this.#versioned.has(this.#savedIdentity))
-        this.#versioned.set(this.#savedIdentity, time)
-      this.#versioned.set(identity, time)
-    }
+    // The replaced text was kept already if an earlier save wrote it.
+    if (kept === 'both' && !this.#versioned.has(this.#savedIdentity))
+      this.#versioned.set(this.#savedIdentity, time)
+    if (kept !== 'none') this.#versioned.set(identity, time)
     this.#saved = current ? this.snapshot() : snapshot
     this.#savedIdentity = identity
     this.#savedAt = this.#steps.get(this.#saved) ?? null
-    this.#sealed = this.#savedAt?.step ?? this.#sealed
-    if (this.#sealed) this.#taken.add(this.#sealed)
+    if (this.#savedAt) {
+      this.#taken.add(this.#savedAt.step)
+      // A save landing after a newer one began keeps that one's seal.
+      this.#sealed = Math.max(this.#sealed, this.#savedAt.order)
+    }
     this.#publish()
     this.#verifySaved()
   }
   /** A save takes the current state: later edits start a new step, so a step still leads to it. */
   sealHistory() {
-    this.#sealed = this.#at().step
-    this.#taken.add(this.#sealed)
+    this.#sealed = this.#order
+    this.#taken.add(this.#at().step)
   }
   /**
    * The steps made up to the last save, each with the state it leaves from,
@@ -847,6 +860,7 @@ export class DocumentSession {
       saved: saved.step,
       snapshot: this.#saved,
       steps: [...this.#kept()].filter(([group]) => group.order <= saved.order),
+      versioned: this.#versioned as Pick<WeakMap<object, number>, 'get'>,
     }
   }
   /**
@@ -892,6 +906,7 @@ export class DocumentSession {
       undo: readonly HistoryGroup[]
       redo: readonly HistoryGroup[]
       branches: readonly (readonly [object, HistoryGroup[]])[]
+      versioned: readonly (readonly [object, number])[]
     }>,
   ) {
     if (
@@ -914,6 +929,8 @@ export class DocumentSession {
       step: this.#opening,
       identity: this.#openingIdentity,
     })
+    for (const [identity, time] of restored.versioned)
+      this.#versioned.set(identity, time)
     const branches = [...restored.branches]
     if (!editing) this.#redo = [...restored.redo]
     else if (restored.redo.length)
@@ -934,7 +951,7 @@ export class DocumentSession {
     const current = this.snapshot()
     if (typeof source !== 'string') {
       if (current.sharesRoot(source)) {
-        this.markSaved(current, false)
+        this.markSaved(current, 'none')
         return
       }
       this.#saved = source
@@ -945,7 +962,7 @@ export class DocumentSession {
       return
     }
     if (current.materialize() === source) {
-      this.markSaved(current, false)
+      this.markSaved(current, 'none')
       return
     }
     this.#saved = new SourceStore(

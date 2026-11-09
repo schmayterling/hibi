@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { EditorState } from '@codemirror/state'
 import {
   CompletionBroker,
@@ -9,6 +9,11 @@ import {
   safeCompletionContext,
   sourceProseAllowed,
 } from '../src/shared/completions.ts'
+
+beforeEach((t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(performance, 'now', () => 0)
+})
 
 test('acceptance uses visible item identity, winning provider, and one receipt per session', async () => {
   const broker = new CompletionBroker()
@@ -260,6 +265,31 @@ test('range feedback discards changed views, unseen content versions, and stoppe
     if (action === 'stop') broker.stopOwner(registered)
     broker.emitTypingContext(context)
     assert.deepEqual(events, [], action)
+  }
+})
+
+test('accepted range feedback includes the 10-second boundary and expires after it', async (t) => {
+  let now = 1000
+  t.mock.method(performance, 'now', () => now)
+  for (const age of [10000, 10001]) {
+    now = 1000
+    const broker = new CompletionBroker()
+    const events = []
+    broker.onTypingContext((event) => events.push(event))
+    broker.register(owner('provider'), () => [item('word')])
+    const shown = await collect(broker).final
+    broker.prepareAcceptance(shown.request, shown.items[0])()
+    now += age
+    broker.emitTypingContext({
+      ...request({ contentVersion: 5 }),
+      kind: 'replace',
+      change: { from: 0, to: 4, insertedLength: 1 },
+    })
+    assert.deepEqual(
+      events.map((event) => event.kind),
+      age === 10000 ? ['replace'] : [],
+    )
+    broker.dispose()
   }
 })
 
@@ -773,17 +803,23 @@ test('at most three providers run concurrently', async () => {
   let active = 0
   let maximum = 0
   let started = 0
+  const pending = []
   for (let index = 0; index < 10; index++) {
     broker.register(owner(`provider-${index}`), async () => {
       started++
       active++
       maximum = Math.max(maximum, active)
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await new Promise((resolve) => pending.push(resolve))
       active--
       return []
     })
   }
   const result = collect(broker)
+  for (const expected of [3, 6, 9, 10]) {
+    await tick()
+    assert.equal(started, expected)
+    for (const finish of pending.splice(0)) finish()
+  }
   await result.final
   assert.equal(started, 10)
   assert.ok(maximum <= 3)
@@ -791,7 +827,7 @@ test('at most three providers run concurrently', async () => {
 
 test('timed-out provider is aborted and finishes request', {
   timeout: 3000,
-}, async () => {
+}, async (t) => {
   const broker = new CompletionBroker()
   let signal
   broker.register(owner('hung'), (_request, providerSignal) => {
@@ -799,31 +835,30 @@ test('timed-out provider is aborted and finishes request', {
     return new Promise(() => {})
   })
   const result = collect(broker)
-  let watchdog
-  const final = await Promise.race([
-    result.final,
-    new Promise((_, reject) => {
-      watchdog = setTimeout(
-        () => reject(new Error('request did not finish')),
-        1200,
-      )
-    }),
-  ]).finally(() => clearTimeout(watchdog))
+  await tick()
+  t.mock.timers.tick(399)
+  assert.equal(signal.aborted, false)
+  t.mock.timers.tick(1)
+  const final = await result.final
   assert.equal(signal.aborted, true)
   assert.deepEqual(final.items, [])
 })
 
 test('hung providers do not starve later requests', {
   timeout: 3000,
-}, async () => {
+}, async (t) => {
   const broker = new CompletionBroker()
   for (let index = 0; index < 3; index++)
     broker.register(owner(`hung-${index}`), () => new Promise(() => {}))
   const first = collect(broker)
+  await tick()
+  t.mock.timers.tick(400)
   assert.deepEqual((await first.final).items, [])
 
   broker.register(owner('healthy'), () => [item('healthy')], 1)
   const second = collect(broker)
+  await tick()
+  t.mock.timers.tick(400)
   const final = await second.final
   assert.deepEqual(
     final.items.map(({ label }) => label),
@@ -886,7 +921,7 @@ test('priority provider publishes before slow default providers', async () => {
 
 test('ready lower-priority provider publishes while higher-priority providers hang', {
   timeout: 3000,
-}, async () => {
+}, async (t) => {
   const broker = new CompletionBroker()
   for (let index = 0; index < 3; index++)
     broker.register(owner(`slow-${index}`), () => new Promise(() => {}), 1)
@@ -904,6 +939,8 @@ test('ready lower-priority provider publishes while higher-priority providers ha
         resolveUpdate(update)
     },
   )
+  await tick()
+  t.mock.timers.tick(80)
   const update = await firstUsefulUpdate
   assert.equal(update.done, false)
   assert.deepEqual(
@@ -934,7 +971,7 @@ test('stopping owner retracts its already completed results', async () => {
 
 test('timeout abort listener can start a newer request without old final overwriting it', {
   timeout: 3000,
-}, async () => {
+}, async (t) => {
   const broker = new CompletionBroker()
   const old = request()
   const fresh = request({ contentVersion: 4 })
@@ -958,7 +995,11 @@ test('timeout abort listener can start a newer request without old final overwri
     () => old,
     (update) => oldUpdates.push(update),
   )
+  await tick()
+  t.mock.timers.tick(400)
   await nestedCreated.promise
+  await tick()
+  t.mock.timers.tick(400)
   const final = await nested.final
   assert.deepEqual(
     final.items.map(({ label }) => label),
@@ -1011,7 +1052,7 @@ test('stop-owner abort listener cannot run another provider from stopped owner',
 
 test('owner stopped by timeout abort listener is excluded from final results', {
   timeout: 3000,
-}, async () => {
+}, async (t) => {
   const broker = new CompletionBroker()
   const fast = owner('fast')
   broker.register(fast, () => [item('fast')])
@@ -1029,6 +1070,7 @@ test('owner stopped by timeout abort listener is excluded from final results', {
     ),
     true,
   )
+  t.mock.timers.tick(400)
   const final = await result.final
   assert.deepEqual(final.items, [])
 })

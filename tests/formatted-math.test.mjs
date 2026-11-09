@@ -9,6 +9,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -87,7 +88,19 @@ async function open(name) {
     },
     join(folder, 'notes', name),
   )
-  await pressShortcut(app, `${mod}+o`)
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async ({ name, revision }) => {
+        const current = await window.hibi.getDocument()
+        return current.name === name && current.revision > revision
+      },
+      { name, revision },
+    )
+  })
 }
 
 /** Reload the window with the marker setting. */
@@ -425,7 +438,9 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
   timeout: 90000,
 }, async () => {
   // A drawing that replaces 20 or more characters splits the view's visible
-  // ranges inside its line, which still sits in one quote, not two.
+  // ranges inside its line, which still sits in one quote, not two. The
+  // formula is display math inside the quote's paragraph, as Obsidian reads
+  // it, so the quote draws as one line.
   await writeFile(
     join(folder, 'notes', 'quoted.md'),
     '> Under Shape 1, so\n> $$\\hat\\alpha = \\frac{2y_1+y_2}{2n}$$\n> ![a long alt text for this image](u.png) tail\n\nlast\n',
@@ -444,11 +459,7 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
         ],
       ),
     ),
-    [
-      ['calc(21px)', 1],
-      ['calc(21px)', 1],
-      ['calc(21px)', 1],
-    ],
+    [['calc(21px)', 1]],
   )
   // The tops of the numerator's glyphs reach past the formula's box, inside
   // the clip that lets a wide formula scroll sideways.
@@ -581,6 +592,121 @@ test('display math across lines, blank or holding dollars draws as display math,
     3,
   )
   assert.equal(await documentText(), note)
+})
+
+test('display blocks read to their closing line and end with their list item, as in Obsidian', {
+  timeout: 90000,
+}, async () => {
+  // Obsidian 1.13.7 reads block math like a fence: an unclosed block is still
+  // a formula, and a list item keeps an under-indented line, so the closing
+  // line there opens nothing and the next item stays a list item.
+  await writeFile(
+    join(folder, 'notes', 'fence-blocks.md'),
+    '1. Compute:\n   $$\n   a^2\n$$\n2. Next step\n\n- Unclosed:\n  $$\n  b^2\n\nAfter the list\n\n$$\nc^2 +\ne^2$$\n\nlast\n',
+  )
+  await open('fence-blocks.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+  const formulas = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane [data-type="block-math"]')].map(
+        (formula) => formula.dataset.latex.replace(/\s+/g, ' '),
+      ),
+    )
+  await page
+    .waitForFunction(
+      () =>
+        document.querySelectorAll('.rich-pane [data-type="block-math"] .katex')
+          .length === 3,
+    )
+    .catch(async (cause) => {
+      throw new Error(JSON.stringify(await formulas()), { cause })
+    })
+  assert.deepEqual(await formulas(), ['a^2', 'b^2', 'c^2 + e^2'])
+  assert.deepEqual(
+    await page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .cm-line')]
+        .filter((line) => !line.querySelector('[data-type="block-math"]'))
+        .map((line) => line.textContent.trim())
+        .filter(Boolean),
+    ),
+    ['Compute:', 'Next step', 'Unclosed:', 'After the list', 'last'],
+  )
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('b^2') },
+    })
+    view.focus()
+  })
+  await page
+    .locator('.rich-pane .hibi-lp-math-source', { hasText: 'b^2' })
+    .waitFor()
+  assert.equal(
+    await page
+      .locator('.rich-pane [data-type="block-math"][data-latex="b^2"]')
+      .count(),
+    0,
+    'an unclosed formula shows its source while edited, without rendering it per key',
+  )
+  await markers(false)
+  const source = 'Intro\n\n$$\nfirst words\n\n# second\n\nlast🙂\n'
+  await writeFile(join(folder, 'notes', 'unclosed-edit.md'), source)
+  await open('unclosed-edit.md')
+  await page.waitForFunction(
+    (source) =>
+      document
+        .querySelector('.rich-pane .cm-content')
+        ?.cmTile?.root?.view?.state.doc.toString() === source,
+    source,
+  )
+  await page.locator('.rich-pane [data-type="block-math"]').waitFor()
+  await waitForDocumentEditor(app, page)
+  const start = source.indexOf('$$'),
+    end = source.length - 1
+  for (const [key, from, to, expected] of [
+    ['Backspace', end, end, source.slice(0, end - 2) + source.slice(end)],
+    ['Delete', start, start, source.slice(0, start) + source.slice(start + 1)],
+    [
+      'Backspace',
+      start - 2,
+      start + 3,
+      source.slice(0, start - 2) + source.slice(start + 3),
+    ],
+    ['Cut', end, end, source.slice(0, source.lastIndexOf('\n', end - 1) + 1)],
+  ]) {
+    // Hidden source has no text caret target: place exact source positions,
+    // then exercise the real key or native clipboard command.
+    await page.evaluate(
+      ({ from, to }) => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        view.dispatch({ selection: { anchor: from, head: to } })
+        view.focus()
+      },
+      { from, to },
+    )
+    if (key === 'Cut')
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].webContents.cut(),
+      )
+    else await page.keyboard.press(key)
+    await waitForAsync(
+      page,
+      async (before) => (await window.hibi.getDocument()).markdown !== before,
+      source,
+    )
+    assert.equal(await documentText(), expected, key)
+    await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async (before) => (await window.hibi.getDocument()).markdown === before,
+      source,
+    )
+  }
+  await markers(true)
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

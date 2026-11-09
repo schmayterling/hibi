@@ -4,7 +4,7 @@ import { createServer as createHttpServer } from 'node:http'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createServer } from 'vite'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { autosaveOff, electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, replaceSourceText, splitTab } from './keyboard.mjs'
 import { fixtureVault } from './obsidian/harness.mjs'
 
@@ -90,6 +90,8 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
   let page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
+  // The split tabs below must stay unsaved across the switch.
+  await autosaveOff(app, page)
   assert.deepEqual(await preferences(app), {
     sandbox: true,
     contextIsolation: true,

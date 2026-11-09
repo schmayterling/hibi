@@ -233,7 +233,7 @@ test('calling Plugin.unload directly cancels its requests and refuses stale API 
   t.after(() => owner.unload())
   const pending = Promise.withResolvers()
   const calls = []
-  window.hibi = {
+  window.hibiTransport = {
     invokeAddonProfile(_addon, method, input) {
       calls.push({ method, input })
       return method === 'requestUrl' ? pending.promise : Promise.resolve()

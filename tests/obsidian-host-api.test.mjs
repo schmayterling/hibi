@@ -389,7 +389,7 @@ test('plugin command IDs survive replacement by a package with a new content has
   const { wrapObsidianPlugin } = await load('package.ts')
   const fixture = await readFixturePlugin('host-smoke')
   const document = fakeDom(t)
-  window.hibi = { invokeAddonProfile: async () => crypto.randomUUID() }
+  window.hibiTransport = { invokeAddonProfile: async () => crypto.randomUUID() }
   const append = document.head.append.bind(document.head)
   document.head.append = (script) => {
     append(script)
@@ -458,7 +458,7 @@ test('disabling a plugin cancels resources during pending onload and cannot revi
   const { wrapObsidianPlugin } = await load('package.ts')
   const fixture = await readFixturePlugin('host-smoke')
   const document = fakeDom(t)
-  window.hibi = { invokeAddonProfile: async () => crypto.randomUUID() }
+  window.hibiTransport = { invokeAddonProfile: async () => crypto.randomUUID() }
   const started = Promise.withResolvers()
   const finish = Promise.withResolvers()
   const state = {

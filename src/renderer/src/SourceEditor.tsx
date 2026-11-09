@@ -149,6 +149,7 @@ import { tabIndent } from './indentation'
 import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
+import { multipleSelections } from './multiple-selections'
 import { mappedPositionAt } from './native-dom-selection'
 import { placedByView, scrolledItself } from './reading-position'
 import {
@@ -2295,6 +2296,7 @@ export function SourceEditor({
           }),
           rightPress,
           formatted ? formattedCellExtensions.of(() => rightPress) : [],
+          multipleSelections,
           keymap.of([
             { key: 'Ctrl-a', run: sourceCommands.selectAll },
             ...sourceCommands.defaultKeymap,

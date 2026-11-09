@@ -942,6 +942,8 @@ test('positioned cache preserves nested frontmatter, raw references and block su
   assert.deepEqual(api.resolveSubpath(cache, '#^block'), {
     type: 'block',
     block,
+    start: block.position.start,
+    end: block.position.end,
   })
   assert.equal(
     api.resolveSubpath(cache, '#H%20%F0%9F%98%80').current,
@@ -950,6 +952,80 @@ test('positioned cache preserves nested frontmatter, raw references and block su
   assert.equal(api.resolveSubpath(cache, '#^missing'), null)
   assert.equal(api.resolveSubpath(cache, '#%ZZ'), null)
   assert.deepEqual({ ...env.cache.resolvedLinks['note.md'] }, { 'other.md': 3 })
+})
+
+test('subpath results expose canonical start/end locations for headings and blocks', () => {
+  const position = (line) => ({
+    start: { line, col: 0, offset: line * 10 },
+    end: { line, col: 8, offset: line * 10 + 8 },
+  })
+  const headings = [
+    { heading: 'A', level: 1, position: position(0) },
+    { heading: 'B', level: 2, position: position(1) },
+    { heading: 'C', level: 1, position: position(3) },
+  ]
+  const block = { id: 'MixedCase', position: position(4) }
+  const list = { id: block.id, position: block.position, parent: -4 }
+  const cache = { headings, blocks: { [block.id]: block }, listItems: [list] }
+  assert.deepEqual(api.resolveSubpath(cache, '#A'), {
+    type: 'heading',
+    current: headings[0],
+    next: headings[2],
+    start: headings[0].position.start,
+    end: headings[2].position.start,
+  })
+  assert.deepEqual(api.resolveSubpath(cache, '#C'), {
+    type: 'heading',
+    current: headings[2],
+    next: null,
+    start: headings[2].position.start,
+    end: null,
+  })
+  assert.deepEqual(api.resolveSubpath(cache, '#^MixedCase'), {
+    type: 'block',
+    block,
+    list,
+    start: block.position.start,
+    end: block.position.end,
+  })
+  assert.equal(api.resolveSubpath(cache, '#^mixedcase'), null)
+})
+
+test('heading chains resolve each segment inside its preceding heading', () => {
+  const headings = [
+    ['Café 😀', 1],
+    ['Nested', 3],
+    ['B', 4],
+    ['Side', 2],
+    ['B', 3],
+    ['Outside', 1],
+    ['Nested', 2],
+    ['B', 3],
+  ].map(([heading, level], line) => ({
+    heading,
+    level,
+    position: {
+      start: { line, col: 0, offset: line * 10 },
+      end: { line, col: 5, offset: line * 10 + 5 },
+    },
+  }))
+  const cache = { headings }
+  for (const [subpath, index] of [
+    ['#Cafe%CC%81%20%F0%9F%98%80#nested#B', 2],
+    ['#café 😀#side#B', 4],
+    ['#Outside#Nested#B', 7],
+    ['#Café 😀#B', 2],
+    ['#café#nested#b', 2],
+    ['#café-#nested#b', 2],
+    ['#café-😀#Nested', -1],
+    ['#Café 😀#Outside', -1],
+    ['#Café 😀#Missing', -1],
+    ['#Café 😀##B', -1],
+  ]) {
+    const result = api.resolveSubpath(cache, subpath)
+    assert.equal(result?.current ?? null, headings[index] ?? null, subpath)
+    if (result) assert.deepEqual(result.start, headings[index].position.start)
+  }
 })
 
 test('metadata registers app service, public exports and lifetime cleanup', async (t) => {

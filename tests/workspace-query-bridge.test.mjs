@@ -19,7 +19,7 @@ test('installed addon queries workspace metadata through scoped bridge', {
   )
   await writeFile(
     join(workspace, 'b.md'),
-    '# Bravo\n\nTarget paragraph ^target\n',
+    '# Bravo\n\nTarget paragraph ^target\n\n## Nested\n\n### Detail\n',
   )
   await writeFile(
     join(folder, 'hibi-addon.json'),
@@ -138,6 +138,24 @@ test('installed addon queries workspace metadata through scoped bridge', {
   assert.equal(resolved.ok, true)
   assert.equal(resolved.value.resolved.type, 'block')
   assert.deepEqual(resolved.value.resolved.position, block.position)
+  const nestedHeading = await page.evaluate(
+    (captured) =>
+      window.queryProbe.query({
+        target: captured,
+        kind: 'resolve-subpath',
+        path: 'b.md',
+        subpath: '#Bravo#Nested#Detail',
+      }),
+    target,
+  )
+  assert.equal(nestedHeading.ok, true)
+  assert.equal(nestedHeading.value.resolved.type, 'heading')
+  assert.equal(nestedHeading.value.resolved.id, 'detail')
+  assert.deepEqual(nestedHeading.value.resolved.position.start, {
+    line: 6,
+    col: 0,
+    offset: 46,
+  })
   const text = await page.evaluate(async (captured) => {
     const items = []
     let cursor, result

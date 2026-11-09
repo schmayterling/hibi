@@ -1,4 +1,4 @@
-import { headingAnchors } from '../../../../shared/heading-anchor'
+import { resolveHeadingSubpath } from '../../../../shared/heading-anchor'
 import type { CachedMetadata } from './index'
 
 export function parseFrontMatterEntry(
@@ -55,23 +55,32 @@ export function resolveSubpath(cache: CachedMetadata, subpath: string) {
     const block = cache.blocks?.[target.slice(1)]
     if (!block) return null
     const list = cache.listItems?.find((item) => item.id === block.id)
-    return { type: 'block' as const, block, ...(list ? { list } : {}) }
+    return {
+      type: 'block' as const,
+      block,
+      ...(list ? { list } : {}),
+      start: block.position.start,
+      end: block.position.end,
+    }
   }
   const headings = cache.headings ?? []
-  const anchors = headingAnchors(headings.map(({ heading }) => heading))
-  const folded = target.normalize('NFC').toLowerCase()
-  const index = headings.findIndex(
-    ({ heading }, index) =>
-      heading.normalize('NFC').toLowerCase() === folded ||
-      anchors[index]?.anchor === target ||
-      anchors[index]?.legacy === target,
+  const resolved = resolveHeadingSubpath(
+    headings.map(({ heading, level }) => ({ text: heading, depth: level })),
+    target,
   )
-  const current = headings[index]
-  if (!current) return null
+  if (!resolved) return null
+  const current = headings[resolved.index]!
   const next =
-    headings.slice(index + 1).find(({ level }) => level <= current.level) ??
-    null
-  return { type: 'heading' as const, current, next }
+    headings
+      .slice(resolved.index + 1)
+      .find(({ level }) => level <= current.level) ?? null
+  return {
+    type: 'heading' as const,
+    current,
+    next,
+    start: current.position.start,
+    end: next?.position.start ?? null,
+  }
 }
 
 export function getAllTags(cache: CachedMetadata): string[] | null {

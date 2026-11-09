@@ -4,7 +4,7 @@ import type {
   OperationResult,
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
-import { headingAnchors } from '../shared/heading-anchor'
+import { resolveHeadingSubpath } from '../shared/heading-anchor'
 import { DetailReader } from '../shared/metadata-stream'
 import type { NoteCacheEntry } from '../shared/note-cache'
 import type {
@@ -210,20 +210,12 @@ export async function queryWorkspaceNoteMetadata(
     if (!page.hasMore) {
       reader!.finish()
       if (!subpath.startsWith('^')) {
-        const anchors = headingAnchors(headings.map(({ text }) => text))
-        const folded = subpath.normalize('NFC').toLowerCase()
-        const index = headings.findIndex(
-          ({ text }, index) =>
-            text.normalize('NFC').toLowerCase() === folded ||
-            anchors[index]?.anchor === subpath ||
-            anchors[index]?.legacy === subpath,
-        )
-        const heading = headings[index]
+        const heading = resolveHeadingSubpath(headings, subpath)
         if (heading)
           resolved = {
             type: 'heading',
-            id: anchors[index]!.anchor,
-            position: heading.position,
+            id: heading.anchor,
+            position: headings[heading.index]!.position,
           }
       }
       return {

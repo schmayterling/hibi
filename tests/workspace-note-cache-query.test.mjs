@@ -227,6 +227,72 @@ test('block and heading subpaths resolve positioned entries without building a g
   assert.equal(host.globalReads, 0)
 })
 
+test('heading chains stay scoped to their ancestors and block identifiers retain case', async () => {
+  const headings = [
+    ['Café 😀', 1],
+    ['Nested', 3],
+    ['B', 4],
+    ['Side', 2],
+    ['B', 3],
+    ['Outside', 1],
+    ['Nested', 2],
+    ['B', 3],
+  ].map(([text, depth], line) => ({
+    text,
+    depth,
+    position: {
+      start: { line, col: 0, offset: line * 10 },
+      end: { line, col: 5, offset: line * 10 + 5 },
+    },
+  }))
+  const block = {
+    id: 'MixedCase',
+    position: {
+      start: { line: 9, col: 0, offset: 90 },
+      end: { line: 9, col: 5, offset: 95 },
+    },
+  }
+  host.frames = [
+    ...headings.map((value) => ({ kind: 'heading', value })),
+    { kind: 'block', value: block },
+  ].map((entry) => [...recordTokens(entry)])
+  for (const [subpath, index] of [
+    ['#Cafe%CC%81%20%F0%9F%98%80#nested#B', 2],
+    ['#café 😀#side#B', 4],
+    ['#Outside#Nested#B', 7],
+    ['#Café 😀#B', 2],
+    ['#café#nested#b', 2],
+    ['#café-#nested#b', 2],
+    ['#Café 😀#Outside', -1],
+    ['#Café 😀#Missing', -1],
+    ['#Café 😀##B', -1],
+  ]) {
+    const result = await query({
+      kind: 'resolve-subpath',
+      path: 'note.md',
+      subpath,
+    })
+    assert.equal(result.ok, true)
+    assert.deepEqual(
+      result.value.resolved?.position ?? null,
+      headings[index]?.position ?? null,
+      subpath,
+    )
+  }
+  const exact = await query({
+    kind: 'resolve-subpath',
+    path: 'note.md',
+    subpath: '#^MixedCase',
+  })
+  assert.equal(exact.value.resolved.id, 'MixedCase')
+  const folded = await query({
+    kind: 'resolve-subpath',
+    path: 'note.md',
+    subpath: '#^mixedcase',
+  })
+  assert.equal(folded.value.resolved, null)
+})
+
 test('requested metadata rejects traversal, malformed cursors and changes during worker reads', async () => {
   for (const path of [
     '../note.md',

@@ -55,6 +55,6 @@ if (snapshot.target) {
 }
 ```
 
-Positions use zero-based `{line, col, offset}` locations in the original UTF-16 source, including BOM and CRLF units, with exclusive ends. Use `workspace.query({target, kind: 'resolve-subpath', path, subpath: '#^block-id'})` for an explicit block, or pass a heading name or slug as the subpath. A successful result contains its source position and source version. Capture document and editor versions before moving a caret; discard a result if they changed while awaiting it. Iterators reject stale folder, source, syntax or continuation identities. Callers that need completeness diagnostics can read `kind: 'metadata'` query pages directly.
+Positions use zero-based `{line, col, offset}` locations in the original UTF-16 source, including BOM and CRLF units, with exclusive ends. Use `workspace.query({target, kind: 'resolve-subpath', path, subpath: '#^block-id'})` for an explicit block, or pass a heading name or slug as the subpath. Join heading segments with `#` to select a nested section, such as `#Overview#Details`. Block identifiers match exactly, including case. A successful result contains its source position and source version. Capture document and editor versions before moving a caret; discard a result if they changed while awaiting it. Iterators reject stale folder, source, syntax or continuation identities. Callers that need completeness diagnostics can read `kind: 'metadata'` query pages directly.
 
 Creating a package does not publish it to the garden.

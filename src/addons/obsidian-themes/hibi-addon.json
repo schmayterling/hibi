@@ -1,7 +1,7 @@
 {
   "id": "obsidian-themes",
   "name": "Obsidian themes",
-  "description": "Use a vault's Obsidian theme and CSS snippets.",
+  "description": "Use Obsidian themes and CSS snippets in Hibi.",
   "apiVersion": 3,
   "kind": "extension",
   "version": "0.1.0",

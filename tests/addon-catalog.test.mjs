@@ -229,7 +229,6 @@ test('settings, flavors, and analysis retain their existing discovery rules', ()
       'keybeats',
       'mcp-server',
       'mermaid',
-      'obsidian-themes',
       'quick-note',
       'typst',
       'vim',

@@ -3,6 +3,16 @@ import { Select, SettingRow } from './Controls'
 import type { ColorschemeStore } from './colorschemes'
 import './colorschemes.css'
 
+// Ungrouped colorschemes first, then each group in the order it appears.
+function groups<T extends { group?: string }>(schemes: readonly T[]) {
+  const found = new Map<string, T[]>([['', []]])
+  for (const scheme of schemes) {
+    const group = scheme.group ?? ''
+    found.set(group, [...(found.get(group) ?? []), scheme])
+  }
+  return [...found]
+}
+
 export function ColorschemeSettings({
   store,
   showLicense = true,
@@ -73,13 +83,22 @@ export function ColorschemeSettings({
                     store.set({ [mode]: event.target.value })
                   }
                 >
-                  {schemes
-                    .filter((scheme) => scheme.appearance === mode)
-                    .map((scheme) => (
+                  {groups(
+                    schemes.filter((scheme) => scheme.appearance === mode),
+                  ).map(([group, list]) => {
+                    const options = list.map((scheme) => (
                       <option key={scheme.id} value={scheme.id}>
                         {scheme.name}
                       </option>
-                    ))}
+                    ))
+                    return group ? (
+                      <optgroup key={group} label={group}>
+                        {options}
+                      </optgroup>
+                    ) : (
+                      options
+                    )
+                  })}
                 </Select>
               </div>
             </SettingRow>

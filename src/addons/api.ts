@@ -782,7 +782,7 @@ export type SettingsCategory = {
 export type SettingsPage = {
   id: string
   label: string
-  /** general, editing, interface, addons, or a local category ID. Defaults to addons. */
+  /** general, editing, interface, addons, or a local category ID. Defaults to addons. `appearance` shows the content inside Hibi's Appearance page, below the colorschemes, instead of on a page of its own. */
   category?: string
   icon?: SidebarView['icon']
   /** Use shared SettingRow controls to include individual settings in search. */

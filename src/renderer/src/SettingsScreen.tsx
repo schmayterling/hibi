@@ -62,7 +62,11 @@ import {
   settingsIcon,
   settingsNavigation,
 } from './settings-categories'
-import { settingsCategory, settingsPages } from './settings-pages'
+import {
+  APPEARANCE_SECTION,
+  settingsCategory,
+  settingsPages,
+} from './settings-pages'
 import { ToolbarSettings } from './ToolbarSettings'
 import { UndoHistorySettings } from './UndoHistorySettings'
 import { WindowControlsSettings } from './WindowControlsSettings'
@@ -240,11 +244,17 @@ export function SettingsScreen({
     settingsPages.subscribe,
     settingsPages.snapshot,
   )
-  const extraPages = registered.pages.filter((page) =>
+  const enabledPages = registered.pages.filter((page) =>
     addonStates.some(
       (state) =>
         state.id === page.owner && state.enabled && !state.blockedBy?.length,
     ),
+  )
+  const extraPages = enabledPages.filter(
+    (page) => page.category !== APPEARANCE_SECTION,
+  )
+  const appearanceSections = enabledPages.filter(
+    (page) => page.category === APPEARANCE_SECTION,
   )
   const searchable = [
     ...indexed,
@@ -630,6 +640,13 @@ export function SettingsScreen({
             </div>
             <h2>Colors</h2>
             <ColorschemeSettings store={colorschemes} showLicense={false} />
+            {appearanceSections.map(({ id, Content }) => (
+              <PluginSettingsBoundary key={id}>
+                <Suspense fallback={null}>
+                  <Content />
+                </Suspense>
+              </PluginSettingsBoundary>
+            ))}
             <h2>Cursor</h2>
             <div className="settings-group">
               {(

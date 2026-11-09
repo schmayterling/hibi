@@ -1050,6 +1050,7 @@ button.ui-button.update-download-button:disabled {
 }
 .addon-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-1);
 }
 .addon-tabs button.ui-button[aria-selected="true"] {

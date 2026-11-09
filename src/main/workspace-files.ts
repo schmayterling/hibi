@@ -531,6 +531,7 @@ export async function updateWorkspaceText(
   markdown: unknown,
   options?: unknown,
   isCurrentOwner?: () => boolean,
+  preserveMode = false,
 ): Promise<WorkspaceFileResult<WorkspaceTextUpdate>> {
   const ownerActive = () => isCurrentOwner?.() ?? true
   const root = workspaceRoot()
@@ -602,7 +603,7 @@ export async function updateWorkspaceText(
       const commit = await replaceExistingText(
         file,
         markdown,
-        0o600,
+        preserveMode ? Number(original.info.mode & 0o7777n) : 0o600,
         async () => {
           ensureActive()
           await verifyParent(root, file, parent)

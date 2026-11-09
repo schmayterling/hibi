@@ -1,4 +1,4 @@
-import { FileText, Search } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { Addon, AddonManifest, AddonState } from '../../addons/api'
 import { addonDefaultEnabled } from '../../shared/addon-defaults'
@@ -10,19 +10,30 @@ import type { OutdatedAddon } from '../../shared/sideload'
 import { sentenceCase } from '../../shared/ui-case'
 import {
   Button,
-  ControlRow,
   Panel,
   PanelMessage,
   SettingRow,
   Toggle,
 } from '../../ui/Controls'
 import { useDialogs } from '../../ui/DialogProvider'
-import { SettingsFilter } from '../../ui/SettingsFilter'
 import { useToasts } from '../../ui/Sonner'
-import { AddonGarden, useAddonDirectory } from './AddonGarden'
+import {
+  AddonCatalogToolbar,
+  AddonGarden,
+  NoMatchingAddons,
+  useAddonDirectory,
+} from './AddonGarden'
 import { addonRegistry } from './addon-registry'
 
 const AddonReadme = lazy(() => import('./AddonReadme'))
+const ObsidianCommunity = lazy(
+  () => import('../../addons/obsidian/CommunityBrowser'),
+)
+const ObsidianInstalled = lazy(() =>
+  import('../../addons/obsidian/CommunityBrowser').then((module) => ({
+    default: module.InstalledObsidian,
+  })),
+)
 
 export function useAddonReadme() {
   const dialogs = useDialogs()
@@ -108,7 +119,7 @@ function matches(
 }
 
 const categories = ['Features', 'Formats', 'Themes', 'Importers'] as const
-type Category = (typeof categories)[number]
+type Category = (typeof categories)[number] | 'Obsidian'
 
 function addonCategory(
   manifest: Pick<AddonManifest, 'kind' | 'fileExtensions' | 'importer'>,
@@ -132,6 +143,7 @@ export function AddonSettings({
   remove,
   request,
   onRequestDone,
+  openSettings,
 }: {
   addons: readonly Addon[]
   states: readonly AddonState[]
@@ -142,11 +154,15 @@ export function AddonSettings({
   remove: (id: string) => Promise<void>
   request?: AddonRequest | null | undefined
   onRequestDone?: ((key: number) => void) | undefined
+  openSettings?: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category | null>(null)
-  const [tab, setTab] = useState<'installed' | 'garden'>('installed')
+  const [tab, setTab] = useState<'installed' | 'garden' | 'community'>(
+    'installed',
+  )
   const [busy, setBusy] = useState(false)
+  const [obsidianCount, setObsidianCount] = useState(0)
   // Hibi garden may have an API 3 version of an outdated install.
   const { directory, retry } = useAddonDirectory(
     tab === 'garden' || outdated.length > 0,
@@ -194,16 +210,21 @@ export function AddonSettings({
       }) || a.manifest.id.localeCompare(b.manifest.id),
   )
   const garden = tab === 'garden'
-  const present = categories.filter((option) =>
+  const present: Category[] = categories.filter((option) =>
     garden
       ? directory.entries.some((entry) => addonCategory(entry) === option)
       : addons.some(({ manifest }) => addonCategory(manifest) === option) ||
         outdated.some((addon) => addonCategory(addon) === option),
   )
+  if (!garden) present.push('Obsidian')
   // Removing the last addon in a category falls back to the full list.
   const active = category && present.includes(category) ? category : null
   const shown = (manifest: AddonManifest) =>
-    (!active || addonCategory(manifest) === active) && matches(manifest, query)
+    (!active ||
+      (active === 'Obsidian'
+        ? manifest.id.startsWith('obsidian')
+        : addonCategory(manifest) === active)) &&
+    matches(manifest, query)
   const shownEntry = (entry: AddonDirectoryEntry) =>
     (!active || addonCategory(entry) === active) &&
     matches(entry, query, 'third-party')
@@ -294,6 +315,7 @@ export function AddonSettings({
           [
             ['installed', 'Installed'],
             ['garden', 'Hibi garden'],
+            ['community', 'Obsidian community'],
           ] as const
         ).map(([value, label]) => (
           <Button
@@ -311,13 +333,17 @@ export function AddonSettings({
               )
                 return
               event.preventDefault()
-              const next = value === 'installed' ? 'garden' : 'installed'
+              const tabs = ['installed', 'garden', 'community'] as const
               const target =
                 event.key === 'Home'
                   ? 'installed'
                   : event.key === 'End'
-                    ? 'garden'
-                    : next
+                    ? 'community'
+                    : tabs[
+                        (tabs.indexOf(value) +
+                          (event.key === 'ArrowLeft' ? 2 : 1)) %
+                          tabs.length
+                      ]!
               setTab(target)
               document.getElementById(`addon-tab-${target}`)?.focus()
             }}
@@ -326,71 +352,81 @@ export function AddonSettings({
           </Button>
         ))}
       </div>
-      <ControlRow className="addon-catalog-actions">
-        {garden && (
-          <Button
+      {tab !== 'community' && (
+        <div ref={categoryRow}>
+          <AddonCatalogToolbar
+            actions={
+              <>
+                {garden && (
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() => window.hibi.openAddonGarden())
+                    }
+                  >
+                    View on website
+                  </Button>
+                )}
+                {garden && (
+                  <Button
+                    disabled={busy || directory.status === 'loading'}
+                    onClick={retry}
+                  >
+                    Refresh
+                  </Button>
+                )}
+                <Button disabled={busy} onClick={() => void fromUrl()}>
+                  Install from URL
+                </Button>
+                <Button
+                  disabled={busy}
+                  onClick={() => void run(() => window.hibi.openAddonsFolder())}
+                >
+                  Open addons folder
+                </Button>
+              </>
+            }
+            query={query}
+            onQuery={setQuery}
+            categories={present}
+            category={active}
+            onCategory={(value) => setCategory(value as Category | null)}
             disabled={busy}
-            onClick={() => void run(() => window.hibi.openAddonGarden())}
-          >
-            View on website
-          </Button>
-        )}
-        {garden && (
-          <Button
-            disabled={busy || directory.status === 'loading'}
-            onClick={retry}
-          >
-            Refresh
-          </Button>
-        )}
-        <Button disabled={busy} onClick={() => void fromUrl()}>
-          Install from URL
-        </Button>
-        <Button
-          disabled={busy}
-          onClick={() => void run(() => window.hibi.openAddonsFolder())}
-        >
-          Open addons folder
-        </Button>
-      </ControlRow>
-      <SettingsFilter
-        id="addon-filter"
-        label="Filter addons"
-        placeholder="Filter addons…"
-        value={query}
-        onChange={setQuery}
-        disabled={busy}
-        resetDisabled={!changed}
-        onReset={() =>
-          void run(async () => {
-            for (const { manifest } of addons)
-              if (enabled(manifest.id) !== defaultEnabled(manifest))
-                await setEnabled(manifest.id, defaultEnabled(manifest))
-          })
-        }
-      />
-      <ControlRow
-        ref={categoryRow}
-        className="addon-categories"
-        role="group"
-        aria-label="Addon categories"
-      >
-        {[null, ...present].map((option) => (
-          <Button
-            key={option ?? 'all'}
-            aria-pressed={active === option}
-            onClick={() => setCategory(option)}
-          >
-            {option ?? 'All'}
-          </Button>
-        ))}
-      </ControlRow>
+            resetDisabled={!changed}
+            onReset={() =>
+              void run(async () => {
+                for (const { manifest } of addons)
+                  if (enabled(manifest.id) !== defaultEnabled(manifest))
+                    await setEnabled(manifest.id, defaultEnabled(manifest))
+              })
+            }
+          />
+        </div>
+      )}
       <div
         id="addon-tab-panel"
         role="tabpanel"
         aria-labelledby={`addon-tab-${tab}`}
       >
-        {garden ? (
+        {tab === 'community' ? (
+          <Suspense
+            fallback={
+              <Panel>
+                <PanelMessage
+                  icon={<FileText size={28} />}
+                  title="Loading Obsidian community…"
+                  loading
+                />
+              </Panel>
+            }
+          >
+            <ObsidianCommunity
+              pluginsEnabled={enabled('obsidian')}
+              themesEnabled={enabled('obsidian-themes')}
+              enable={(id) => setEnabled(id, true)}
+            />
+          </Suspense>
+        ) : garden ? (
           <AddonGarden
             directory={directory}
             retry={retry}
@@ -454,6 +490,8 @@ export function AddonSettings({
               )
               const retry = blockedBy.every(enabled)
               const revoked = addonRegistry.revoked(manifest.id)
+              const paused =
+                enabled(manifest.id) && addonRegistry.paused(manifest.id)
               return (
                 <SettingRow
                   key={manifest.id}
@@ -470,6 +508,12 @@ export function AddonSettings({
                     <>
                       {manifest.description}
                       <AddonMetadata manifest={manifest} />
+                      {paused && (
+                        <span className="addon-metadata">
+                          Paused while full computer access is on. Turn off full
+                          access to use this addon, or disable it.
+                        </span>
+                      )}
                       {blockedBy.map((id) => {
                         const dependency = addons.find(
                           (addon) => addon.manifest.id === id,
@@ -491,6 +535,21 @@ export function AddonSettings({
                   }
                 >
                   <div className="addon-actions">
+                    {paused && (
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void run(async () => {
+                            const { revokeFullAccess } = await import(
+                              '../../addons/obsidian/desktop-client'
+                            )
+                            await revokeFullAccess()
+                          })
+                        }
+                      >
+                        Turn off full computer access
+                      </Button>
+                    )}
                     {!revoked &&
                       blockedBy.length > 0 &&
                       providers.every(Boolean) && (
@@ -544,13 +603,21 @@ export function AddonSettings({
             })}
           </div>
         )}
-        {!matching.length && (!garden || directory.entries.length > 0) && (
-          <Panel>
-            <PanelMessage
-              icon={<Search size={32} strokeWidth={1.5} />}
-              title="No matching addons"
+        {tab === 'installed' && (
+          <Suspense fallback={null}>
+            <ObsidianInstalled
+              pluginsEnabled={enabled('obsidian')}
+              themesEnabled={enabled('obsidian-themes')}
+              enable={(id) => setEnabled(id, true)}
+              query={query}
+              category={active}
+              onCount={setObsidianCount}
+              openSettings={openSettings}
             />
-          </Panel>
+          </Suspense>
+        )}
+        {tab === 'installed' && !matching.length && !obsidianCount && (
+          <NoMatchingAddons />
         )}
       </div>
       <AddonSecuritySettings />

@@ -14,6 +14,16 @@ import { clickMenu, pressShortcut } from './keyboard.mjs'
 const note =
   'See [docs](https://old.example "Keep title") here. Bare https://bare.example/path.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// Opening a link reaches main after the click returns: wait for the first open.
+const openedLinks = (app) =>
+  app.evaluate(
+    () =>
+      new Promise((resolve) => {
+        globalThis.linkOpened = () => resolve(globalThis.openedLinks)
+        if (globalThis.openedLinks.length) globalThis.linkOpened()
+      }),
+  )
+
 async function open(t, addons, { clock = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-link-controls-'))
   const file = join(root, 'note.md')
@@ -47,6 +57,7 @@ async function open(t, addons, { clock = false } = {}) {
     globalThis.openedLinks = []
     shell.openExternal = async (url) => {
       globalThis.openedLinks.push(url)
+      globalThis.linkOpened?.()
     }
   }, file)
   page.setDefaultTimeout(8000)
@@ -165,9 +176,7 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
   )
   await link.hover()
   await panel.getByRole('button', { name: 'Open link', exact: true }).click()
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
-    'https://old.example/',
-  ])
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
   await link.hover()
   await panel.getByRole('button', { name: 'Edit link', exact: true }).click()
   assert.equal(
@@ -344,12 +353,12 @@ test('codemirror caret actions and context edit are keyboard reachable', {
     'https://old.example',
   )
   await choose('Open link')
-  await page.waitForFunction(() =>
-    document.activeElement?.closest('.rich-pane .cm-editor'),
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
+      document.activeElement?.closest('.rich-pane .cm-editor'),
   )
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
-    'https://old.example/',
-  ])
   await choose('Remove link')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.startsWith('See docs here.'),
@@ -710,14 +719,14 @@ test('codemirror link menu holds the editor actions of addons too', {
   await menu.waitFor({ state: 'hidden' })
   assert.equal(await active(), null)
   assert.equal(await controls(), null)
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
   // Opening a link keeps the app busy for a moment; the editor then has its
   // focus back.
-  await page.waitForFunction(() =>
-    document.activeElement?.closest('.rich-pane .cm-editor'),
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
+      document.activeElement?.closest('.rich-pane .cm-editor'),
   )
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
-    'https://old.example/',
-  ])
   // Opened again, the menu and its actions keep their ids.
   await page.keyboard.press('Shift+F10')
   await menu
@@ -1070,9 +1079,7 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   // Last, as opening a link makes the app busy, which ends this read-only spell.
   await link.hover()
   await panel.getByRole('button', { name: 'Open link', exact: true }).click()
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
-    'https://old.example/',
-  ])
+  assert.deepEqual(await openedLinks(app), ['https://old.example/'])
 })
 
 test('codemirror link actions wait for the caret to move after a note opens', {

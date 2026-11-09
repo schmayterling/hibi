@@ -4,6 +4,10 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import ignore from 'ignore'
 import type { WorkspaceManifest } from '../shared/workspace-settings'
 import { retryRename } from './atomic-rename.ts'
+import {
+  obsidianConfiguration,
+  obsidianDataPath,
+} from './workspace-obsidian.ts'
 
 export const WORKSPACE_MANIFEST = '.hibi/workspace.json'
 export const WORKSPACE_IGNORE = '.hibi/ignore'
@@ -14,10 +18,17 @@ const legacyNames = {
 }
 type MetadataFile = keyof typeof legacyNames | typeof WORKSPACE_LAYOUT
 
+async function metadataRoot(root: string, dataDirectory?: string) {
+  if (!(await obsidianConfiguration(root))) return root
+  const data =
+    dataDirectory ?? (await import('electron')).app.getPath('userData')
+  return obsidianDataPath(root, data)
+}
+
 async function metadataDirectory(root: string, create = false) {
   const directory = join(root, '.hibi')
   if (create)
-    await mkdir(directory, { mode: 0o700 }).catch(
+    await mkdir(directory, { mode: 0o700, recursive: true }).catch(
       (error: NodeJS.ErrnoException) => {
         if (error.code !== 'EEXIST') throw error
       },
@@ -50,7 +61,14 @@ async function readText(root: string, name: string, limit = 65536) {
 export async function readWorkspaceText(
   root: string,
   name: keyof typeof legacyNames,
+  dataDirectory?: string,
 ) {
+  const storage = await metadataRoot(root, dataDirectory)
+  const overlay =
+    storage !== root && (await metadataDirectory(storage))
+      ? await readText(storage, name)
+      : null
+  if (overlay !== null) return overlay
   const current = (await metadataDirectory(root))
     ? await readText(root, name)
     : null
@@ -60,6 +78,14 @@ export const WORKSPACE_LAYOUT_LIMIT = 1048576
 // Oversized layout files already reported, by path, until they change.
 const oversized = new Map<string, string>()
 export async function readWorkspaceLayoutText(root: string) {
+  const storage = await metadataRoot(root)
+  if (storage !== root) {
+    const overlay = await readLayoutText(storage)
+    if (overlay !== null) return overlay
+  }
+  return readLayoutText(root)
+}
+async function readLayoutText(root: string) {
   if (!(await metadataDirectory(root))) return null
   const path = join(root, WORKSPACE_LAYOUT)
   const info = await lstat(path).catch(() => null)
@@ -123,8 +149,10 @@ export async function workspaceMetadata(root: string) {
     ignore: rules,
   }
 }
-export async function workspaceIgnore(root: string) {
-  return ignore().add(await readWorkspaceText(root, WORKSPACE_IGNORE))
+export async function workspaceIgnore(root: string, dataDirectory?: string) {
+  return ignore().add(
+    await readWorkspaceText(root, WORKSPACE_IGNORE, dataDirectory),
+  )
 }
 export async function writeWorkspaceText(
   root: string,
@@ -132,8 +160,9 @@ export async function writeWorkspaceText(
   content: string,
   exclusive = false,
 ) {
-  await metadataDirectory(root, true)
-  const path = join(root, name)
+  const storage = await metadataRoot(root)
+  await metadataDirectory(storage, true)
+  const path = join(storage, name)
   if (exclusive) {
     await writeFile(path, content, { flag: 'wx', mode: 0o600 })
     return

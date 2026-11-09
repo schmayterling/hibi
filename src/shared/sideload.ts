@@ -66,6 +66,7 @@ export const SIDELOAD_CHANNELS = {
   folder: 'addons:folder',
   garden: 'addons:garden',
   directory: 'addons:directory',
+  obsidianCommunity: 'addons:obsidian-community',
   directoryInstall: 'addons:directory-install',
   gardenRequests: 'addons:garden-requests',
   gardenPending: 'addons:garden-pending',

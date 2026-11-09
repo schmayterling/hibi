@@ -1,0 +1,9 @@
+{
+  "id": "metadata-api",
+  "name": "Metadata fixture",
+  "version": "1.0.0",
+  "minAppVersion": "0.12.0",
+  "description": "Handwritten metadata compatibility fixture.",
+  "author": "Hibi",
+  "isDesktopOnly": false
+}

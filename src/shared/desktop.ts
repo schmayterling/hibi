@@ -261,6 +261,10 @@ export type DesktopApi = {
     files: File[] | null,
     revision: number,
   ) => Promise<import('./media').AttachmentResult | null>
+  formatDocumentLink: (
+    href: string,
+    label: string,
+  ) => Promise<{ url: string; markdown: string } | null>
   readDocumentMedia: (
     source: string,
     revision: number,
@@ -309,6 +313,15 @@ export type DesktopApi = {
   getAddonDirectory: (
     refresh?: boolean,
   ) => Promise<import('./addon-directory').AddonDirectory>
+  obsidianCommunity: (
+    action: 'directory' | 'details' | 'cancel' | 'installed',
+    input: {
+      requestId: string
+      refresh?: boolean
+      kind?: 'plugin' | 'theme'
+      id?: string
+    },
+  ) => Promise<unknown>
   installDirectoryAddon: (
     id: string,
     openSettings?: readonly string[],

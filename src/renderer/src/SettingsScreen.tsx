@@ -134,6 +134,8 @@ export function SettingsScreen({
   onZen,
   discover,
   selected,
+  settingTarget,
+  onTargetShown,
   onCategory,
   onSetting,
   onBack,
@@ -181,6 +183,8 @@ export function SettingsScreen({
   onZen: (enabled: boolean) => void
   discover: boolean
   selected: string
+  settingTarget?: string | null
+  onTargetShown?: (target: null) => void
   onCategory: (category: string) => void
   onWorkspaceChanged: () => Promise<void>
   onSetting: (category: string, id: string) => void
@@ -225,6 +229,47 @@ export function SettingsScreen({
   onTabsEnabled: (enabled: boolean) => void
 }) {
   useEffect(() => {
+    if (!open || !settingTarget) return
+    let frame = 0
+    const reveal = () => {
+      const panel = window.document.getElementById(`settings-${selected}`)
+      panel?.dispatchEvent(new Event('hibi:reveal-setting', { bubbles: true }))
+      const row = panel?.querySelector<HTMLElement>(
+        `[data-setting-id="${CSS.escape(settingTarget)}"]`,
+      )
+      const target =
+        panel?.querySelector<HTMLElement>(`#${CSS.escape(settingTarget)}`) ??
+        row
+      if (!target?.getClientRects().length) return
+      observer.disconnect()
+      frame = requestAnimationFrame(() => {
+        ;(row ?? target).scrollIntoView({ block: 'center', behavior: 'smooth' })
+        const control =
+          target === row
+            ? (row.querySelector<HTMLElement>(
+                'input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled)',
+              ) ?? row)
+            : target
+        ;(control.matches(':disabled') ? (row ?? control) : control).focus({
+          preventScroll: true,
+        })
+        onTargetShown?.(null)
+      })
+    }
+    const observer = new MutationObserver(reveal)
+    observer.observe(window.document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['hidden'],
+    })
+    reveal()
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [open, settingTarget, selected, onTargetShown])
+  useEffect(() => {
     if (open) void addonRegistry.loadDetails().catch(console.error)
   }, [open])
   const screen = useRef<HTMLElement>(null)
@@ -244,11 +289,17 @@ export function SettingsScreen({
     settingsPages.subscribe,
     settingsPages.snapshot,
   )
-  const extraPages = registered.pages.filter((page) =>
+  const enabledPages = registered.pages.filter((page) =>
     addonStates.some(
       (state) =>
         state.id === page.owner && state.enabled && !state.blockedBy?.length,
     ),
+  )
+  const extraPages = enabledPages.filter(
+    (page) => page.category !== `${page.owner}.appearance`,
+  )
+  const appearanceSections = enabledPages.filter(
+    (page) => page.category === `${page.owner}.appearance`,
   )
   const searchable = [
     ...indexed,
@@ -648,6 +699,13 @@ export function SettingsScreen({
             </div>
             <h2>Colors</h2>
             <ColorschemeSettings store={colorschemes} showLicense={false} />
+            {appearanceSections.map(({ id, Content }) => (
+              <PluginSettingsBoundary key={id}>
+                <Suspense fallback={null}>
+                  <Content />
+                </Suspense>
+              </PluginSettingsBoundary>
+            ))}
             <h2>Cursor</h2>
             <div className="settings-group">
               {(
@@ -777,6 +835,7 @@ export function SettingsScreen({
               remove={onRemoveAddon}
               request={addonRequest}
               onRequestDone={onAddonRequestDone}
+              openSettings={onCategory}
             />
           </SettingsPanel>
           <SettingsPanel

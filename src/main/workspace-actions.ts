@@ -1,4 +1,4 @@
-import { lstat, mkdir } from 'node:fs/promises'
+import { lstat, mkdir, realpath } from 'node:fs/promises'
 import {
   basename,
   dirname,
@@ -9,13 +9,14 @@ import {
   resolve,
   sep,
 } from 'node:path'
-import { type BrowserWindow, shell } from 'electron'
+import type { BrowserWindow } from 'electron'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type { WorkspaceActionResult } from '../shared/workspace'
 import {
   closeDeletedDocuments,
   confirmDiscardAll,
   getDocument,
+  getDocumentPath,
   getOpenDocuments,
   newPendingDocument,
   relocateDocument,
@@ -31,6 +32,7 @@ import {
   type WorkspaceReply,
   workspaceRoot,
 } from './workspace'
+import { isCaseOnlyRename, renameCaseOnly } from './workspace-case-rename'
 import { copyEntry, moveEntry } from './workspace-entry-transfer'
 import { renameWithTableLayout } from './workspace-layout'
 import {
@@ -38,6 +40,7 @@ import {
   resolveWorkspaceEntry,
   validateWorkspaceName,
 } from './workspace-paths'
+import { trashWorkspaceEntry } from './workspace-trash'
 
 export { validateWorkspaceName } from './workspace-paths'
 
@@ -140,6 +143,8 @@ export async function workspaceAction(
 ): Promise<WorkspaceActionReply<boolean> | null> {
   const base = workspaceRoot()
   if (!base) throw new Error('Open a workspace first.')
+  const vault = Boolean(getWorkspace(undefined, false)?.obsidian)
+  const supportedName = (name: string) => isDocumentName(name, true) || vault
   if (!input || typeof input !== 'object')
     throw new Error('Hibi could not read this file operation. Try again.')
   const { action, path, destination, target } = input as Record<string, unknown>
@@ -162,6 +167,7 @@ export async function workspaceAction(
   let resultPath: string
   let sourcePath: string | null = null
   let treeChanged = false
+  let changedLinks: string[] = []
   if (action === 'new-file' || action === 'new-folder') {
     const parent = await resolveWorkspaceEntry(base, path, false, true)
     if (!(await lstat(parent)).isDirectory())
@@ -180,17 +186,26 @@ export async function workspaceAction(
     const draft =
       typeof path === 'string' &&
       getOpenDocuments().find((draft) => draft.pendingPath === join(base, path))
-    const source = await resolveWorkspaceEntry(base, path, Boolean(draft))
+    const resolvedSource = await resolveWorkspaceEntry(
+      base,
+      path,
+      Boolean(draft),
+    )
+    const source =
+      vault && !draft ? await realpath(resolvedSource) : resolvedSource
     sourcePath = source
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
-    const folder = draft ? false : (await lstat(source)).isDirectory()
-    if (!folder && !isDocumentName(source, true))
+    const info = draft ? null : await lstat(source)
+    const folder = info?.isDirectory() ?? false
+    if (!draft && !folder && !info?.isFile())
+      throw new Error('Choose a regular file or folder.')
+    if (!folder && !supportedName(source))
       throw new Error('Choose a supported document.')
     if (action === 'delete') {
       if (!(await confirmDiscardAll(window, source))) return null
       if (await lstat(source).catch(missing)) {
-        await shell.trashItem(source)
+        if (!(await trashWorkspaceEntry(window, base, source))) return null
         treeChanged = true
       }
       await closeDeletedDocuments(window, source)
@@ -206,7 +221,7 @@ export async function workspaceAction(
         const name = basename(source, extension)
         resultPath = await unique(dirname(source), `${name} copy${extension}`)
       } else resultPath = await resolveWorkspaceEntry(base, destination, true)
-      if (!folder && !isDocumentName(resultPath, true))
+      if (!folder && !supportedName(resultPath))
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
         return {
@@ -214,7 +229,10 @@ export async function workspaceAction(
           document: getDocument(),
           path: relative(base, source).split(sep).join('/'),
         }
-      if (contains(source, resultPath))
+      const caseOnly =
+        action === 'rename' && (await isCaseOnlyRename(source, resultPath))
+      // Windows compares paths without case, so a case-only rename is "inside" itself.
+      if (!caseOnly && contains(source, resultPath))
         throw new Error(
           'A folder cannot be placed inside itself. Choose another location.',
         )
@@ -222,7 +240,7 @@ export async function workspaceAction(
         throw new Error(
           'A document is open at that location. Choose another name or location.',
         )
-      if (await lstat(resultPath).catch(missing))
+      if (!caseOnly && (await lstat(resultPath).catch(missing)))
         throw new Error(
           'A file or folder exists at that location. Choose another name or location.',
         )
@@ -243,44 +261,93 @@ export async function workspaceAction(
           rethrowPartialCopy(error, base, source, resultPath),
         )
       } else {
-        const moved = await renameWithTableLayout(
-          () =>
-            moveEntry(source, resultPath, folder, async () => {
-              await resolveWorkspaceEntry(base, path)
-              await resolveWorkspaceEntry(
-                base,
-                relative(base, resultPath).split(sep).join('/'),
-                true,
-              )
-              return !getOpenDocuments().some(
-                (draft) => draft.file === resultPath,
-              )
-            }).catch((error: unknown) =>
-              rethrowPartialCopy(error, base, source, resultPath),
-            ),
-          (moved) =>
-            moved.sourceRemoved
-              ? [
-                  base,
+        const { prepareObsidianLinkUpdates } = await import(
+          './workspace-obsidian-links'
+        )
+        const updates = await prepareObsidianLinkUpdates(
+          base,
+          relative(base, source).split(sep).join('/'),
+          relative(base, resultPath).split(sep).join('/'),
+          getOpenDocuments,
+          window,
+        )
+        changedLinks = await updates.run(
+          async () => {
+            const moved = await renameWithTableLayout(
+              () =>
+                caseOnly
+                  ? renameCaseOnly(source, resultPath).then(() => ({
+                      sourceRemoved: true,
+                    }))
+                  : moveEntry(source, resultPath, folder, async () => {
+                      await resolveWorkspaceEntry(base, path)
+                      await resolveWorkspaceEntry(
+                        base,
+                        relative(base, resultPath).split(sep).join('/'),
+                        true,
+                      )
+                      return !getOpenDocuments().some(
+                        (draft) => draft.file === resultPath,
+                      )
+                    }).catch((error: unknown) =>
+                      rethrowPartialCopy(error, base, source, resultPath),
+                    ),
+              (moved) =>
+                moved.sourceRemoved
+                  ? [
+                      base,
+                      relative(base, source).split(sep).join('/'),
+                      relative(base, resultPath).split(sep).join('/'),
+                    ]
+                  : null,
+            )
+            if (!moved.sourceRemoved) {
+              try {
+                await refreshWorkspace([
                   relative(base, source).split(sep).join('/'),
                   relative(base, resultPath).split(sep).join('/'),
-                ]
-              : null,
+                ])
+              } catch (error) {
+                console.error(
+                  'workspace refresh after partial move failed:',
+                  error,
+                )
+              }
+              throw new Error(
+                'Destination was created, but the original could not be removed. Both files may exist.',
+              )
+            }
+          },
+          async () => {
+            await renameWithTableLayout(
+              async () => {
+                if (caseOnly) await renameCaseOnly(resultPath, source)
+                else if (
+                  !(await moveEntry(resultPath, source, folder, () => true))
+                    .sourceRemoved
+                )
+                  throw new Error(
+                    'Could not restore the original file or folder.',
+                  )
+              },
+              () => [
+                base,
+                relative(base, resultPath).split(sep).join('/'),
+                relative(base, source).split(sep).join('/'),
+              ],
+            )
+          },
         )
-        if (!moved.sourceRemoved) {
-          try {
-            await refreshWorkspace([
-              relative(base, source).split(sep).join('/'),
-              relative(base, resultPath).split(sep).join('/'),
-            ])
-          } catch (error) {
-            console.error('workspace refresh after partial move failed:', error)
-          }
-          throw new Error(
-            'Destination was created, but the original could not be removed. Both files may exist.',
-          )
-        }
         relocateDocument(source, resultPath)
+        const active = getDocument()
+        if (
+          changedLinks.includes(
+            relative(base, getDocumentPath() ?? '')
+              .split(sep)
+              .join('/'),
+          )
+        )
+          await selectDocumentTab(window, active.tabId, false, true)
       }
       treeChanged = !draft
     }
@@ -288,6 +355,7 @@ export async function workspaceAction(
   const paths = [sourcePath, resultPath]
     .filter((path): path is string => path !== null)
     .map((path) => relative(base, path).split(sep).join('/'))
+    .concat(changedLinks)
   let workspace: WorkspaceReply<boolean> | null
   try {
     workspace = treeChanged

@@ -95,6 +95,11 @@ function harness(t) {
     fileOperationDialogOpened: () => null,
     recoverySettled: () => {},
     withinFileOperation: async (operation) => operation(),
+    BrowserWindow: {
+      fromWebContents: (contents) =>
+        contents === window.webContents ? window : null,
+    },
+    desktopWorkspace: undefined,
     rendererUrl: frame.url,
     isTrustedRendererUrl: (url, expected) => url === expected,
     handle: (channel, handler) => handlers.set(channel, handler),

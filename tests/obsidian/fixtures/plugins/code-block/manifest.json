@@ -1,0 +1,9 @@
+{
+  "id": "code-block",
+  "name": "code block",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Deterministic local editor fixture.",
+  "author": "Hibi tests",
+  "isDesktopOnly": false
+}

@@ -1,5 +1,6 @@
 import { basename } from 'node:path'
 import { type BrowserWindow, shell } from 'electron'
+import { getAddonActivationGeneration } from './addons'
 import {
   getDocument,
   getDocumentPath,
@@ -7,8 +8,8 @@ import {
   loadDocument,
 } from './document'
 import { isDocumentName } from './document-types'
-import { documentMediaPath } from './images'
-import { resolveWikiDocument } from './workspace'
+import { documentMediaPath, resolveDocumentMediaPath } from './images'
+import { resolveWikiDocument, workspaceRoot } from './workspace'
 
 // Remote downloads still use one bounded HTTP response.
 const MAX_REMOTE_DOCUMENT_BYTES = 2 * 1024 * 1024
@@ -34,6 +35,25 @@ export async function openExternalDocumentLink(href: unknown) {
   )
 }
 
+export async function formatDocumentLink(href: unknown, label: unknown) {
+  if (
+    typeof href !== 'string' ||
+    href.length > 8192 ||
+    typeof label !== 'string' ||
+    label.length > 8192
+  )
+    throw new Error('Choose a web link or email address.')
+  const root = workspaceRoot(),
+    note = getDocumentPath()
+  if (!root || !note) return null
+  return (await import('./workspace-obsidian-links')).formatObsidianLink(
+    root,
+    note,
+    href,
+    label,
+  )
+}
+
 export async function openDocumentLink(
   window: BrowserWindow,
   href: unknown,
@@ -45,6 +65,20 @@ export async function openDocumentLink(
     revision !== getDocument().revision
   )
     return null
+  if (/^(?:obsidian:|hibi:\/\/obsidian\/)/i.test(href)) {
+    const receivedAt = Date.now()
+    const generation = getAddonActivationGeneration('obsidian')
+    if (generation === null) return null
+    const { queueObsidianProtocol } = await import(
+      '../addons/obsidian/api/protocol/native'
+    )
+    queueObsidianProtocol(
+      href,
+      () => getAddonActivationGeneration('obsidian') === generation,
+      receivedAt,
+    )
+    return null
+  }
   if (/^(?:https?:|mailto:)/i.test(href)) {
     await openExternalDocumentLink(href)
     return null
@@ -62,7 +96,21 @@ export async function openDocumentLink(
     // A link to this note checks for outside changes like any other open.
     return loadDocument(window, file)
   }
-  let path = documentMediaPath(href.split('#')[0]!, getDocumentPath())
+  const target = href.split('#')[0]!
+  let decoded = target
+  try {
+    decoded = decodeURIComponent(target)
+  } catch {
+    /* Keep literal percent names. */
+  }
+  let path =
+    (await resolveDocumentMediaPath(
+      target,
+      getDocumentPath(),
+      workspaceRoot(),
+    )) ??
+    (await resolveWikiDocument(getDocumentPath(), decoded)) ??
+    documentMediaPath(target, getDocumentPath())
   if (path && !isDocumentName(path)) path += '.md'
   if (!path || !isDocumentName(path))
     throw new Error('Choose a web link, email address, or supported document.')

@@ -40,7 +40,7 @@ test('a failed pre-entry observer preserves the normal renderer diagnostics brid
         },
       }
     },
-    { isMainFrame: true },
+    { isMainFrame: true, contextIsolated: true, argv: [] },
     new EventTarget(),
   )
   try {

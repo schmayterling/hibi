@@ -80,6 +80,11 @@ function harness() {
     fileOperationHasDialog: () => state.dialog,
     fileOperationDialogOpened: noop,
     withinFileOperation: async (operation) => operation(),
+    BrowserWindow: {
+      fromWebContents: (contents) =>
+        contents === window.webContents ? window : null,
+    },
+    desktopWorkspace: undefined,
     rendererUrl: frame.url,
     isTrustedRendererUrl: (url, expected) => url === expected,
     handle: (channel, invoke) => {

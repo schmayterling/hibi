@@ -1,0 +1,107 @@
+/* @settings
+name: Garden layout
+id: garden
+settings:
+	-
+		id: garden-layout
+		title: Layout
+		type: heading
+		level: 2
+		collapsed: true
+	-
+		id: garden-about
+		title: About these options
+		description: They change the garden's spacing and colours.
+		type: info-text
+		markdown: true
+	-
+		id: garden-wide
+		title: Wide lines
+		type: class-toggle
+		default: true
+	-
+		id: garden-quiet
+		title: Quiet headings
+		type: class-toggle
+	-
+		id: garden-density
+		title: Density
+		type: class-select
+		allowEmpty: false
+		default: garden-cozy
+		options:
+			- garden-cozy
+			- label: Compact
+			  value: garden-compact
+			- label: Escape
+			  value: "x { } body"
+	-
+		id: garden-gap
+		title: Gap
+		type: variable-number-slider
+		default: 12
+		min: 0
+		max: 48
+		step: 4
+		format: px
+	-
+		id: garden-font
+		title: Font
+		type: variable-text
+		default: Georgia
+		quotes: true
+	-
+		id: garden-weight
+		title: Weight
+		type: variable-select
+		default: "400"
+		options:
+			- "400"
+			- "600"
+	-
+		id: garden-leaf
+		title: Leaf
+		type: variable-color
+		format: rgb-split
+		default: "#2f6b3a"
+	-
+		id: garden-accent
+		title: Accent
+		type: variable-themed-color
+		format: hex
+		default-light: "#b5541c"
+		default-dark: "#e08a4f"
+	-
+		id: "bad id"
+		type: class-toggle
+	-
+		id: garden-gradient
+		type: color-gradient
+*/
+/*! @settings
+name: Second section
+id: garden-extra
+settings:
+  - id: garden-ratio
+    title: Ratio
+    type: variable-number
+    default: 1.5
+*/
+/* @settings
+name: [broken
+*/
+body {
+  --garden-gap: 12px;
+  --garden-font: Georgia;
+  --garden-leaf-r: 47;
+  --garden-leaf-g: 107;
+  --garden-leaf-b: 58;
+  --garden-accent: #b5541c;
+}
+body.garden-wide { --file-line-width: 60rem; }
+body.garden-compact .HyperMD-header-1 { margin-block: 0; }
+body.garden-quiet { --h1-color: var(--text-muted); }
+.theme-dark { --background-primary: #121a14; }
+.theme-light { --background-primary: #f3f7f1; }
+.cm-strong { color: rgb(var(--garden-leaf-r), var(--garden-leaf-g), var(--garden-leaf-b)); }
+.status-bar { gap: var(--garden-gap); font-family: var(--garden-font); color: var(--garden-accent); }

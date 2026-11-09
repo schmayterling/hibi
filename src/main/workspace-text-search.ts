@@ -119,6 +119,7 @@ class SearchWorker {
         workerData: {
           root: selected,
           database: this.database,
+          dataDirectory: app.getPath('userData'),
           extensions: supported,
           showAllFiles,
         },

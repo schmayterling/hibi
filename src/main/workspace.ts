@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type BigIntStats, type FSWatcher, watch } from 'node:fs'
-import { lstat, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { lstat, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
 import ignore from 'ignore'
@@ -68,6 +68,7 @@ import {
   incompleteMetadataPage,
   WorkspaceMetadataParser,
 } from './workspace-metadata-parser'
+import { obsidianVault } from './workspace-obsidian'
 import { resolveWorkspaceEntry } from './workspace-paths'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import { scanWorkspaceTree } from './workspace-scan'
@@ -360,24 +361,6 @@ export function subscribeWorkspaceChanges(
     includeEntries ? entries : [],
     workspaceStreamStatus(),
   )
-}
-
-async function obsidianVault(
-  base: string,
-): Promise<WorkspaceState['obsidian']> {
-  const settings = join(base, '.obsidian')
-  const folder = await lstat(settings).catch(() => null)
-  if (!folder?.isDirectory() || folder.isSymbolicLink()) return undefined
-  const plugins = join(settings, 'community-plugins.json')
-  const file = await lstat(plugins).catch(() => null)
-  if (!file?.isFile() || file.isSymbolicLink()) return { externalAddons: false }
-  if (file.size > 65536) return { externalAddons: true }
-  try {
-    const enabled = JSON.parse(await readFile(plugins, 'utf8'))
-    return { externalAddons: Array.isArray(enabled) && enabled.length > 0 }
-  } catch {
-    return { externalAddons: false }
-  }
 }
 
 export function workspaceRelativePath(path: string | null): string | null {
@@ -1142,7 +1125,13 @@ export async function resolveWikiDocument(from: string | null, target: string) {
   }
   collect(entries)
   const path = wikiTarget(source, target, paths)
-  return path ? resolveWorkspaceFile(root, path) : null
+  // The tree can still list a file deleted outside Hibi: that target is gone.
+  return path
+    ? resolveWorkspaceFile(root, path).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      })
+    : null
 }
 
 export async function openWorkspaceFile(
@@ -1351,7 +1340,10 @@ export function indexWorkspace(
   return indexJob.request(captured)
 }
 
-function metadataDrafts(selected: string): Map<string, IndexDraft> {
+function metadataDrafts(
+  selected: string,
+  requestedPath?: string,
+): Map<string, IndexDraft> {
   const dirty = new Set(
     getDocumentTabs()
       .filter((tab) => tab.dirty)
@@ -1366,12 +1358,14 @@ function metadataDrafts(selected: string): Map<string, IndexDraft> {
   for (const version of getOpenDocumentVersions()) {
     const path = relativePath(selected, version.file)
     if (
-      !dirty.has(version.tabId) ||
+      (requestedPath === undefined && !dirty.has(version.tabId)) ||
       !path ||
       !isDocumentName(basename(path), true) ||
-      !relevantWatchPath(path) ||
-      path.split('/').includes('node_modules') ||
-      ignoredPaths?.ignores(path)
+      (requestedPath !== undefined
+        ? path !== requestedPath
+        : !relevantWatchPath(path) ||
+          path.split('/').includes('node_modules') ||
+          ignoredPaths?.ignores(path))
     )
       continue
     drafts.set(path, {
@@ -1383,7 +1377,6 @@ function metadataDrafts(selected: string): Map<string, IndexDraft> {
   return drafts
 }
 
-/** Heading text stays on disk; only this requested page crosses the worker boundary. */
 export async function workspaceMetadataHeadings(
   path: string,
   syntax: WorkspaceSyntax,
@@ -1391,14 +1384,49 @@ export async function workspaceMetadataHeadings(
   limit: number,
   current: () => boolean,
 ) {
+  const result = await readWorkspaceNoteMetadata(
+    path,
+    syntax,
+    current,
+    (input, active) =>
+      metadataParser.readHeadings(input, offset, limit, active),
+  )
+  return result?.value ?? null
+}
+
+/** Rich metadata is streamed from this note's worker record, never a whole-vault snapshot. */
+export async function workspaceMetadataDetails(
+  path: string,
+  syntax: WorkspaceSyntax,
+  cursor: number,
+  current: () => boolean,
+) {
+  const result = await readWorkspaceNoteMetadata(
+    path,
+    syntax,
+    current,
+    (input, active) => metadataParser.readDetails(input, cursor, active),
+  )
+  return result ? { ...result.value, version: result.version } : null
+}
+
+async function readWorkspaceNoteMetadata<T>(
+  path: string,
+  syntax: WorkspaceSyntax,
+  current: () => boolean,
+  read: (
+    input: import('./workspace-metadata-parser').CachedMetadataRequest,
+    active: () => boolean,
+  ) => Promise<T | null>,
+): Promise<{ value: T; version: string } | null> {
   const selected = root
   if (!selected) return null
   const revision = indexRevision
   const active = () =>
     current() && root === selected && indexRevision === revision
-  const draft = metadataDrafts(selected).get(path)
+  const draft = metadataDrafts(selected, path).get(path)
   try {
-    const file = draft?.file ?? (await resolveWorkspaceFile(selected, path))
+    const file = draft?.file ?? (await resolveWorkspaceEntry(selected, path))
     if (!active()) return null
     const version = draft
       ? `draft:${draft.tabId}:${draft.contentVersion}`
@@ -1412,14 +1440,9 @@ export async function workspaceMetadataHeadings(
       version,
       fingerprint: syntax.fingerprint,
     }
-    const page = await metadataParser.readHeadings(
-      cached,
-      offset,
-      limit,
-      active,
-    )
+    let value = await read(cached, active)
     if (!active()) return null
-    if (page) return page
+    if (value) return { value, version }
     const input = {
       id,
       path,
@@ -1434,7 +1457,8 @@ export async function workspaceMetadataHeadings(
           active,
         )
     if (!parsed || !active()) return null
-    return await metadataParser.readHeadings(cached, offset, limit, active)
+    value = await read(cached, active)
+    return value && active() ? { value, version } : null
   } catch (error) {
     if (!active() || (error as NodeJS.ErrnoException).code === 'ENOENT')
       return null
@@ -1596,6 +1620,28 @@ async function readMetadataBatch(
       current,
     )
   return current() ? result : []
+}
+
+/** Read one requested file through the existing worker/cache, including its draft. */
+export async function workspaceMetadataFile(
+  path: string,
+  syntax: WorkspaceSyntax,
+  current: () => boolean,
+): Promise<WorkspaceMetadataPage | null> {
+  const selected = root
+  if (!selected) return null
+  const revision = indexRevision
+  const active = () =>
+    current() && root === selected && indexRevision === revision
+  const pages = await readMetadataBatch(
+    [path],
+    selected,
+    syntax,
+    metadataDrafts(selected, path),
+    cachedRoot === selected ? cachedPages : new Map(),
+    active,
+  )
+  return active() ? (pages[0]?.[1].page ?? null) : null
 }
 
 type WorkspaceMetadataRead<Pages> = {

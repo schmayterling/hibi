@@ -32,7 +32,7 @@ test('garden startup requests survive an immediately disposed subscription', asy
       ipcRenderer: transport,
       contextBridge: { exposeInMainWorld: exposed.set.bind(exposed) },
     }),
-    { isMainFrame: true },
+    { isMainFrame: true, contextIsolated: true, argv: [] },
     new EventTarget(),
   )
   const api = exposed.get('hibiTransport')
@@ -76,7 +76,7 @@ for (const [method, channel, arity = 1] of [
         ipcRenderer: transport,
         contextBridge: { exposeInMainWorld: exposed.set.bind(exposed) },
       }),
-      { isMainFrame: true },
+      { isMainFrame: true, contextIsolated: true, argv: [] },
       new EventTarget(),
     )
     const api =

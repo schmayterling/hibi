@@ -39,6 +39,8 @@ export interface CompletionItem {
   readonly preselect?: boolean
   /** False leaves Enter to the editor; 'selected' disables preselection and requires explicit highlighting. Defaults to true. */
   readonly acceptOnEnter?: boolean | 'selected'
+  /** Opaque id, up to 128 characters, that this provider's `onSelect` and `render` read back. Never shown. */
+  readonly data?: string
 }
 
 export type CompletionProvider = (
@@ -52,6 +54,14 @@ export interface CompletionProviderOptions {
     request: CompletionRequest,
     item: CompletionItem,
   ) => void
+  /**
+   * Runs instead of the host's edit when one of this provider's items is
+   * picked; the provider makes its own edits. The item's range is the text
+   * it would have replaced.
+   */
+  readonly onSelect?: (request: CompletionRequest, item: CompletionItem) => void
+  /** Draws an item's row into a real element; its label stays the accessible text. */
+  readonly render?: (item: CompletionItem, element: HTMLElement) => void
 }
 
 /** Context after committed typing; change offsets refer to the previous editor document. */

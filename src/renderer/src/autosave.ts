@@ -279,5 +279,5 @@ export function useAutosave(
             : !document?.canAutosave
               ? 'Save this draft once to choose its location.'
               : `Save after ${settings.delay / 1000} seconds without typing · click to configure`))
-  return { label, tooltip }
+  return { label, tooltip, saving: inFlight.current }
 }

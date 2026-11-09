@@ -14,7 +14,13 @@ const localPath = (base: string, href: string) =>
   base.slice(0, base.lastIndexOf('/') + 1) +
   decodeURIComponent(href.split(/[?#]/)[0]!)
 
-export default function AddonReadme({ id }: { id: string }) {
+export default function AddonReadme({
+  id = '',
+  remote,
+}: {
+  id?: string
+  remote?: { content: string; baseUrl: string }
+}) {
   const [history, setHistory] = useState(['README.md'])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -27,7 +33,9 @@ export default function AddonReadme({ id }: { id: string }) {
     setLoading(true)
     setError('')
     void (async () => {
-      const document = await window.hibi.getAddonDocumentation(id, path)
+      const document = remote
+        ? { kind: 'markdown', content: remote.content }
+        : await window.hibi.getAddonDocumentation(id, path)
       const fragment = DOMPurify.sanitize(
         document.kind === 'markdown'
           ? markdown.parse(document.content, { async: false })
@@ -108,6 +116,12 @@ export default function AddonReadme({ id }: { id: string }) {
             : (image.getAttribute('src') ?? '')
         image.removeAttribute('src')
         if (!active) return
+        if (remote) {
+          image.replaceWith(
+            window.document.createTextNode(image.alt || 'Image omitted'),
+          )
+          continue
+        }
         if (index >= 32 || embedded > 20 * 1024 * 1024) {
           image.remove()
           continue
@@ -162,7 +176,7 @@ export default function AddonReadme({ id }: { id: string }) {
     return () => {
       active = false
     }
-  }, [id, history])
+  }, [id, history, remote])
 
   useEffect(() => {
     if (loading || !pendingAnchor.current) return
@@ -179,7 +193,11 @@ export default function AddonReadme({ id }: { id: string }) {
       event.preventDefault()
       const href = link.getAttribute('href')!
       try {
-        if (href.startsWith('#')) {
+        if (remote && !href.startsWith('#')) {
+          const target = new URL(href, remote.baseUrl)
+          if (target.protocol === 'https:')
+            await window.hibi.openAddonDocumentationLink(target.href)
+        } else if (href.startsWith('#')) {
           host.current
             ?.querySelector(
               `#readme-${CSS.escape(decodeURIComponent(href.slice(1)))}`,
@@ -210,7 +228,7 @@ export default function AddonReadme({ id }: { id: string }) {
         setError(errorMessage(error))
       }
     },
-    [id, path],
+    [id, path, remote],
   )
   useEffect(() => {
     const element = host.current

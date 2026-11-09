@@ -1,0 +1,102 @@
+import assert from 'node:assert/strict'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+/** Only hand-written fixtures under this directory may be executed by tests. */
+export async function readFixturePlugin(id) {
+  assert.match(id, /^[a-z0-9-]+$/)
+  const folder = new URL(`./fixtures/plugins/${id}/`, import.meta.url)
+  return {
+    manifest: JSON.parse(
+      await readFile(new URL('manifest.json', folder), 'utf8'),
+    ),
+    main: await readFile(new URL('main.js', folder), 'utf8'),
+    styles: await readFile(new URL('styles.css', folder), 'utf8').catch(
+      (error) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      },
+    ),
+  }
+}
+
+export async function fixtureVault(
+  t,
+  id = 'host-smoke',
+  { cleanup = true } = {},
+) {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-obsidian-host-')),
+  )
+  const dispose = () => rm(root, { recursive: true, force: true })
+  if (cleanup) t.after(dispose)
+  const vault = join(root, 'vault')
+  const overlay = join(root, 'profile')
+  const plugin = await readFixturePlugin(id)
+  const folder = join(vault, '.obsidian', 'plugins', id)
+  await mkdir(folder, { recursive: true })
+  await mkdir(overlay)
+  await writeFile(
+    join(folder, 'manifest.json'),
+    JSON.stringify(plugin.manifest),
+  )
+  await writeFile(join(folder, 'main.js'), plugin.main)
+  if (plugin.styles) await writeFile(join(folder, 'styles.css'), plugin.styles)
+  await writeFile(
+    join(folder, 'data.json'),
+    '{"enabled":false,"seeded":true}\r\n',
+  )
+  await writeFile(
+    join(vault, 'untouched.md'),
+    '\ufeff# Keep\r\n\r\nUntouched  \r\n',
+  )
+  const before = await snapshot(vault)
+  return {
+    root,
+    dispose,
+    vault,
+    overlay,
+    folder,
+    plugin,
+    assertUnchanged: async () => {
+      const actual = await snapshot(vault)
+      const paths = [
+        ...new Set([...Object.keys(before), ...Object.keys(actual)]),
+      ]
+      assert.deepEqual(
+        paths.filter(
+          (path) =>
+            JSON.stringify(before[path]) !== JSON.stringify(actual[path]),
+        ),
+        [],
+        'Vault files or folders changed.',
+      )
+    },
+  }
+}
+
+async function snapshot(root, prefix = '') {
+  const result = {}
+  for (const entry of await readdir(join(root, prefix), {
+    withFileTypes: true,
+  })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) {
+      result[`${path}/`] = null
+      Object.assign(result, await snapshot(root, path))
+    } else if (entry.isSymbolicLink())
+      result[path] = { link: await readlink(join(root, path)) }
+    else result[path] = (await readFile(join(root, path))).toString('hex')
+  }
+  return result
+}

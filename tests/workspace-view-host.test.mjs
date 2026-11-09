@@ -360,7 +360,9 @@ test('watcher flush starts within one second while content events keep arriving'
   const starts = []
   const lstat = io.lstat
   t.mock.method(io, 'lstat', (path, ...args) => {
-    if (path === join(folder, '.hibi')) starts.push(now)
+    // A flush first probes the workspace's Obsidian, then hibi, settings.
+    if ([join(folder, '.obsidian'), join(folder, '.hibi')].includes(path))
+      starts.push(now)
     return lstat(path, ...args)
   })
   syncBuiltinESMExports()

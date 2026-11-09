@@ -1,0 +1,14 @@
+{
+  "host-smoke": {
+    "downloads": 200,
+    "updated": 1735689600000
+  },
+  "desktop-only": {
+    "downloads": 300,
+    "updated": 1704067200000
+  },
+  "mismatch": {
+    "downloads": 50,
+    "updated": 1767225600000
+  }
+}

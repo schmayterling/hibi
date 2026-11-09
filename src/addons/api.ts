@@ -43,6 +43,8 @@ export type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../shared/markdown-syntax'
+export type { NoteCacheEntry, NotePosition } from '../shared/note-cache'
+export type { NoteMetadataRequest } from '../shared/note-cache-query'
 export type { CodeLanguage } from '../shared/syntax'
 
 import type {
@@ -799,7 +801,7 @@ export type SettingsCategory = {
 export type SettingsPage = {
   id: string
   label: string
-  /** general, editing, interface, addons, or a local category ID. Defaults to addons. */
+  /** general, editing, interface, addons, or a local category ID. Defaults to addons. `appearance` shows the content inside Hibi's Appearance page, below the colorschemes, instead of on a page of its own. */
   category?: string
   icon?: SidebarView['icon']
   /** Use shared SettingRow controls to include individual settings in search. */
@@ -974,7 +976,11 @@ export type AddonContext = {
     onTypingContext: (
       listener: (event: import('../shared/completions').TypingContext) => void,
     ) => () => void
-    /** Data-only suggestions; provider work is bounded and stopped with this addon. */
+    /**
+     * Suggestions; provider work is bounded and stopped with this addon. Items
+     * are data the host applies, unless `onSelect` makes the edit itself;
+     * `render` draws an item's row into a real element.
+     */
     registerCompletionProvider: (
       provider: import('../shared/completions').CompletionProvider,
       options?: import('../shared/completions').CompletionProviderOptions,
@@ -1127,6 +1133,10 @@ export type AddonContext = {
         import('../shared/workspace-query').QueryFailure
       >
     >
+    /** Stream positioned metadata for one note, including unsaved document edits. */
+    metadata: (
+      request: import('../shared/note-cache-query').NoteMetadataRequest,
+    ) => AsyncIterable<import('../shared/note-cache').NoteCacheEntry>
     get: () => Promise<WorkspaceState | null>
     open: () => Promise<WorkspaceState | null>
     openFile: (path: string) => Promise<void>
@@ -1155,6 +1165,8 @@ export type Addon = {
 
 /** Native modules are trusted application code, never loaded from a workspace. */
 export type NativeAddonContext = {
+  /** Main-owned identity of the trusted renderer that made this call. */
+  senderId: number
   /** Whether the activation that started this request is still current. Check before queued writes. */
   isCurrent: () => boolean
   /** Resolve declared tools, including user-selected paths. Native modules must not bypass this for managed dependencies. */

@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
-  "script-src 'self' app://hibi",
+  "script-src 'self' app://hibi app://obsidian-plugins",
   // Editor engines insert stylesheets and layout attributes; scripts stay strict.
   "style-src 'self' app://hibi 'unsafe-inline'",
   // Notes may show images from any HTTPS site, as other Markdown apps do. The

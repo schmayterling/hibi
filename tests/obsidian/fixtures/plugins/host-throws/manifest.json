@@ -1,0 +1,9 @@
+{
+  "id": "host-throws",
+  "name": "Host throws",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Exercise disable after a throwing unload hook.",
+  "author": "Hibi tests",
+  "isDesktopOnly": false
+}

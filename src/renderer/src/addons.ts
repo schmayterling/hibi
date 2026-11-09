@@ -428,7 +428,10 @@ export function useAddons(
         manifests,
         states.map((state) => ({
           ...state,
-          enabled: state.enabled && settled.get(state.id) !== false,
+          enabled:
+            state.enabled &&
+            settled.get(state.id) !== false &&
+            !addonRegistry.paused(state.id),
         })),
       ),
     [manifests, states, settled],
@@ -1334,6 +1337,16 @@ export function useAddons(
         call: () => Promise<T>,
         error = () => new Error('This addon has stopped.'),
       ) => (disposed ? Promise.reject(error()) : call())
+      const queryWorkspace: AddonContext['workspace']['query'] = (request) =>
+        live(() =>
+          window.hibi.queryWorkspaceReferences({
+            ...request,
+            syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
+              currentActivation.current.available.has('tags'),
+              [...extensions.values()],
+            ),
+          }),
+        )
       const track = (remove: () => void) => {
         const cleanup = () => {
           remove()
@@ -2314,16 +2327,12 @@ export function useAddons(
                     expectedVersion,
                   ),
                 ),
-              query: (request) =>
-                live(() =>
-                  window.hibi.queryWorkspaceReferences({
-                    ...request,
-                    syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
-                      currentActivation.current.available.has('tags'),
-                      [...extensions.values()],
-                    ),
-                  }),
-                ),
+              query: queryWorkspace,
+              metadata: async function* (request) {
+                yield* (
+                  await import('../../shared/note-cache-query')
+                ).iterateNoteMetadata(queryWorkspace, request)
+              },
               index: () =>
                 live(
                   () => latest.current.workspace.index(),

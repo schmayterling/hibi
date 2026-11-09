@@ -9,12 +9,16 @@ export const frontmatterProbe = { lines: 0, parses: 0, search: 1 << 16 }
 export const yamlLines = (yaml: string) => yaml.replace(/\r\n?/g, '\n')
 
 /** recognition needs the mapping shape, not duplicate-key diagnostics. */
-export function isFrontmatterMapping(yaml: string) {
+export function isFrontmatterMapping(yaml: string, allowEmpty = false) {
   frontmatterProbe.parses++
   try {
-    return isMap(
-      parseDocument(yamlLines(yaml), { uniqueKeys: false, prettyErrors: false })
-        .contents,
+    const document = parseDocument(yamlLines(yaml), {
+      uniqueKeys: false,
+      prettyErrors: false,
+    })
+    return (
+      isMap(document.contents) ||
+      (allowEmpty && document.contents === null && !document.errors.length)
     )
   } catch {
     return false
@@ -22,7 +26,7 @@ export function isFrontmatterMapping(yaml: string) {
 }
 
 /** A divider alone is Markdown. Frontmatter needs a closed metadata mapping. */
-export function readFrontmatter(source: string) {
+export function readFrontmatter(source: string, allowEmpty = false) {
   const opening = /^(?:\uFEFF)?---[ \t]*(\r\n?|\n)/.exec(source)
   if (!opening) return null
   const closing = /^(?:---|\.\.\.)[ \t]*(?:\r\n?|\n|$)/m.exec(
@@ -34,7 +38,7 @@ export function readFrontmatter(source: string) {
     opening[0].length + closing.index,
   )
   // Keep malformed mappings recognizable so the addon can offer YAML repair.
-  if (!isFrontmatterMapping(yaml)) return null
+  if (!isFrontmatterMapping(yaml, allowEmpty)) return null
   const end = opening[0].length + closing.index + closing[0].length
   const spacing = /^(?:[ \t]*(?:\r\n?|\n))*/.exec(source.slice(end))?.[0] ?? ''
   const prefix = source.slice(0, end + spacing.length)

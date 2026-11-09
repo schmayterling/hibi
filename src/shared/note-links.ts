@@ -43,12 +43,7 @@ export function localTarget(
 
 export function wikiTargetName(target: string): string | null {
   const file = target.split('#', 1)[0]?.trim() ?? ''
-  if (
-    file.includes('\\') ||
-    file.includes('\0') ||
-    file.split('/').includes('..')
-  )
-    return null
+  if (file.includes('\\') || file.includes('\0')) return null
   return file
 }
 
@@ -59,19 +54,54 @@ export function resolveWikiTarget(
   basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
   if (!file) return from
-  const name = file.replace(/^\//, '')
-  const candidates = name.endsWith('.md') ? [name] : [name, `${name}.md`]
+  const fold = (value: string) => value.normalize('NFC').toLowerCase()
+  if (/^(?:\.{1,2}\/|\/)/.test(file)) {
+    const path = localTargetPath(from, file)
+    if (path === null) return null
+    const exact = resolveLocalTarget(path, paths)
+    if (exact) return exact
+    const matches = [...paths].filter(
+      (candidate) =>
+        fold(candidate) === fold(path) ||
+        fold(candidate) === fold(path + '.md'),
+    )
+    return matches.length === 1 ? (matches[0] ?? null) : null
+  }
+  if (file.split('/').includes('..')) return null
+  const name = file
+  const candidates = /\.md$/i.test(name) ? [name] : [name, `${name}.md`]
   const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : ''
   for (const candidate of candidates) {
     if (paths.has(candidate)) return candidate
     const beside = parent ? `${parent}/${candidate}` : candidate
     if (paths.has(beside)) return beside
   }
-  if (name.includes('/')) return null
-  const matches = basenames
-    ? candidates.flatMap((candidate) => basenames.get(candidate) ?? [])
+  for (const candidate of candidates) {
+    for (const location of [
+      candidate,
+      parent ? `${parent}/${candidate}` : candidate,
+    ]) {
+      const matches = [...paths].filter((path) => fold(path) === fold(location))
+      if (matches.length) return matches.length === 1 ? matches[0]! : null
+    }
+  }
+  if (name.includes('/')) {
+    const matches = [...paths].filter((path) =>
+      candidates.some((candidate) =>
+        fold(path).endsWith(`/${fold(candidate)}`),
+      ),
+    )
+    return matches.length === 1 ? matches[0]! : null
+  }
+  const exact =
+    basenames &&
+    candidates.flatMap((candidate) => basenames.get(candidate) ?? [])
+  const matches = exact?.length
+    ? exact
     : [...paths].filter((path) =>
-        candidates.some((candidate) => path.split('/').at(-1) === candidate),
+        candidates.some(
+          (candidate) => fold(path.split('/').at(-1) ?? '') === fold(candidate),
+        ),
       )
   return matches.length === 1 ? (matches[0] ?? null) : null
 }

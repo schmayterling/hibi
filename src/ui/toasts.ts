@@ -16,6 +16,8 @@ export type ToastAction = {
 }
 export type ToastOptions = {
   message: string
+  /** Live addon content inside Hibi's standard notification shell. Message remains its text alternative. */
+  content?: import('react').ReactNode
   description?: string
   variant?: 'info' | 'success' | 'error'
   /** Milliseconds; zero keeps the notification until dismissed. */

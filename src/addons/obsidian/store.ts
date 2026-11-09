@@ -447,13 +447,14 @@ export class ObsidianStore {
       try {
         await rename(staging, destination)
       } catch (error) {
-        if (
-          !['EEXIST', 'ENOTEMPTY'].includes(
-            (error as NodeJS.ErrnoException).code ?? '',
-          )
+        const code = (error as NodeJS.ErrnoException).code ?? ''
+        // Windows refuses a folder already at the destination with EPERM.
+        if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(code)) throw error
+        const existing = await readObsidianPackage(destination).catch(
+          (reason) => {
+            throw code === 'EPERM' ? error : reason
+          },
         )
-          throw error
-        const existing = await readObsidianPackage(destination)
         if (existing.hash !== source.hash)
           throw new Error('The stored plugin hash does not match.')
       }

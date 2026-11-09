@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import fsPromises, {
+  mkdir,
+  readFile,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createServer } from 'vite'
@@ -172,6 +179,46 @@ test('stored package integrity is checked before enabling or serving', async (t)
   await assert.rejects(store.setEnabled('host-smoke', true), /hash/)
   await store.setEnabled('host-smoke', false)
   assert.equal((await store.list())[0].enabled, false)
+  await fixture.assertUnchanged()
+})
+
+test('reinstalling a stored package survives the Windows folder rename refusal', async (t) => {
+  const server = await createServer({
+    configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom',
+  })
+  t.after(() => server.close())
+  const { ObsidianStore, readObsidianPackage } = await server.ssrLoadModule(
+    '/src/addons/obsidian/store.ts',
+  )
+  const fixture = await fixtureVault(t)
+  const store = new ObsidianStore(join(fixture.overlay, 'win'), fixture.vault)
+  const source = await readObsidianPackage(fixture.folder)
+  // Windows refuses a folder rename onto an existing folder with EPERM.
+  const rename = fsPromises.rename
+  let refusal = null
+  fsPromises.rename = async (from, to) => {
+    if (refusal) throw refusal
+    if (existsSync(to) && statSync(from).isDirectory())
+      throw Object.assign(new Error('operation not permitted'), {
+        code: 'EPERM',
+      })
+    return rename(from, to)
+  }
+  syncBuiltinESMExports()
+  t.after(() => {
+    fsPromises.rename = rename
+    syncBuiltinESMExports()
+  })
+  await store.install(source)
+  await store.install(source)
+  assert.equal((await store.list())[0].hash, source.hash)
+  // A refusal with nothing stored keeps its own error.
+  refusal = Object.assign(new Error('denied'), { code: 'EPERM' })
+  const other = new ObsidianStore(join(fixture.overlay, 'other'), fixture.vault)
+  await assert.rejects(other.install(source), /denied/)
   await fixture.assertUnchanged()
 })
 

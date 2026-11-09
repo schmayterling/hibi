@@ -56,6 +56,74 @@ function positioned(source, row) {
   assert.deepEqual(end, location(source, end.offset))
 }
 
+function bomEntries(source) {
+  const rows = entries(source)
+  for (const { kind, value } of rows)
+    for (const [edge, loc] of Object.entries(value.position)) {
+      if (
+        edge === 'start' &&
+        (kind === 'frontmatter' ||
+          (kind === 'section' && value.type === 'yaml'))
+      )
+        continue
+      loc.offset++
+      if (loc.line === 0) loc.col++
+    }
+  return rows
+}
+
+for (const [name, first] of [
+  ['paragraph', '   #tag [[x]]'],
+  ['heading', '   # H'],
+  ['nested list', '- a ^id\n  - b'],
+])
+  for (const [ending, eol] of [
+    ['lf', '\n'],
+    ['crlf', '\r\n'],
+    ['bare cr', '\r'],
+  ])
+    test(`leading bom preserves ${name} grammar and raw positions with ${ending}`, () => {
+      const body = first.replaceAll('\n', eol)
+      for (const note of [body, `${body}${eol}${eol}later 😀 #later [[y]]`]) {
+        const source = `\uFEFF${note}`
+        const rows = entries(source)
+        assert.deepEqual(rows, bomEntries(note))
+        for (const row of rows) positioned(source, row)
+      }
+    })
+
+test('leading bom preserves frontmatter seam and property spans across line endings', () => {
+  for (const eol of ['\n', '\r\n', '\r'])
+    for (const yaml of [
+      'link: "[[Notes\\u002fDaily]]"',
+      '',
+      'bad: [',
+      '- sequence',
+    ]) {
+      const body = ['---', yaml, '---', '   # H', '- a ^id', '  - b'].join(eol)
+      const source = `\uFEFF${body}`
+      const rows = entries(source)
+      assert.deepEqual(rows, bomEntries(body), JSON.stringify(source))
+      for (const row of rows) positioned(source, row)
+    }
+})
+
+test('empty and bom-only notes have no entries and complete metadata', () => {
+  for (const source of ['', '\uFEFF']) {
+    const parsed = noteCacheParse(source)
+    assert.deepEqual(
+      [...noteCacheEntries(source, defaultNoteSyntax, parsed)],
+      [],
+    )
+    assert.deepEqual(parsed.flags, {
+      references: true,
+      headings: true,
+      frontmatter: true,
+      properties: true,
+    })
+  }
+})
+
 test('rich cache keeps raw crlf/bom/utf16 positions and nested block ownership', () => {
   const source =
     '\uFEFF# **hé😀** [[target|alias]]\r\n\r\n> - [x] #Raw/Tag [local](./a.md) ^item\r\n>   - child ![[image.png|alt]]\r\n\r\nparagraph 😀\r\nsecond ^para\r\n'
@@ -322,21 +390,24 @@ test('single markdown and yaml parse covers body and property references', () =>
     return yaml.apply(this, args)
   }
   try {
-    const source = '---\nnested: {link: "[[property]]"}\n---\n# body [[body]]'
-    const parsed = noteCacheParse(source)
-    const first = [...noteCacheEntries(source, defaultNoteSyntax, parsed)]
-    assert.equal(markdownCount, 1)
-    assert.equal(yamlCount, 1)
-    assert.deepEqual(
-      values(first, 'frontmatterLink').map((link) => link.link),
-      ['property'],
-    )
-    assert.deepEqual(
-      [...noteCacheEntries(source, defaultNoteSyntax, parsed)],
-      first,
-    )
-    assert.equal(markdownCount, 1)
-    assert.equal(yamlCount, 1)
+    for (const prefix of ['', '\uFEFF']) {
+      markdownCount = yamlCount = 0
+      const source = `${prefix}---\nnested: {link: "[[property]]"}\n---\n# body [[body]]`
+      const parsed = noteCacheParse(source)
+      const first = [...noteCacheEntries(source, defaultNoteSyntax, parsed)]
+      assert.equal(markdownCount, 1)
+      assert.equal(yamlCount, 1)
+      assert.deepEqual(
+        values(first, 'frontmatterLink').map((link) => link.link),
+        ['property'],
+      )
+      assert.deepEqual(
+        [...noteCacheEntries(source, defaultNoteSyntax, parsed)],
+        first,
+      )
+      assert.equal(markdownCount, 1)
+      assert.equal(yamlCount, 1)
+    }
   } finally {
     MarkdownParser.prototype.createParse = markdown
     YAMLParser.prototype.parse = yaml

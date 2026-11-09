@@ -19,6 +19,7 @@ function session(raw) {
   const state = { raw, version: 1, undo: [], redo: [], selection: [0, 0] }
   const requests = []
   const notices = []
+  const completions = new Set()
   const features = { source: new Map(), formatted: new Map() }
   const panes = ['left', 'right'].map((viewId) => ({
     ...document,
@@ -57,6 +58,11 @@ function session(raw) {
       registerSource: register(features.source),
       registerFormatted: register(features.formatted),
       renderMarkdown: (source) => ({ html: `<p>${source}</p>`, css: '' }),
+      async registerCompletionProvider(provider, options) {
+        const entry = { provider, options }
+        completions.add(entry)
+        return () => completions.delete(entry)
+      },
       async runCommand(command) {
         const [from, to] =
           command === 'undo'
@@ -133,7 +139,16 @@ function session(raw) {
         feature.create({ viewId }),
       ),
     })
-  return { hibi, state, requests, notices, features, panes, editorState }
+  return {
+    hibi,
+    state,
+    requests,
+    notices,
+    features,
+    panes,
+    editorState,
+    completions,
+  }
 }
 
 async function host(t, hibi) {
@@ -350,28 +365,80 @@ test('code block processors render fences in the formatted view until unload', a
   await vault.assertUnchanged()
 })
 
-test('editor suggestions are refused once per plugin without failing its load', async (t) => {
-  const { hibi, notices } = session('')
-  const { load, exports } = await host(t, hibi)
-  const plugin = await load({
+test('EditorSuggest triggers, lists, renders and selects through Hibi completions until unload', async (t) => {
+  const { hibi, state, requests, panes, completions } = session('hi @al\r\n')
+  const { load } = await host(t, hibi)
+  const { plugin } = await load({
     plugin: {
-      manifest: { id: 'suggest', name: 'Suggest' },
+      manifest: { id: 'mention', name: 'Mention' },
       main: `const { Plugin, EditorSuggest } = require('obsidian')
-        class Suggest extends EditorSuggest {}
+        class People extends EditorSuggest {
+          onTrigger(cursor, editor) {
+            const line = editor.getLine(cursor.line).slice(0, cursor.ch)
+            const at = line.lastIndexOf('@')
+            if (at < 0) return null
+            return {
+              start: { line: cursor.line, ch: at },
+              end: cursor,
+              query: line.slice(at + 1),
+            }
+          }
+          async getSuggestions(context) {
+            return ['alice', 'alan', 'bob'].filter((name) =>
+              name.startsWith(context.query),
+            )
+          }
+          renderSuggestion(value, el) {
+            el.textContent = value
+          }
+          selectSuggestion(value) {
+            const { editor, start, end } = this.context
+            editor.replaceRange('@' + value + ' ', start, end)
+          }
+        }
         module.exports = class extends Plugin {
           onload() {
-            this.registerEditorSuggest(new Suggest(this.app))
-            this.registerEditorSuggest(new Suggest(this.app))
-            this.loaded = true
+            this.registerEditorSuggest(new People(this.app))
           }
         }`,
     },
   })
-  assert.equal(plugin.plugin.loaded, true)
-  assert.deepEqual(notices, [
-    'Suggest: editor suggestions are not supported in Hibi.',
-  ])
-  assert.equal(typeof exports.EditorSuggest, 'function')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(completions.size, 1)
+  const [{ provider, options }] = completions
+  const request = (head) => ({
+    view: panes[0],
+    contentVersion: state.version,
+    editor: 'source',
+    documentLength: 6,
+    selection: { anchor: head, head },
+    before: '',
+    after: '',
+    trigger: { kind: 'input', character: 'l' },
+  })
+  const signal = new AbortController().signal
+  assert.deepEqual(await provider(request(2), signal), [])
+  const items = await provider(request(6), signal)
+  assert.deepEqual(
+    items.map(({ label, from, to, insertText }) => [
+      label,
+      from,
+      to,
+      insertText,
+    ]),
+    [
+      ['alice', 3, 6, ''],
+      ['alan', 3, 6, ''],
+    ],
+  )
+  const element = { textContent: '' }
+  options.render(items[1], element)
+  assert.equal(element.textContent, 'alan')
+  options.onSelect(request(6), items[0])
+  assert.equal(requests.length, 1)
+  assert.equal(state.raw, 'hi @alice \r\n')
+  plugin.unload()
+  assert.equal(completions.size, 0)
 })
 
 test('plugins import the editor’s own CodeMirror and Lezer modules', async () => {

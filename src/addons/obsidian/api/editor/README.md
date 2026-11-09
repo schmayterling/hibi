@@ -6,4 +6,6 @@
 
 Code block processors render fenced blocks in the formatted view through Hibi's fenced widget hook; `getSectionInfo` reports the fence's lines and `sourcePath` the note of the pane the block is in. Post processors run on `MarkdownRenderer.render` output, not on the live editor. `MarkdownRenderer.render` sanitizes the Markdown it renders, including inline styles.
 
-Plugins are not sandboxed. Code block and post processors receive real DOM elements, like Hibi's widget API, and their own output is not sanitized. `EditorSuggest` is refused: Hibi's completions are data-only, and a plugin's `selectSuggestion` cannot run.
+`registerEditorSuggest` adds the suggest as a source of Hibi's completion list, beside Hibi's own sources. Each typed character asks `onTrigger`; `getSuggestions` may be asynchronous. The list shows up to 20 suggestions, drawn by `renderSuggestion`, and its own keys move, pick and close it; picking runs `selectSuggestion`, which makes the edit. Keys registered on the suggest's `scope` and `setInstructions` hints are not used.
+
+Plugins are not sandboxed. Code block processors, post processors and `renderSuggestion` receive real DOM elements, like Hibi's widget API, and their own output is not sanitized.

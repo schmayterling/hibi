@@ -161,6 +161,47 @@ test('trusted API fixture has main-process networking, real moment and local pro
   const scriptResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname.endsWith('/main.js'),
   )
+  await page.evaluate(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'globalThis')
+    const state = {
+      descriptor,
+      stolen: [],
+      calls: 0,
+      shadowed: false,
+    }
+    window.__apiShadowProbe = state
+    const fake = Object.create(window)
+    Object.defineProperty(fake, '__hibiObsidianHost', {
+      value: {
+        take(identity) {
+          state.calls++
+          Object.defineProperty(window, 'globalThis', descriptor)
+          const bridge = window.__hibiObsidianHost.take(identity)
+          return {
+            ...bridge,
+            activate(token) {
+              state.stolen.push(token)
+              bridge.activate(token)
+            },
+          }
+        },
+      },
+    })
+    new MutationObserver((records, observer) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (node.tagName !== 'SCRIPT' || !node.src.includes('/main.js?load='))
+            continue
+          observer.disconnect()
+          state.shadowed = true
+          Object.defineProperty(window, 'globalThis', {
+            configurable: true,
+            writable: true,
+            value: fake,
+          })
+        }
+    }).observe(document.head, { childList: true })
+  })
   await enabled.click()
   await page.waitForFunction(
     () => window.__apiParity?.rendered && !window.__apiParity.plugin.isUnloaded,
@@ -175,6 +216,54 @@ test('trusted API fixture has main-process networking, real moment and local pro
     'main must mint a capability while loading the plugin script',
   )
   const capability = capabilityMatch[1]
+  await t.test(
+    'shadowing globalThis cannot intercept script activation or native network authority',
+    async () => {
+      const result = await page.evaluate(async (base) => {
+        const state = window.__apiShadowProbe
+        Object.defineProperty(window, 'globalThis', state.descriptor)
+        const id = (await window.hibi.queryAddon('obsidian', 'list', {})).find(
+          (plugin) => plugin.enabled,
+        ).manifest.id
+        let direct
+        if (state.stolen.length) {
+          direct = (
+            await window.hibi.invokeAddonProfile('obsidian', 'requestUrl', {
+              id,
+              capability: state.stolen.at(-1),
+              requestId: crypto.randomUUID(),
+              request: {
+                url: base + '/shadow-theft',
+                method: 'POST',
+                body: 'x',
+              },
+            })
+          ).status
+        }
+        return {
+          calls: state.calls,
+          stolen: state.stolen.length,
+          shadowed: state.shadowed,
+          direct,
+          realStatus: (
+            await window.__apiParity.requestUrl(base + '/shadow-real-plugin')
+          ).status,
+        }
+      }, base)
+      assert.equal(
+        hits.includes('/shadow-theft'),
+        false,
+        'globalThis shadow stole native network authority',
+      )
+      assert.deepEqual(result, {
+        calls: 0,
+        stolen: 0,
+        shadowed: true,
+        direct: undefined,
+        realStatus: 200,
+      })
+    },
+  )
   await t.test(
     'script replays cannot replace the bridge, steal a capability or revoke the loaded plugin',
     async () => {

@@ -10,6 +10,8 @@ interface PluginRequestCapability extends PluginRequestScope {
   id: string
   hash: string
   controller: AbortController
+  activated: boolean
+  createdAt: number
 }
 const grants = new Map<string, PluginRequestCapability>()
 const scriptLoads = new Map<
@@ -35,6 +37,12 @@ function pruneScriptLoads() {
   for (const [nonce, load] of scriptLoads)
     if (!load.isCurrent() || Date.now() - load.createdAt >= 60000)
       scriptLoads.delete(nonce)
+  for (const grant of grants.values())
+    if (
+      !grant.activated &&
+      (!grant.isCurrent() || Date.now() - grant.createdAt >= 60000)
+    )
+      revokePluginRequestCapability(grant.token)
 }
 
 /** A ticket permits one script response, never a renderer-readable capability. */
@@ -77,6 +85,7 @@ export function consumePluginScriptLoad(
     if (
       grant.id === id &&
       grant.senderId === scope.senderId &&
+      grant.activated &&
       grant.isCurrent()
     )
       return undefined
@@ -91,12 +100,19 @@ export function mintPluginRequestCapability(
   id: string,
   hash: string,
   scope: PluginRequestScope,
+  activated = true,
 ): string {
   checkScope(id, hash, scope)
+  pruneScriptLoads()
+  if (
+    !activated &&
+    [...grants.values()].filter((grant) => !grant.activated).length >= 128
+  )
+    throw new Error('Too many pending plugin loads.')
   for (const grant of grants.values())
     if (
       !grant.isCurrent() ||
-      (grant.id === id && grant.senderId === scope.senderId)
+      (activated && grant.id === id && grant.senderId === scope.senderId)
     )
       revokePluginRequestCapability(grant.token)
   const token = randomUUID()
@@ -106,6 +122,8 @@ export function mintPluginRequestCapability(
     id,
     hash,
     controller: new AbortController(),
+    activated,
+    createdAt: Date.now(),
   })
   return token
 }
@@ -114,18 +132,47 @@ export function requirePluginRequestCapability(
   id: unknown,
   token: unknown,
   senderId: number,
+  allowPending = false,
 ) {
   const grant = typeof token === 'string' ? grants.get(token) : undefined
   if (
     !grant ||
     grant.id !== id ||
     grant.senderId !== senderId ||
+    (!allowPending && !grant.activated) ||
+    (!grant.activated && Date.now() - grant.createdAt >= 60000) ||
     !grant.isCurrent()
   ) {
     if (grant && !grant.isCurrent()) revokePluginRequestCapability(grant.token)
     throw new Error('This plugin network capability is missing or expired.')
   }
   return grant
+}
+
+export function activatePluginRequestCapability(
+  id: unknown,
+  token: unknown,
+  senderId: number,
+): void {
+  const grant = requirePluginRequestCapability(id, token, senderId, true)
+  for (const other of grants.values())
+    if (
+      other !== grant &&
+      other.id === grant.id &&
+      other.senderId === senderId &&
+      other.activated &&
+      other.isCurrent()
+    )
+      throw new Error('This plugin load is no longer current.')
+  grant.activated = true
+  for (const other of grants.values())
+    if (
+      other !== grant &&
+      other.id === grant.id &&
+      other.senderId === senderId &&
+      !other.activated
+    )
+      revokePluginRequestCapability(other.token)
 }
 
 export function revokePluginRequestCapability(token: string): void {

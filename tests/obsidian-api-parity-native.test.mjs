@@ -493,6 +493,62 @@ test('script load tickets are single-use, short-lived and bound to sender, packa
   )
 })
 
+test('an unclaimed script grant cannot preempt the real plugin load', async (t) => {
+  const load = await modules(t)
+  const capabilities = await load('network/capabilities.ts')
+  const native = await load('network/native.ts')
+  t.after(() => native.stopRequestUrls())
+  const scope = { senderId: 7, isCurrent: () => true }
+  const hash = 'a'.repeat(64)
+  const orphan = capabilities.mintPluginRequestCapability(
+    'fixture',
+    hash,
+    scope,
+    false,
+  )
+  const ticket = capabilities.preparePluginScriptLoad('fixture', hash, scope)
+  assert.ok(
+    capabilities.consumePluginScriptLoad('fixture', hash, ticket, scope),
+    'orphan cannot block genuine script',
+  )
+  const token = capabilities.mintPluginRequestCapability(
+    'fixture',
+    hash,
+    scope,
+    false,
+  )
+  capabilities.mintPluginRequestCapability('fixture', hash, scope, false)
+  await assert.rejects(
+    native.requestUrlNative(
+      {
+        id: 'fixture',
+        capability: token,
+        requestId: crypto.randomUUID(),
+        request: { url: 'http://localhost' },
+      },
+      async () => {},
+      7,
+    ),
+    /capability/,
+  )
+  capabilities.activatePluginRequestCapability('fixture', token, 7)
+  assert.equal(
+    capabilities.requirePluginRequestCapability('fixture', token, 7).token,
+    token,
+  )
+  assert.throws(
+    () =>
+      capabilities.requirePluginRequestCapability('fixture', orphan, 7, true),
+    /capability/,
+  )
+  const next = capabilities.preparePluginScriptLoad('fixture', hash, scope)
+  assert.equal(
+    capabilities.consumePluginScriptLoad('fixture', hash, next, scope),
+    undefined,
+    'activated plugin keeps its grant',
+  )
+})
+
 test('invalidation during authorization rechecks and revokes the grant before transport', async (t) => {
   const load = await modules(t)
   const capabilities = await load('network/capabilities.ts')

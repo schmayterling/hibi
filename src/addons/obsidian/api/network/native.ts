@@ -87,6 +87,7 @@ export async function releaseRequestUrl(input: unknown, senderId: number) {
     data?.id,
     data?.capability,
     senderId,
+    true,
   )
   revokePluginRequestCapability(grant.token)
 }

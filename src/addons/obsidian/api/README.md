@@ -29,9 +29,14 @@ renderer obtains a sender- and package-bound load ticket through
 `preparePluginLoad`; main consumes it once when serving the script, within
 60 seconds. Bare, replayed, expired, and mismatched script URLs mint no
 capability. A pending script cannot replace a running plugin's grant.
+A served grant stays pending, unusable for requests, until the script's private
+bridge acknowledges it through `activateRequestUrl`; only an activated grant
+reserves the plugin, so a ticket redeemed by a script that never reached the
+bridge cannot block the real load, and pending grants expire after 60 seconds.
 The script bridge stays frozen and non-configurable for the renderer realm's
-lifetime, including addon disable and re-enable. Its lookup uses captured Map
-methods. These checks prevent direct bridge replacement and script replay;
+lifetime, including addon disable and re-enable. The wrapper reads it through
+`window`, which page code cannot redefine, never through `globalThis`, which it
+can. Its lookup uses captured Map methods. These checks prevent direct bridge replacement and script replay;
 plugins still share the renderer realm. Prototype poisoning and interference
 with other shared JavaScript or DOM objects remain possible, so this is not
 a sandbox against hostile code already executing in that realm.

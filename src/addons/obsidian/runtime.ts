@@ -2,6 +2,7 @@ import { errorMessage } from '../../shared/errors'
 import type { AddonContext } from '../api'
 import { createCoreApi } from './api/core'
 import { Component } from './api/core/component'
+import { reportError } from './api/core/events'
 import { Keymap, Scope } from './api/core/keymap'
 import type { Plugin } from './api/core/plugin'
 import { prepareMoment } from './api/moment'
@@ -245,6 +246,15 @@ export class ObsidianHost {
         `${base.replace('app://hibi/', 'app://obsidian-plugins/')}/main.js?load=${nonce}`,
         (token) => {
           capability = token
+          void invokeObsidianProfile('activateRequestUrl', {
+            id: manifest.id,
+            capability: token,
+          }).catch((error) => {
+            if (!owner.isUnloaded) {
+              reportError(error)
+              owner.unload()
+            }
+          })
         },
       )
       if (this.stopped) throw new Error('This plugin host has stopped.')

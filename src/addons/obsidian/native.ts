@@ -5,6 +5,7 @@ import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { createMetadataNative } from './api/metadata/native'
 import {
+  activatePluginRequestCapability,
   consumePluginScriptLoad,
   mintPluginRequestCapability,
   type PluginRequestScope,
@@ -256,7 +257,7 @@ export async function obsidianPluginAsset(
         body: wrapObsidianPlugin(
           source.main.toString('utf8'),
           `${identity}:${id}:${hash}:${nonce}`,
-          mintPluginRequestCapability(id, hash, load),
+          mintPluginRequestCapability(id, hash, load, false),
         ),
         type: 'text/javascript; charset=utf-8',
       }
@@ -341,6 +342,15 @@ export default {
     },
   },
   profileMethods: {
+    async activateRequestUrl(input, context) {
+      addonCheck(context)
+      const data = input as { id?: unknown; capability?: unknown } | null
+      activatePluginRequestCapability(
+        data?.id,
+        data?.capability,
+        context.senderId,
+      )
+    },
     async preparePluginLoad(input, context) {
       const place = await globalPlace(input, context)
       const id = pluginId(place.data)

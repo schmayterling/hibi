@@ -175,18 +175,20 @@ test('CommonJS script wrapper reports refused fixture imports without executing 
   const fixture = await readFixturePlugin('host-denied')
   let failure
   vm.runInNewContext(wrapObsidianPlugin(fixture.main, 'fixture'), {
-    __hibiObsidianHost: {
-      take(identity) {
-        assert.equal(identity, 'fixture')
-        return {
-          require: requireObsidianHostModule,
-          loaded() {
-            assert.fail('denied fixture loaded')
-          },
-          failed(error) {
-            failure = error.message
-          },
-        }
+    window: {
+      __hibiObsidianHost: {
+        take(identity) {
+          assert.equal(identity, 'fixture')
+          return {
+            require: requireObsidianHostModule,
+            loaded() {
+              assert.fail('denied fixture loaded')
+            },
+            failed(error) {
+              failure = error.message
+            },
+          }
+        },
       },
     },
   })
@@ -394,7 +396,7 @@ test('plugin command IDs survive replacement by a package with a new content has
     queueMicrotask(() => {
       vm.runInNewContext(
         wrapObsidianPlugin(fixture.main, script.dataset.obsidianPlugin),
-        { __hibiObsidianHost: window.__hibiObsidianHost },
+        { window },
       )
       script.onload?.()
     })
@@ -479,7 +481,7 @@ test('disabling a plugin cancels resources during pending onload and cannot revi
       vm.runInNewContext(
         wrapObsidianPlugin(source, script.dataset.obsidianPlugin),
         {
-          __hibiObsidianHost: window.__hibiObsidianHost,
+          window,
           fixtureState: state,
           document,
         },

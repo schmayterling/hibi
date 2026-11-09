@@ -65,6 +65,12 @@ test('handwritten vault plugin runs through real native handlers and preserves p
     .click()
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.getByRole('button', { name: 'Install copy', exact: true }).click()
+  // A plugin that throws during load reports it here; the wait below names it.
+  await page.evaluate(() =>
+    window.addEventListener('hibi:obsidian-host-state', (event) => {
+      globalThis.obsidianHostState = event.detail
+    }),
+  )
   await page
     .getByRole('checkbox', { name: 'Enable Vault API fixture', exact: true })
     .click()
@@ -74,6 +80,8 @@ test('handwritten vault plugin runs through real native handlers and preserves p
   await waitForAsync(
     page,
     async (vaultId) => {
+      const failure = globalThis.obsidianHostState?.['vault-api']
+      if (failure) throw new Error(`vault-api plugin failed: ${failure}`)
       const data = await window.hibi.queryAddon('obsidian', 'data', {
         vaultId,
         id: 'vault-api',

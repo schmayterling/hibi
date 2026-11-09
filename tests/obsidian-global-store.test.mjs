@@ -101,6 +101,7 @@ async function setup(t, native = false) {
     '/src/addons/obsidian/store.ts',
   )
   const context = {
+    senderId: 1,
     isCurrent: () => state.current,
     workspace: {
       id: () => state.identity,
@@ -289,11 +290,29 @@ test('global native operations install and serve without any folder and keep act
   await native.methods.enable({ ...input, enabled: true }, f.context)
   f.state.folder = null
   f.state.identity = null
-  const url = `app://obsidian-plugins/obsidian-plugins/global/host-smoke/${installed.hash}/main.js`
+  const bare = `app://obsidian-plugins/obsidian-plugins/global/host-smoke/${installed.hash}/main.js`
+  const prepare = () =>
+    native.profileMethods.preparePluginLoad(
+      { id: 'host-smoke', hash: installed.hash },
+      f.context,
+    )
+  const url = bare + '?load=' + (await prepare())
   const scope = { senderId: 1, isCurrent: () => true }
-  const scriptRequest = () =>
-    new Request(url, { headers: { 'sec-fetch-dest': 'script' } })
-  const asset = await f.obsidianPluginAsset(scriptRequest(), scope)
+  const scriptRequest = () => new Request(url)
+  assert.equal(await f.obsidianPluginAsset(new Request(bare), scope), null)
+  const competing = new Request(bare + '?load=' + (await prepare()))
+  const scripts = await Promise.all([
+    f.obsidianPluginAsset(scriptRequest(), scope),
+    f.obsidianPluginAsset(competing, scope),
+  ])
+  assert.equal(
+    scripts.filter(Boolean).length,
+    1,
+    'concurrent script loads cannot replace a live grant',
+  )
+  const asset = scripts.find(Boolean)
+  assert.equal(await f.obsidianPluginAsset(scriptRequest(), scope), null)
+  const capability = /bridge\.activate\("([a-f0-9-]{36})"\)/.exec(asset.body)[1]
   assert.match(asset.body, new RegExp(`global:host-smoke:${installed.hash}`))
   assert.equal(asset.type, 'text/javascript; charset=utf-8')
   assert.equal(
@@ -305,7 +324,7 @@ test('global native operations install and serve without any folder and keep act
   )
   const css = await f.obsidianPluginAsset(
     new Request(
-      url
+      bare
         .replace('app://obsidian-plugins/', 'app://hibi/')
         .replace('main.js', 'styles.css'),
     ),
@@ -328,11 +347,13 @@ test('global native operations install and serve without any folder and keep act
     await f.obsidianPluginAsset(new Request(url, { method: 'POST' }), scope),
     null,
   )
-  await native.methods.enable({ ...input, enabled: false }, f.context)
-  await assert.rejects(
-    f.obsidianPluginAsset(scriptRequest(), scope),
-    /disabled/,
+  await native.profileMethods.releaseRequestUrl(
+    { id: 'host-smoke', capability },
+    f.context,
   )
+  const disabledLoad = new Request(bare + '?load=' + (await prepare()))
+  await native.methods.enable({ ...input, enabled: false }, f.context)
+  await assert.rejects(f.obsidianPluginAsset(disabledLoad, scope), /disabled/)
   f.state.confirm = async () => {
     f.state.current = false
     return { response: 1 }

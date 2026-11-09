@@ -387,13 +387,14 @@ test('plugin command IDs survive replacement by a package with a new content has
   const { wrapObsidianPlugin } = await load('package.ts')
   const fixture = await readFixturePlugin('host-smoke')
   const document = fakeDom(t)
+  window.hibi = { invokeAddonProfile: async () => crypto.randomUUID() }
   const append = document.head.append.bind(document.head)
   document.head.append = (script) => {
     append(script)
     queueMicrotask(() => {
       vm.runInNewContext(
         wrapObsidianPlugin(fixture.main, script.dataset.obsidianPlugin),
-        { __hibiObsidianHost: globalThis.__hibiObsidianHost },
+        { __hibiObsidianHost: window.__hibiObsidianHost },
       )
       script.onload?.()
     })
@@ -420,11 +421,31 @@ test('plugin command IDs survive replacement by a package with a new content has
   const host = new ObsidianHost(hibi, 'fixture-vault')
   t.after(() => host.stop())
   await host.start()
+  const bridge = window.__hibiObsidianHost
+  const bridgeProperty = Object.getOwnPropertyDescriptor(
+    window,
+    '__hibiObsidianHost',
+  )
+  assert.equal(bridgeProperty.configurable, false)
+  assert.equal(bridgeProperty.writable, false)
+  assert.equal(Object.isFrozen(bridge), true)
+  assert.throws(
+    () => Object.defineProperty(window, '__hibiObsidianHost', { value: {} }),
+    TypeError,
+  )
+  const get = Map.prototype.get
+  try {
+    Map.prototype.get = () => ({ activate() {} })
+    assert.throws(() => bridge.take('not-a-pending-load'), /no longer current/)
+  } finally {
+    Map.prototype.get = get
+  }
   descriptor = { ...descriptor, hash: 'b'.repeat(64) }
   await host.refresh()
   assert.equal(ids.length, 2)
   assert.equal(ids[1], ids[0])
   host.stop()
+  assert.equal(window.__hibiObsidianHost, bridge)
   assert.equal(document.head.children.length, 0)
   assert.equal(typeof HTMLElement.prototype.createEl, 'undefined')
 })
@@ -435,6 +456,7 @@ test('disabling a plugin cancels resources during pending onload and cannot revi
   const { wrapObsidianPlugin } = await load('package.ts')
   const fixture = await readFixturePlugin('host-smoke')
   const document = fakeDom(t)
+  window.hibi = { invokeAddonProfile: async () => crypto.randomUUID() }
   const started = Promise.withResolvers()
   const finish = Promise.withResolvers()
   const state = {
@@ -457,7 +479,7 @@ test('disabling a plugin cancels resources during pending onload and cannot revi
       vm.runInNewContext(
         wrapObsidianPlugin(source, script.dataset.obsidianPlugin),
         {
-          __hibiObsidianHost: globalThis.__hibiObsidianHost,
+          __hibiObsidianHost: window.__hibiObsidianHost,
           fixtureState: state,
           document,
         },

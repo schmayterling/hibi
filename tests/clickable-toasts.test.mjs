@@ -59,7 +59,7 @@ test('the update notice opens About at the update status by click or keyboard', 
     await toast.evaluate((element) => getComputedStyle(element).cursor),
     'pointer',
   )
-  await toast.locator('.toast-copy > span').click()
+  await toast.locator('.toast-copy').click({ position: { x: 4, y: 8 } })
   await settings.waitFor()
   await about.waitFor()
   await status.waitFor()

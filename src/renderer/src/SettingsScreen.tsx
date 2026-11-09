@@ -62,11 +62,7 @@ import {
   settingsIcon,
   settingsNavigation,
 } from './settings-categories'
-import {
-  APPEARANCE_SECTION,
-  settingsCategory,
-  settingsPages,
-} from './settings-pages'
+import { settingsCategory, settingsPages } from './settings-pages'
 import { ToolbarSettings } from './ToolbarSettings'
 import { UndoHistorySettings } from './UndoHistorySettings'
 import { WindowControlsSettings } from './WindowControlsSettings'
@@ -251,10 +247,10 @@ export function SettingsScreen({
     ),
   )
   const extraPages = enabledPages.filter(
-    (page) => page.category !== APPEARANCE_SECTION,
+    (page) => page.category !== `${page.owner}.appearance`,
   )
   const appearanceSections = enabledPages.filter(
-    (page) => page.category === APPEARANCE_SECTION,
+    (page) => page.category === `${page.owner}.appearance`,
   )
   const searchable = [
     ...indexed,

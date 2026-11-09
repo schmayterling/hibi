@@ -701,11 +701,11 @@ export function InstalledObsidian({
     setError('')
     try {
       await work()
-      changed()
-      await inventory.refresh()
     } catch (error) {
       setError(errorMessage(error))
     } finally {
+      changed()
+      await inventory.refresh()
       setBusy(false)
     }
   }
@@ -753,6 +753,9 @@ export function InstalledObsidian({
       <div className="settings-group addon-list">
         {plugins.map((plugin) => {
           const manifest = plugin.manifest
+          const offer = inventory.offers.find(
+            (offer) => offer.id === manifest.id,
+          )
           const page = pages.find((page) =>
             page.id.startsWith(
               'addon-obsidian.' + prefixes[manifest.id] + '-settings-',
@@ -789,32 +792,61 @@ export function InstalledObsidian({
                 </>
               }
             >
-              {inventory.offers.includes(manifest.id) && (
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      if (
-                        await dialogs.confirm({
+              {offer && (
+                <>
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        const accepted = await dialogs.confirm({
                           title:
                             'Use this vault’s settings for ' +
                             manifest.name +
                             '?',
-                          description:
-                            'Import a copy of this vault’s plugin settings into Hibi. The vault stays unchanged.',
-                          confirmLabel: 'Use vault settings',
+                          description: offer.overwrite
+                            ? 'This replaces the plugin’s global settings for every folder. Hibi keeps the last three backups of the previous settings in its app data. Your vault stays unchanged.'
+                            : 'Import a copy of this vault’s plugin settings into Hibi for every folder. Your vault stays unchanged.',
+                          confirmLabel: offer.overwrite
+                            ? 'Overwrite global settings'
+                            : 'Use vault settings',
+                          destructive: offer.overwrite,
                         })
-                      )
+                        if (accepted) {
+                          await window.hibi.invokeAddon(
+                            'obsidian',
+                            'importVaultData',
+                            offer,
+                          )
+                          changed(manifest.id, undefined, true)
+                        } else {
+                          await window.hibi.invokeAddon(
+                            'obsidian',
+                            'dismissVaultData',
+                            { id: manifest.id, vaultId: offer.vaultId },
+                          )
+                        }
+                      })
+                    }
+                  >
+                    Use this vault’s settings
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    aria-label={'Dismiss vault settings for ' + manifest.name}
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
                         await window.hibi.invokeAddon(
                           'obsidian',
-                          'importVaultData',
-                          { id: manifest.id },
+                          'dismissVaultData',
+                          { id: manifest.id, vaultId: offer.vaultId },
                         )
-                    })
-                  }
-                >
-                  Use this vault’s settings
-                </Button>
+                      })
+                    }
+                  >
+                    Dismiss
+                  </Button>
+                </>
               )}
               {page && openSettings && (
                 <Button

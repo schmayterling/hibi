@@ -130,16 +130,17 @@ test('global settings require explicit one-time import and never write to a vaul
     { code: 'ENOENT' },
   )
   assert.equal(await store.settingsOffer('host-smoke'), false)
-  assert.equal(await store.settingsOffer('host-smoke', f.vault), true)
-  assert.deepEqual(await store.importVaultData('host-smoke', f.vault), {
+  const offer = await store.settingsOffer('host-smoke', f.vault)
+  assert.equal(offer.overwrite, false)
+  assert.deepEqual(await store.importVaultData('host-smoke', f.vault, offer), {
     enabled: false,
     seeded: true,
   })
   assert.equal(await store.settingsOffer('host-smoke', f.vault), false)
   await store.saveData('host-smoke', { global: true })
   await assert.rejects(
-    store.importVaultData('host-smoke', f.vault),
-    /global settings/,
+    store.importVaultData('host-smoke', f.vault, offer),
+    /changed|again/,
   )
   assert.deepEqual(await store.loadData('host-smoke'), { global: true })
   await f.assertUnchanged()
@@ -346,8 +347,12 @@ test('vault discovery suggests enabled plugins; explicit imports capture current
   assert.equal(installed.origin, 'vault')
   const input = { id: 'host-smoke' }
   assert.equal(await f.default.queries.data(input, f.context), null)
-  assert.equal(await f.default.queries.settingsOffer(input, f.context), true)
-  await f.default.methods.importVaultData(input, f.context)
+  const offer = await f.default.queries.settingsOffer(input, f.context)
+  assert.equal(offer.overwrite, false)
+  await f.default.methods.importVaultData(
+    { ...input, ...offer, vaultId: f.state.identity },
+    f.context,
+  )
   assert.equal(await f.default.queries.settingsOffer(input, f.context), false)
   assert.deepEqual(await f.default.queries.data(input, f.context), {
     enabled: false,

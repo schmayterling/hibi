@@ -59,10 +59,12 @@ export function startObsidianHost(hibi: AddonContext): () => void {
     if (active && current === host) reportState()
   }
   const changed = (event: Event) => {
-    const detail = (event as CustomEvent<{ id?: string; enabled?: boolean }>)
-      .detail
-    // Disabling also cancels resources owned by an onload that is still pending.
-    if (detail?.id && detail.enabled === false) host?.unload(detail.id)
+    const detail = (
+      event as CustomEvent<{ id?: string; enabled?: boolean; reload?: boolean }>
+    ).detail
+    // Disabling or importing settings also cancels resources during a pending onload.
+    if (detail?.id && (detail.enabled === false || detail.reload))
+      host?.unload(detail.id)
     void refresh().catch(failed)
   }
   window.addEventListener('hibi:obsidian-community-installed', changed)
@@ -71,6 +73,11 @@ export function startObsidianHost(hibi: AddonContext): () => void {
   void hibi.workspace
     .subscribeChanges((event) => {
       if (!active || event.kind !== 'resync') return
+      // Invalidate captured services synchronously, before other resync listeners run.
+      const previous = host
+      host = null
+      identity = ''
+      previous?.stop()
       void reconcile().catch(failed)
     })
     .then((registered) => {

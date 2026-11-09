@@ -12,6 +12,8 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import { obsidianConfiguration } from '../../main/workspace-obsidian'
 import type { CommunityPluginSource, InstalledPlugin } from './package'
 import {
   parseCommunityPluginSource,
@@ -26,6 +28,19 @@ const missing = (error: unknown) =>
 const decode = (bytes: Uint8Array) =>
   new TextDecoder('utf-8', { fatal: true }).decode(bytes)
 const hashPattern = /^[a-f0-9]{64}$/
+
+export type VaultSettingsOffer = {
+  overwrite: boolean
+  sourceHash: string
+  globalHash: string | null
+}
+
+type VaultSettingsReceipts = Record<
+  string,
+  { action: 'accepted' | 'dismissed' }
+>
+const dataHash = (bytes: Buffer) =>
+  createHash('sha256').update(bytes).digest('hex')
 
 async function directory(path: string) {
   const stat = await lstat(path)
@@ -235,12 +250,20 @@ async function atomicJson(
     Buffer.byteLength(encoded) > pluginLimits['data.json']
   )
     throw new Error('Plugin data must be JSON under 1 MiB.')
+  return atomicFile(path, encoded, check)
+}
+
+async function atomicFile(
+  path: string,
+  bytes: string | Uint8Array,
+  check: () => void = () => {},
+) {
   const temporary = join(dirname(path), `.${randomUUID()}.tmp`)
   try {
     check()
     const file = await open(temporary, 'wx', 0o600)
     try {
-      await file.writeFile(encoded, 'utf8')
+      await file.writeFile(bytes, 'utf8')
       await file.sync()
     } finally {
       await file.close()
@@ -574,7 +597,13 @@ export class ObsidianStore {
   }
 
   private async vaultData(id: string, vault: string) {
-    const source = join(vault, '.obsidian', 'plugins', id)
+    const config = await obsidianConfiguration(vault)
+    if (!config) return null
+    if (!config.directory)
+      throw new Error(
+        'Choose a vault with one regular Obsidian configuration folder.',
+      )
+    const source = join(vault, config.directory, 'plugins', id)
     try {
       await beneath(vault, source)
       const bytes = await optionalFile(
@@ -589,35 +618,163 @@ export class ObsidianStore {
     }
   }
 
-  settingsOffer(id: string, vault?: string, check: () => void = () => {}) {
+  private async settingsReceipts(
+    folder: string,
+  ): Promise<VaultSettingsReceipts> {
+    const bytes = await optionalFile(
+      join(folder, 'settings-receipts.json'),
+      pluginLimits['data.json'],
+    )
+    if (!bytes) return {}
+    const value: unknown = JSON.parse(decode(bytes))
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      Object.entries(value).some(
+        ([key, entry]) =>
+          !hashPattern.test(key) ||
+          !entry ||
+          typeof entry !== 'object' ||
+          Object.keys(entry).length !== 1 ||
+          !['accepted', 'dismissed'].includes(entry.action),
+      )
+    )
+      throw new Error('Invalid vault settings receipt.')
+    return value as VaultSettingsReceipts
+  }
+
+  settingsOffer(
+    id: string,
+    vault?: string,
+    check: () => void = () => {},
+  ): Promise<false | VaultSettingsOffer> {
     return this.mutate(async () => {
       const folder = await this.stateFolder(id)
       await this.record(id)
+      if (!vault) return false
+      const receipts = await this.settingsReceipts(folder)
+      if (receipts[await obsidianVaultIdentity(vault)]) return false
+      const source = await this.vaultData(id, vault)
+      const global = await optionalFile(
+        join(folder, 'data.json'),
+        pluginLimits['data.json'],
+      )
+      check()
       if (
-        !vault ||
-        (await optionalFile(
-          join(folder, 'data.json'),
-          pluginLimits['data.json'],
-        ))
+        !source ||
+        (global &&
+          isDeepStrictEqual(
+            JSON.parse(decode(source)),
+            JSON.parse(decode(global)),
+          ))
       )
         return false
-      const data = await this.vaultData(id, vault)
-      check()
-      return data !== null
+      return {
+        overwrite: global !== null,
+        sourceHash: dataHash(source),
+        globalHash: global ? dataHash(global) : null,
+      }
     }, check)
   }
 
-  importVaultData(id: string, vault: string, check: () => void = () => {}) {
+  private async backupData(folder: string, bytes: Buffer, check: () => void) {
+    const backups = join(folder, 'data-backups')
+    await makeDirectory(backups)
+    await beneath(this.root, backups)
+    const names: { name: string; time: number }[] = []
+    for (const name of await readdir(backups)) {
+      if (!/^(0|[1-9]\d{0,15})\.json$/.test(name)) continue
+      const time = Number(name.slice(0, -5))
+      if (!Number.isSafeInteger(time)) continue
+      const prior = await readPluginFile(
+        join(backups, name),
+        pluginLimits['data.json'],
+      )
+      JSON.parse(decode(prior))
+      names.push({ name, time })
+    }
+    names.sort((a, b) => a.time - b.time)
+    const time = names.reduce(
+      (latest, prior) => Math.max(latest, prior.time + 1),
+      Date.now(),
+    )
+    if (!Number.isSafeInteger(time) || time < 0)
+      throw new Error('Could not reserve a vault settings backup timestamp.')
+    const path = join(backups, `${time}.json`)
+    await atomicFile(path, bytes, check)
+    return {
+      path,
+      expired: names.slice(0, -2).map((entry) => join(backups, entry.name)),
+    }
+  }
+
+  importVaultData(
+    id: string,
+    vault: string,
+    offer: VaultSettingsOffer,
+    check: () => void = () => {},
+  ) {
     return this.mutate(async () => {
       await this.record(id)
-      const path = join(await this.stateFolder(id), 'data.json')
-      if (await optionalFile(path, pluginLimits['data.json']))
-        throw new Error('This plugin already has global settings.')
-      const bytes = await this.vaultData(id, vault)
-      if (!bytes) throw new Error('This vault has no settings for this plugin.')
-      const value: unknown = JSON.parse(decode(bytes))
-      await atomicJson(path, value, check)
+      const folder = await this.stateFolder(id)
+      const receipts = await this.settingsReceipts(folder)
+      const identity = await obsidianVaultIdentity(vault)
+      const path = join(folder, 'data.json')
+      const prior = await optionalFile(path, pluginLimits['data.json'])
+      const source = await this.vaultData(id, vault)
+      if (!source)
+        throw new Error('This vault has no settings for this plugin.')
+      if (
+        offer.sourceHash !== dataHash(source) ||
+        offer.globalHash !== (prior ? dataHash(prior) : null)
+      )
+        throw new Error(
+          'These plugin settings changed. Review the offer again.',
+        )
+      if (prior && offer.overwrite !== true)
+        throw new Error('Confirm overwriting this plugin’s global settings.')
+      if (prior) JSON.parse(decode(prior))
+      const value: unknown = JSON.parse(decode(source))
+      const backup = prior ? await this.backupData(folder, prior, check) : null
+      let replaced = false
+      try {
+        await atomicJson(path, value, check)
+        replaced = true
+        await atomicJson(join(folder, 'settings-receipts.json'), {
+          ...receipts,
+          [identity]: { action: 'accepted' },
+        })
+      } catch (error) {
+        if (backup && !replaced) await unlink(backup.path)
+        throw error
+      }
+      if (backup) {
+        await beneath(this.root, join(folder, 'data-backups'))
+        for (const expired of backup.expired) {
+          await readPluginFile(expired, pluginLimits['data.json'])
+          await unlink(expired)
+        }
+      }
       return value
+    }, check)
+  }
+
+  dismissVaultData(id: string, vault: string, check: () => void = () => {}) {
+    return this.mutate(async () => {
+      await this.record(id)
+      const folder = await this.stateFolder(id)
+      const receipts = await this.settingsReceipts(folder)
+      const identity = await obsidianVaultIdentity(vault)
+      if (receipts[identity]) return
+      await atomicJson(
+        join(folder, 'settings-receipts.json'),
+        {
+          ...receipts,
+          [identity]: { action: 'dismissed' },
+        },
+        check,
+      )
     }, check)
   }
 

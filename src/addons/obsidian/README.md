@@ -42,9 +42,12 @@ Obsidian plugins addon stops all hosted plugins.
 Plugin copies, enabled state, and data live globally in Hibi's app data. They
 work in any open folder, including ordinary folders, and their interface and
 settings can load without a folder. File operations require an open folder.
-When a plugin has no global data, **Use this vault's settings** offers a
-one-time read-only copy of its original data. Hibi never writes back to
-`.obsidian`. Existing per-vault Hibi installations are copied into the global
+When a vault has different plugin data, **Use this vault's settings** offers a
+read-only import. Replacing global settings requires explicit confirmation;
+Hibi keeps the last three timestamped backups in its app data. Accepting or
+dismissing an offer records that choice for this plugin and vault, so it does
+not ask again. Accepted settings reload an enabled plugin. Hibi never writes
+back to `.obsidian`. Existing per-vault Hibi installations are copied into the global
 store once, disabled; existing global packages and data take precedence. The
 original copies remain untouched. Removing a plugin retains its data for
 reinstallation.

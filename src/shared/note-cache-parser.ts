@@ -51,9 +51,17 @@ function* scalarValues(
   key: string
   from: number
   to: number
+  value: string
+  type: string
 }> {
   if (isScalar(node) && typeof node.value === 'string' && node.range)
-    yield { key, from: node.range[0], to: node.range[1] }
+    yield {
+      key,
+      from: node.range[0],
+      to: node.range[1],
+      value: node.value,
+      type: node.type ?? 'PLAIN',
+    }
   else if (isMap(node))
     for (const pair of node.items) {
       if (!isScalar(pair.key)) continue
@@ -111,6 +119,188 @@ function frontmatter(
   }
 }
 
+type ScalarSource = { from: number; to: number; rawFrom: number; rawTo: number }
+const yamlEscape: Record<string, string> = {
+  '0': '\0',
+  a: '\x07',
+  b: '\b',
+  t: '\t',
+  n: '\n',
+  v: '\v',
+  f: '\f',
+  r: '\r',
+  e: '\x1b',
+  ' ': ' ',
+  '"': '"',
+  '/': '/',
+  '\\': '\\',
+  N: '\x85',
+  _: '\xa0',
+  L: '\u2028',
+  P: '\u2029',
+}
+
+/** Coordinates for a validated YAML scalar; its parsed value remains authoritative. */
+function scalarSource(
+  raw: string,
+  value: string,
+  type: string,
+): ScalarSource[] | null {
+  let begin = type.startsWith('QUOTE_')
+    ? 1
+    : type.startsWith('BLOCK_')
+      ? raw.indexOf('\n') + 1
+      : 0
+  const end = type.startsWith('QUOTE_') ? raw.length - 1 : raw.length
+  if (raw.slice(begin, end) === value)
+    return value.length
+      ? [{ from: 0, to: value.length, rawFrom: begin, rawTo: end }]
+      : []
+  function* units() {
+    while (begin < end) {
+      const from = begin++
+      let text = raw[from]!
+      if (type === 'QUOTE_SINGLE' && text === "'" && raw[begin] === "'") begin++
+      else if (type === 'QUOTE_DOUBLE' && text === '\\') {
+        const code = raw[begin++]!
+        const size = code === 'x' ? 2 : code === 'u' ? 4 : code === 'U' ? 8 : 0
+        if (size) {
+          text = String.fromCodePoint(
+            Number.parseInt(raw.slice(begin, begin + size), 16),
+          )
+          begin += size
+        } else text = code === '\n' ? '' : (yamlEscape[code] ?? code)
+      }
+      yield { text, from, to: begin }
+    }
+  }
+  const pieces: ScalarSource[] = []
+  let at = 0
+  const append = (to: number, rawFrom: number, rawTo: number) => {
+    if (to === at) return
+    const previous = pieces.at(-1)
+    if (
+      previous &&
+      previous.to === at &&
+      previous.rawTo === rawFrom &&
+      previous.to - previous.from === previous.rawTo - previous.rawFrom &&
+      to - at === rawTo - rawFrom
+    ) {
+      previous.to = to
+      previous.rawTo = rawTo
+    } else pieces.push({ from: at, to, rawFrom, rawTo })
+    at = to
+  }
+  const iterator = units()
+  let unit = iterator.next()
+  while (!unit.done) {
+    if (!unit.value.text) {
+      unit = iterator.next()
+      continue
+    }
+    if (/^[ \t\r\n]+$/.test(unit.value.text)) {
+      const from = unit.value.from
+      let to = unit.value.to
+      do {
+        to = unit.value.to
+        unit = iterator.next()
+      } while (!unit.done && /^[ \t\r\n]*$/.test(unit.value.text))
+      let next = at
+      while (next < value.length && /[ \t\r\n]/.test(value[next]!)) next++
+      append(next, from, to)
+    } else {
+      const { text, from, to } = unit.value
+      if (!value.startsWith(text, at)) return null
+      append(at + text.length, from, to)
+      unit = iterator.next()
+    }
+  }
+  return at === value.length ? pieces : null
+}
+
+/** Project cooked property strings before Markdown parsing, preserving their raw provenance. */
+function propertySource(source: string, yamlFrom: number, block: Frontmatter) {
+  const pieces: ScalarSource[] = []
+  const properties: { key: string; from: number; to: number }[] = []
+  const parts: string[] = []
+  let from = 0,
+    length = 0,
+    complete = true
+  const copy = (to: number) => {
+    if (to > from) {
+      parts.push(source.slice(from, to))
+      pieces.push({
+        from: length,
+        to: length + to - from,
+        rawFrom: from,
+        rawTo: to,
+      })
+      length += to - from
+    }
+    from = to
+  }
+  for (const scalar of scalarValues(block.document?.contents ?? null)) {
+    const rawFrom = yamlFrom + scalar.from,
+      rawTo = yamlFrom + scalar.to
+    copy(rawFrom)
+    const spans = scalarSource(
+      source.slice(rawFrom, rawTo),
+      scalar.value,
+      scalar.type,
+    )
+    if (!spans) {
+      complete = false
+      copy(rawTo)
+      continue
+    }
+    properties.push({
+      key: scalar.key,
+      from: length,
+      to: length + scalar.value.length,
+    })
+    parts.push(scalar.value)
+    for (const span of spans)
+      pieces.push({
+        from: length + span.from,
+        to: length + span.to,
+        rawFrom: rawFrom + span.rawFrom,
+        rawTo: rawFrom + span.rawTo,
+      })
+    length += scalar.value.length
+    from = rawTo
+  }
+  copy(source.length)
+  const map = (offset: number, side: number, reverse = false) => {
+    let low = 0,
+      high = pieces.length
+    while (low < high) {
+      const mid = (low + high) >>> 1
+      const end = reverse ? pieces[mid]!.rawTo : pieces[mid]!.to
+      if (end < offset || (end === offset && side > 0)) low = mid + 1
+      else high = mid
+    }
+    const span = pieces[Math.min(low, pieces.length - 1)]!
+    const start = reverse ? span.rawFrom : span.from,
+      end = reverse ? span.rawTo : span.to
+    const toStart = reverse ? span.from : span.rawFrom,
+      toEnd = reverse ? span.to : span.rawTo
+    if (offset <= start) return toStart
+    if (offset >= end) return toEnd
+    return end - start === toEnd - toStart
+      ? toStart + offset - start
+      : side < 0
+        ? toStart
+        : toEnd
+  }
+  return {
+    text: parts.join(''),
+    properties,
+    complete,
+    toSource: (offset: number, side = 1) => map(offset, side),
+    fromSource: (offset: number, side = 1) => map(offset, side, true),
+  }
+}
+
 const plainRuns = createPlainTextRunExtension()
 const parserCache = new Map<string, (typeof metadataParsers)['gfm']>()
 function cacheParser(syntax: NoteSyntax) {
@@ -142,28 +332,54 @@ export function noteCacheParse(
   source: string,
   syntax: NoteSyntax = defaultNoteSyntax,
 ) {
-  const snapshot = new SourceStore(source, {
+  const rawSnapshot = new SourceStore(source, {
     tabId: 'metadata',
     revision: 0,
   }).snapshot()
-  const input = sourceParserInput(snapshot)
+  const fm = frontmatter(source, syntax)
+  const projection =
+    fm.value?.document && fm.value.values
+      ? propertySource(
+          normalizedSource(source),
+          rawSnapshot.rawToEditor(fm.value.yamlFrom)!,
+          fm.value,
+        )
+      : null
+  const baseInput = sourceParserInput(rawSnapshot)
+  const input = projection
+    ? {
+        length: projection.text.length,
+        lineChunks: false,
+        read: (from: number, to: number) => projection.text.slice(from, to),
+        chunk: (from: number) => projection.text.slice(from),
+      }
+    : baseInput
+  const snapshot = {
+    editorToRaw: (offset: number, side = 1) =>
+      rawSnapshot.editorToRaw(
+        projection ? projection.toSource(offset, side) : offset,
+      ),
+    rawToEditor: (offset: number) => {
+      const at = rawSnapshot.rawToEditor(offset)
+      return at === null ? null : projection ? projection.fromSource(at) : at
+    },
+    lineAt: (offset: number) => rawSnapshot.lineAt(offset),
+  }
   const read = (from: number, to: number) => input.read(from, to)
   const loc = (offset: number): Loc => {
-    const line = snapshot.lineAt(offset)!
+    const line = rawSnapshot.lineAt(offset)!
     return { line: line.number - 1, col: offset - line.from, offset }
   }
   const position = (from: number, to: number): Pos => ({
     start: loc(snapshot.editorToRaw(from)!),
-    end: loc(snapshot.editorToRaw(to)!),
+    end: loc(snapshot.editorToRaw(to, -1)!),
   })
-  const fm = frontmatter(source, syntax)
   const propertyKeys = new Map<number, string>()
   let parser = cacheParser(syntax)
   if (fm.value) {
     const block = fm.value
     const to = snapshot.rawToEditor(block.to)!
     const closeFrom = snapshot.rawToEditor(block.closeFrom)!
-    const yamlFrom = snapshot.rawToEditor(block.yamlFrom)!
     const config: MarkdownConfig = {
       defineNodes: [{ name: 'NoteFrontmatter', block: true }, 'NoteProperty'],
       parseBlock: [
@@ -174,18 +390,15 @@ export function noteCacheParse(
             if (cx.lineStart !== 0) return false
             const children: Element[] = []
             if (block.document && block.values)
-              for (const scalar of scalarValues(block.document.contents)) {
-                const from = yamlFrom + scalar.from
+              for (const scalar of projection?.properties ?? []) {
+                const from = scalar.from
                 propertyKeys.set(from, scalar.key)
                 children.push(
                   cx.elt(
                     'NoteProperty',
                     from,
-                    yamlFrom + scalar.to,
-                    cx.parser.parseInline(
-                      block.yaml.slice(scalar.from, scalar.to),
-                      from,
-                    ),
+                    scalar.to,
+                    cx.parser.parseInline(read(from, scalar.to), from),
                   ),
                 )
               }
@@ -219,9 +432,9 @@ export function noteCacheParse(
     propertyKeys,
     frontmatter: fm.value,
     flags: {
-      references: true,
+      references: projection?.complete ?? true,
       headings: true,
-      frontmatter: fm.complete,
+      frontmatter: fm.complete && (projection?.complete ?? true),
       properties:
         fm.complete &&
         Object.values(fm.value?.values ?? {}).every(
@@ -394,6 +607,10 @@ export function* noteCacheEntries(
   function gap(from: number, to: number, block: SyntaxNode) {
     if (from === to) return ''
     const value = read(from, to)
+    for (let parent = block.parent; parent; parent = parent.parent) {
+      if (parent.name === 'NoteProperty') return value
+      if (parent.type.is('Block')) break
+    }
     const start = position(block.from, block.from).start
     const base = column(read(block.from - start.col, block.from))
     if (!base) return value

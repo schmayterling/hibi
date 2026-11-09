@@ -1,3 +1,4 @@
+// ci: alone (exact shutdown timing)
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter, once } from 'node:events'
@@ -8,13 +9,14 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import {
   electron,
+  electronGpuArgs,
   forwardElectronDiagnostics,
   installElectronDiagnostics,
   showElectronTestWindows,
   snapshotElectronProcesses,
   stopElectronTree,
   waitForDocumentEditor,
-} from './electron.mjs'
+} from '../electron.mjs'
 
 test('electron cleanup stops descendants after the process group leader exits', {
   skip: process.platform === 'win32',
@@ -174,6 +176,7 @@ test('hosted visibility policy lets a worker-only fixture launch and close', asy
   const launch = new Function(
     '_electron',
     'showTestWindows',
+    'electronGpuArgs',
     'forwardElectronDiagnostics',
     'showElectronTestWindows',
     'waitForElectronShutdown',
@@ -182,10 +185,11 @@ test('hosted visibility policy lets a worker-only fixture launch and close', asy
   )(
     { launch: async () => application },
     true,
+    electronGpuArgs,
     () => new EventEmitter(),
     showElectronTestWindows,
     (_child, pending) => pending,
-    new URL('./electron.mjs', import.meta.url).href,
+    new URL('../electron.mjs', import.meta.url).href,
   )
   assert.equal(
     await launch({ args: ['worker-only'], diagnostics: false }),
@@ -213,7 +217,7 @@ test('delayed ready-to-show does not reveal a real window during its close', {
   await waitForDocumentEditor(app, await app.firstWindow())
   assert.equal(
     await app.evaluate(() => process.env.HIBI_TEST_ADDON_REVOCATIONS_URL),
-    new URL('./fixtures/no-addon-revocations.json', import.meta.url).href,
+    new URL('../fixtures/no-addon-revocations.json', import.meta.url).href,
   )
   await assert.rejects(
     app.evaluate(async ({ net }) =>
@@ -542,7 +546,7 @@ test('dialog and uncaught tracing preserve native results, errors and default ha
 
 test('cleanup stops Electron 15 s after quit, and still fails a quit that never comes at 20 s', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  t.mock.method(console, 'error', () => {})
+  const errors = t.mock.method(console, 'error', () => {})
   const start = async (killExits = true) => {
     const child = Object.assign(new EventEmitter(), {
       pid: 1,
@@ -559,6 +563,7 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
     const launch = new Function(
       '_electron',
       'showTestWindows',
+      'electronGpuArgs',
       'forwardElectronDiagnostics',
       'waitForElectronShutdown',
       'stopElectronTree',
@@ -569,6 +574,7 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
     )(
       { launch: async () => application },
       false,
+      electronGpuArgs,
       forwardElectronDiagnostics,
       () =>
         new Promise((_, reject) => {
@@ -581,7 +587,7 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
       },
       () => {},
       async () => {},
-      new URL('./electron.mjs', import.meta.url).href,
+      new URL('../electron.mjs', import.meta.url).href,
     )
     await launch({ args: [], diagnostics: false })
     result.closing = application.close()
@@ -614,6 +620,13 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
   assert.equal(transport.stopped, 1)
   t.mock.timers.tick(5000)
   await assert.rejects(transport.closing, /post-quit cleanup did not finish/)
+  // Each stop after a quit says why, for the two runs that reached it.
+  assert.equal(
+    errors.mock.calls.filter(({ arguments: [text] }) =>
+      String(text).startsWith('electron-shutdown-after-quit:'),
+    ).length,
+    2,
+  )
 })
 
 test('teardown waits for setup when a name filter skips every top-level test, and not past its timeout', async (t) => {
@@ -624,7 +637,7 @@ test('teardown waits for setup when a name filter skips every top-level test, an
     await writeFile(
       file,
       `import test from 'node:test'
-import { after, before } from ${JSON.stringify(new URL('./electron-hooks.mjs', import.meta.url).href)}
+import { after, before } from ${JSON.stringify(new URL('../electron-hooks.mjs', import.meta.url).href)}
 let open
 before(async () => {
   open = setInterval(() => {}, 1000)

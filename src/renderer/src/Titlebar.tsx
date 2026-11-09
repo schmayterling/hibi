@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { DocumentState } from '../../shared/desktop'
+import type { documentViews } from '../../shared/document-types'
 import { type Hotkeys, shortcutLabels } from '../../shared/hotkeys'
 import { IconButton } from '../../ui/Controls'
 import { useMenus } from '../../ui/MenuHost'
@@ -55,6 +56,7 @@ export function Titlebar({
   onCloseTab,
   onCloseTabs,
   onMoveTab,
+  paused,
   addonTabs,
   activeAddonTab,
   onSelectAddonTab,
@@ -66,7 +68,8 @@ export function Titlebar({
   settingsOpen: boolean
   mode: ViewMode
   availableViews: readonly ViewMode[]
-  onMode: (mode: ViewMode) => void
+  /** Only the views the switch offers; the image view is not one. */
+  onMode: (mode: (typeof documentViews)[number]) => void
   hotkeys: Hotkeys
   platform: string
   sidebarOpen: boolean
@@ -84,7 +87,8 @@ export function Titlebar({
   onSelectTab: (id: string) => void
   onCloseTab: (id: string) => void
   onCloseTabs: (ids: string[], preferredTab: string) => void
-  onMoveTab: (id: string, beforeId: string | null) => void
+  onMoveTab: (id: string, before: string | null | 1 | -1) => void
+  paused: boolean
   addonTabs: ViewEntry[]
   activeAddonTab: string | null
   onSelectAddonTab: (id: string) => void
@@ -259,6 +263,7 @@ export function Titlebar({
             <DocumentTabs
               document={document}
               busy={busy}
+              paused={paused}
               onSelect={onSelectTab}
               onClose={onCloseTab}
               onCloseTabs={onCloseTabs}

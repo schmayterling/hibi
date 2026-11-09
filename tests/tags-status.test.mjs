@@ -5,8 +5,6 @@ import { createTagAnalysis } from '../src/addons/tags/analysis.ts'
 import { scheduleTagCounts, tagVersion } from '../src/addons/tags/schedule.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
-
 test('status cache keeps only the current source and syntax result', () => {
   const analysis = createTagAnalysis()
   analysis.remember('#one:frontmatter-on', ['one'])
@@ -61,7 +59,8 @@ test('tag count worker uses active Frontmatter syntax', async () => {
   ])
 })
 
-test('returning to a cached tab does not read or reparse its source', async () => {
+test('returning to a cached tab does not read or reparse its source', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   let current = {
     key: tagVersion({ tabId: 'a', id: 'note-a', contentVersion: 4 }),
     source: '#a',
@@ -79,14 +78,14 @@ test('returning to a cached tab does not read or reparse its source', async () =
   )
   try {
     counter.refresh(current.key)
-    await settle()
+    t.mock.timers.tick(250)
     counter.receive({ key: current.key, tags: ['a'] })
     current = {
       key: tagVersion({ tabId: 'b', id: 'note-b', contentVersion: 2 }),
       source: '#b',
     }
     counter.refresh(current.key)
-    await settle()
+    t.mock.timers.tick(250)
     counter.receive({ key: current.key, tags: ['b'] })
     current = {
       key: tagVersion({ tabId: 'a', id: 'note-a', contentVersion: 4 }),
@@ -104,7 +103,8 @@ test('returning to a cached tab does not read or reparse its source', async () =
   }
 })
 
-test('worker failure releases pending work and retries once', async () => {
+test('worker failure releases pending work and retries once', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   let current = { key: 'a', source: '#a' }
   const sent = []
   const published = []
@@ -115,7 +115,7 @@ test('worker failure releases pending work and retries once', async () => {
   )
   try {
     counter.refresh('a')
-    await settle()
+    t.mock.timers.tick(250)
     assert.equal(sent.length, 1)
     counter.fail()
     assert.equal(sent.length, 2)
@@ -125,7 +125,7 @@ test('worker failure releases pending work and retries once', async () => {
     assert.deepEqual(published, [[]])
     current = { key: 'b', source: '#b' }
     counter.refresh('b')
-    await settle()
+    t.mock.timers.tick(250)
     assert.equal(sent.length, 3)
     counter.receive({ key: 'b', tags: ['b'] })
     assert.deepEqual(published, [[], ['b']])

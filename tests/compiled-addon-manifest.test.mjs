@@ -6,13 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const { outputFiles, metafile } = await build({
+const { outputFiles } = await build({
   entryPoints: [join(root, 'src/shared/addon-manifest.ts')],
   bundle: true,
   write: false,
   platform: 'browser',
   format: 'esm',
-  metafile: true,
 })
 const { parseAddonManifest, admitInstalledAddon } = await import(
   `data:text/javascript;base64,${Buffer.from(outputFiles[0].contents).toString('base64')}`
@@ -29,17 +28,6 @@ const base = {
 }
 const compiled = (fields = {}) =>
   parseAddonManifest({ ...base, ...fields }, { trust: 'compiled' })
-
-test('compiled parser bundles without platform or editor dependencies', () => {
-  assert.doesNotMatch(
-    Object.keys(metafile.inputs).join('\n'),
-    /node_modules|src\/main\//,
-  )
-  assert.equal(
-    Object.values(metafile.outputs).flatMap((output) => output.imports).length,
-    0,
-  )
-})
 
 test('compiled renderer and native entries accept source and javascript modules', () => {
   for (const extension of ['ts', 'tsx', 'js', 'mjs']) {

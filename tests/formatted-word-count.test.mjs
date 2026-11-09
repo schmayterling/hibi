@@ -10,6 +10,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -33,6 +34,12 @@ const expected = (text) => label(countText(richText(text, syntax).slice(1)))
 let app, page, folder
 const errors = []
 const status = () => page.locator('[data-status-id="word-count.total"]')
+const saved = (text) =>
+  waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    text,
+  )
 const sourceText = () =>
   page.evaluate(async () => (await window.hibi.getDocument()).markdown)
 const counts = (text) =>
@@ -98,12 +105,14 @@ async function open(name) {
     },
     join(folder, name),
   )
-  await pressShortcut(app, mod + '+o')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    name,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, mod + '+o')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  })
 }
 test('formatted counts match rich document totals and ignore selections', {
   timeout: 90000,
@@ -238,12 +247,13 @@ for (const [language, name, text] of [
     )
     await counts(native)
     await pressShortcut(app, mod + '+z')
+    await saved(text)
     assert.equal(await sourceText(), text)
     await counts(native)
     const closing = text.lastIndexOf('```') + 3
     const tabbed = text.slice(0, closing) + '\t' + text.slice(closing)
-    const tabCount =
-      language === 'mermaid' ? label(countText('before\n')) : native
+    // Trailing whitespace still closes the fence, so the following text counts.
+    const tabCount = native
     await page.evaluate((from) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
         .view
@@ -256,12 +266,15 @@ for (const [language, name, text] of [
     await counts(tabCount)
     assert.equal(await sourceText(), tabbed)
     await pressShortcut(app, mod + '+z')
+    await saved(text)
     await counts(native)
     assert.equal(await sourceText(), text)
     await pressShortcut(app, mod + '+Shift+z')
+    await saved(tabbed)
     await counts(tabCount)
     assert.equal(await sourceText(), tabbed)
     await pressShortcut(app, mod + '+z')
+    await saved(text)
     await counts(native)
     assert.equal(await sourceText(), text)
     for (const [tab, selector, visible] of [

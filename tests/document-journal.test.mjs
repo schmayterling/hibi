@@ -293,7 +293,8 @@ test('J07: saturation rejects before source/history/view commit and accepts inpu
   session.dispose()
 })
 
-test('J02: delivery deadline retains edits and ignores a late acknowledgement after checkpoint recovery', async () => {
+test('J02: delivery deadline retains edits and ignores a late acknowledgement after checkpoint recovery', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { receive, change, state, store, recovery } = fixture()
   let late,
     calls = 0
@@ -314,9 +315,17 @@ test('J02: delivery deadline retains edits and ignores a late acknowledgement af
       verify: recovery.verify,
     },
   )
-  await assert.rejects(journal.append(change('', 'a', 0)), /timed out/)
+  const expired = assert.rejects(
+    journal.append(change('', 'a', 0)),
+    /timed out/,
+  )
+  t.mock.timers.tick(10)
+  await expired
   assert.equal(journal.hasPending(), true)
-  await journal.flush()
+  const flushing = journal.flush()
+  await new Promise(setImmediate)
+  t.mock.timers.tick(10)
+  await flushing
   assert.equal(state.markdown, 'a')
   assert.equal(state.contentVersion, 1)
   assert.equal(journal.state().inFlightCount, 1)
@@ -324,14 +333,15 @@ test('J02: delivery deadline retains edits and ignores a late acknowledgement af
   await assert.rejects(journal.append(change('', 'b', 0)), /Conflicting/)
   await journal.append(change('a', 'ab', 1))
   late()
-  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise(setImmediate)
   assert.equal(journal.pendingBytes(), 0)
   assert.equal(calls, 2)
   assert.equal(journal.state().inFlightCount, 0)
   assert.equal(journal.state().lastMemoryAck.contentVersion, 2)
 })
 
-test('timed-out transport and checkpoint calls stay bounded across repeated barriers', async () => {
+test('timed-out transport and checkpoint calls stay bounded across repeated barriers', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { change, receive, store, recovery } = fixture()
   let sends = 0,
     verifies = 0
@@ -351,8 +361,17 @@ test('timed-out transport and checkpoint calls stay bounded across repeated barr
       },
     },
   )
-  await assert.rejects(journal.append(change('', 'a', 0)))
-  for (let i = 0; i < 5; i++) await assert.rejects(journal.flush())
+  const expired = assert.rejects(journal.append(change('', 'a', 0)))
+  t.mock.timers.tick(2)
+  await expired
+  for (let i = 0; i < 5; i++) {
+    const failed = assert.rejects(journal.flush())
+    await new Promise(setImmediate)
+    t.mock.timers.tick(2)
+    await new Promise(setImmediate)
+    t.mock.timers.tick(2)
+    await failed
+  }
   assert.equal(sends, 1)
   assert.equal(verifies, 1)
   assert.equal(journal.state().inFlightCount, 1)
@@ -594,7 +613,8 @@ test('checkpoint mismatch or missing suffix never retires pending edits or overw
   }
 })
 
-test('background retry budget is finite; manual barriers can retry after exhaustion', async () => {
+test('background retry budget is finite; manual barriers can retry after exhaustion', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { receive, change } = fixture()
   let calls = 0,
     unavailable = true
@@ -607,7 +627,13 @@ test('background retry budget is finite; manual barriers can retry after exhaust
     { retryDelays: [1, 1] },
   )
   await assert.rejects(journal.append(change('', 'a', 0)))
-  await new Promise((resolve) => setTimeout(resolve, 35))
+  for (let attempt = 2; attempt <= 3; attempt++) {
+    t.mock.timers.tick(1)
+    await new Promise(setImmediate)
+    assert.equal(calls, attempt)
+  }
+  t.mock.timers.runAll()
+  await new Promise(setImmediate)
   assert.equal(calls, 3)
   assert.equal(journal.hasPending(), true)
   unavailable = false

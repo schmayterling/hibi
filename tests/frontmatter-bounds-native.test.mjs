@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -84,13 +84,49 @@ test('bounded metadata stays present, preserves crlf counts and suppresses sourc
     await page.locator('.rich-pane .cm-content').focus()
     t.diagnostic(`checking ${name}`)
     await idle()
-    if (!oversized)
+    if (!oversized) {
       await page.waitForFunction(() =>
         /^3 words/.test(
           document.querySelector('[data-status-id="word-count.total"]')
             ?.textContent ?? '',
         ),
       )
+      // Every property stays in the panel, but painting 10,083 of them made
+      // each frame take seconds; ones off screen wait until scrolled to, at
+      // the height of the drawn ones beside the body.
+      const middle = page.locator('.frontmatter-field textarea').nth(5000)
+      assert.equal(await middle.inputValue(), 'some value here')
+      const drawn = (field) => [
+        field.checkVisibility({ contentVisibilityAuto: true }),
+        field.closest('.frontmatter-field').offsetHeight,
+      ]
+      // The note opens at its top: bring the last property beside the body
+      // into view, and wait until the page draws it.
+      const last = page.locator('.frontmatter-field textarea').nth(10082)
+      await page
+        .locator('.frontmatter-field')
+        .nth(10082)
+        .scrollIntoViewIfNeeded()
+      await waitForAsync(last, (field) =>
+        field.checkVisibility({ contentVisibilityAuto: true }),
+      )
+      assert.deepEqual(
+        [await middle.evaluate(drawn), await last.evaluate(drawn)],
+        [
+          [false, 36],
+          [true, 36],
+        ],
+      )
+      await middle.focus()
+      assert.equal(
+        await middle.evaluate(
+          (field) =>
+            document.activeElement === field &&
+            field.checkVisibility({ contentVisibilityAuto: true }),
+        ),
+        true,
+      )
+    }
     await page.locator('.rich-pane .cm-content').evaluate((element) => {
       const view = element.cmTile.root.view
       view.focus()

@@ -65,6 +65,7 @@ import {
 } from './settings-categories'
 import { settingsCategory, settingsPages } from './settings-pages'
 import { ToolbarSettings } from './ToolbarSettings'
+import { UndoHistorySettings } from './UndoHistorySettings'
 import { WindowControlsSettings } from './WindowControlsSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 
@@ -540,6 +541,7 @@ export function SettingsScreen({
               </SettingRow>
             </div>
             <AutosaveSettings />
+            <UndoHistorySettings />
             <h2>Layout</h2>
             <div className="settings-group">
               <SettingRow id="default-view" label="Default view">

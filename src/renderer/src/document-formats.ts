@@ -5,10 +5,12 @@ import {
   type DocumentView,
   documentExtension,
   documentViews,
+  imageExtensions,
   isDocumentView,
 } from '../../shared/document-types'
 import type { RawEdit } from '../../shared/source-operations'
 import { documentRuntime } from './document-runtime'
+import { ImageViewer } from './ImageViewer'
 
 const plainText: DocumentFormat = {
   id: 'core.text',
@@ -22,11 +24,35 @@ const plainText: DocumentFormat = {
     css: '',
   }),
 }
-const registry = new Map<string, DocumentFormat>([[plainText.id, plainText]])
+/** Images open in their own view and are never edited as source. */
+const image: DocumentFormat = {
+  id: 'core.image',
+  name: 'Image',
+  extensions: [...imageExtensions],
+  views: ['image'],
+  Preview: ImageViewer,
+}
+const registry = new Map<string, DocumentFormat>([
+  [plainText.id, plainText],
+  [image.id, image],
+])
 const listeners = new Set<() => void>()
 const sourceViews: readonly DocumentView[] = ['markdown']
 const previewViews: readonly DocumentView[] = ['side-by-side', 'markdown']
-let snapshot: readonly DocumentFormat[] = [plainText]
+let snapshot: readonly DocumentFormat[] = [plainText, image]
+/** The requested view when the document has it, else the view it falls back to. */
+export function documentView(
+  available: readonly DocumentView[],
+  requested: DocumentView,
+): DocumentView {
+  return available.includes(requested)
+    ? requested
+    : available.includes('side-by-side')
+      ? 'side-by-side'
+      : available.includes('image')
+        ? 'image'
+        : 'markdown'
+}
 export const documentFormats = {
   snapshot: () => snapshot,
   subscribe(listener: () => void) {

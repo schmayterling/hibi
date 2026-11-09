@@ -41,6 +41,7 @@ export function FormatEditor({
   const [syncPreviewScroll] = useEditorPreference(
     editorPreferences.syncPreviewScroll,
   )
+  // An image shows only its preview: no source editor is mounted.
   const {
     content,
     paneMode,
@@ -51,7 +52,7 @@ export function FormatEditor({
     setSourceReady,
     setSourceSettled,
     focusOwnedByEditor,
-  } = useEditorPanes(mode, false)
+  } = useEditorPanes(mode === 'image' ? 'normal' : mode, false)
   const [findQuery, setFindQuery] = useState('')
   const [findStatus, setFindStatus] = useState<FindStatus>({
     current: 0,

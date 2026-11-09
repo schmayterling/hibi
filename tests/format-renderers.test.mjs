@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
 test('format plugins render natively, keep previews inert, and run only on request', {
@@ -98,6 +99,14 @@ test('format plugins render natively, keep previews inert, and run only on reque
       })
     }, file)
     await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async ({ name, source }) => {
+        const current = await window.hibi.getDocument()
+        return current.name === name && current.markdown === source
+      },
+      { name, source },
+    )
     await page
       .getByRole('textbox', { name: `${label} editor`, exact: true })
       .waitFor()

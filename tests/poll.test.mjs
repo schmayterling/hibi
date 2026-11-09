@@ -92,6 +92,38 @@ test('async polling rejects a successful result that arrives after its deadline'
   )
 })
 
+test('async polling checks again when a read races edits not yet in main', async () => {
+  let calls = 0
+  await waitForAsync(
+    {
+      evaluate: async () => {
+        if (++calls === 1)
+          throw new Error(
+            'page.evaluate: Error: This tab has local edits waiting to synchronize. Try again.',
+          )
+        return true
+      },
+    },
+    async () => true,
+    undefined,
+    { polling: 1 },
+  )
+  assert.equal(calls, 2)
+  await assert.rejects(
+    waitForAsync(
+      {
+        evaluate: async () => {
+          throw new Error('This tab has local edits waiting to synchronize.')
+        },
+      },
+      async () => true,
+      undefined,
+      { timeout: 20, polling: 1 },
+    ),
+    /did not settle.*last check: This tab has local edits/,
+  )
+})
+
 test('async polling rejects exhausted budgets and preserves evaluation errors', async () => {
   await assert.rejects(
     waitForAsync(

@@ -424,6 +424,10 @@ button:disabled {
   scrollbar-width: none;
   -webkit-app-region: no-drag;
 }
+/* A click while a file operation runs waits for it. */
+.document-tabs[aria-busy="true"] * {
+  cursor: progress;
+}
 .document-tab {
   position: relative;
   display: flex;
@@ -797,6 +801,7 @@ button:disabled {
   min-width: 0;
   padding: 72px 28px 36px;
   overflow: auto;
+  scrollbar-gutter: stable;
   container: settings / inline-size;
 }
 .settings-content section {
@@ -2098,6 +2103,32 @@ summary {
   overflow-wrap: anywhere;
   padding: var(--editor-padding, 48px);
   font: inherit;
+}
+.image-viewer {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: var(--editor-padding, 48px);
+}
+.image-preview {
+  display: block;
+}
+.image-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 100%;
+  text-align: center;
+}
+.image-unavailable strong {
+  color: var(--ink);
+  font-size: var(--text-ui);
+}
+.image-unavailable p {
+  margin: 0;
 }
 .setting-availability {
   color: var(--muted);

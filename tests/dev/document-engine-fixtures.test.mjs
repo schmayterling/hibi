@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   documentEngineFixture,
   engineFixtureFamilies,
-} from '../scripts/document-engine-fixtures.mjs'
+} from '../../scripts/document-engine-fixtures.mjs'
 
 test('engine fixtures contain exact logical lines, deterministic bytes, and meaningful complexity', () => {
   for (const family of engineFixtureFamilies) {

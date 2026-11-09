@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -201,13 +205,14 @@ test('addon targets identify the hosting editor and report its active pane', {
   await rich.focus()
   assert.equal((await active()).value.view.viewId, formatted.value.view.viewId)
   const previous = (await page.evaluate(() => window.hibi.getDocument())).tabId
-  await clickMenu(app, 'New')
-  await waitForAsync(
-    page,
-    async (previous) => (await window.hibi.getDocument()).tabId !== previous,
-    previous,
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'New')
+    await waitForAsync(
+      page,
+      async (previous) => (await window.hibi.getDocument()).tabId !== previous,
+      previous,
+    )
+  })
   for (const target of [formatted.value.view, markdown.value.view])
     assert.equal(
       (

@@ -3,7 +3,7 @@ import { constants } from 'node:fs'
 import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { SourceSnapshot } from '../shared/source-buffer'
-import { retryRename } from './atomic-rename.ts'
+import { fileHeldOpen, retryRename } from './atomic-rename.ts'
 
 const fileAccess = new Map<string, Promise<void>>()
 
@@ -21,6 +21,14 @@ async function lockFileAccess(path: string) {
     release()
   }
 }
+
+export const markedReadOnly = (path: string) =>
+  Object.assign(
+    new Error(
+      `Could not save ${basename(path)} because it is marked read-only. Your text is still here and the file is unchanged. Turn off Read-only in the file's properties, or use Save as.`,
+    ),
+    { code: 'EREADONLY' },
+  )
 
 export function validateMarkdown(value: unknown): asserts value is string {
   if (typeof value !== 'string')
@@ -129,17 +137,36 @@ export async function writeMarkdown(
   markdown: string | SourceSnapshot,
   exclusive = false,
   canCommit?: () => boolean,
+  renameDelays?: readonly number[],
+  onRefused?: () => void,
 ): Promise<void> {
   if (typeof markdown === 'string') validateMarkdown(markdown)
-  return writeText(
+  await writeText(
     path,
     typeof markdown === 'string' ? markdown : markdown.encodedChunks(),
     exclusive,
     canCommit,
+    renameDelays,
+    onRefused,
   )
+  // A recovery copy goes after a save: the rename has to last a power cut first.
+  await syncFolder(dirname(path))
 }
 
-async function* writeChunks(
+/** Makes new names in a folder last a power cut. Windows has no such call. */
+export async function syncFolder(path: string) {
+  if (process.platform === 'win32') return
+  const folder = await open(path, 'r').catch(() => null)
+  try {
+    await folder?.sync()
+  } catch {
+    // A file system that can't sync a folder still holds the note.
+  } finally {
+    await folder?.close().catch(() => {})
+  }
+}
+
+export async function* writeChunks(
   source: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
 ) {
   let buffer = Buffer.allocUnsafe(1024 * 1024),
@@ -165,6 +192,8 @@ export async function writeText(
   text: string | Uint8Array | Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
   exclusive = false,
   canCommit?: () => boolean,
+  renameDelays?: readonly number[],
+  onRefused?: () => void,
 ): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
   const existing = await stat(path).catch((error: NodeJS.ErrnoException) => {
@@ -204,11 +233,46 @@ export async function writeText(
           throw error
         await copyFile(temp, path, constants.COPYFILE_EXCL)
       }
-    } else
-      await retryRename(() => {
-        checkCommit()
-        return rename(temp, path)
-      })
+    } else {
+      // Filling the copy can outlast the program writing or removing the file,
+      // and so can a wait for the rename.
+      const unchangedOutside = async () => {
+        const now = await stat(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error
+          return null
+        })
+        if (
+          now?.size !== existing?.size ||
+          now?.mtimeMs !== existing?.mtimeMs ||
+          now?.ino !== existing?.ino
+        )
+          throw Object.assign(
+            new Error(
+              'Could not save because this file changed outside Hibi while Hibi was waiting to save it. Your text is still here. Save again to review the change.',
+            ),
+            { code: 'ECHANGED' },
+          )
+      }
+      if (renameDelays) await unchangedOutside()
+      await retryRename(
+        () => {
+          checkCommit()
+          return rename(temp, path).catch((error) => {
+            // Node reports the read-only attribute as a mode with no write bits.
+            if (fileHeldOpen(error) && existing && !(existing.mode & 0o200))
+              throw markedReadOnly(path)
+            throw error
+          })
+        },
+        renameDelays &&
+          (async () => {
+            onRefused?.()
+            await unchangedOutside()
+          }),
+        undefined,
+        renameDelays,
+      )
+    }
   } finally {
     try {
       await unlink(temp).catch((error: NodeJS.ErrnoException) => {

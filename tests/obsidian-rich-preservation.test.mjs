@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -176,7 +177,7 @@ for (const math of [false, true]) {
         filePaths: [path],
       })
     }, crlfFile)
-    await clickMenu(app, 'Open…')
+    await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
     await expected('p\r\n\r\nq')
     await waitForDocumentEditor(app, page)
     await caret(4)

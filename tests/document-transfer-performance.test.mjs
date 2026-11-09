@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -67,38 +71,44 @@ for (const mib of [2, 8])
       },
       [big, small],
     )
-    // Both notes open in the formatted view, so wait for each by name.
-    const shown = async (file) => {
-      await waitForAsync(
-        page,
-        async (name) => (await window.hibi.getDocument()).name === name,
-        basename(file),
-      )
-      await waitForDocumentEditor(app, page)
-    }
-    await clickMenu(app, 'Open…')
-    await shown(big)
-    await clickMenu(app, 'Open…')
-    await shown(small)
+    // Both notes open in the formatted view, so wait for each by name, in
+    // the editor that replaced the one shown before.
+    const show = (action, file) =>
+      openInDocumentEditor(app, page, async () => {
+        await action()
+        await waitForAsync(
+          page,
+          async (name) => (await window.hibi.getDocument()).name === name,
+          basename(file),
+        )
+      })
+    await show(() => clickMenu(app, 'Open…'), big)
+    await show(() => clickMenu(app, 'Open…'), small)
     const times = []
     for (let round = 0; round < 2; round++) {
       await app.evaluate(() => {
         globalThis.replyProbe.reads = 0
       })
       const start = performance.now()
-      await page
-        .getByRole('tab')
-        .filter({ hasText: basename(big) })
-        .click()
-      await shown(big)
+      await show(
+        () =>
+          page
+            .getByRole('tab')
+            .filter({ hasText: basename(big) })
+            .click(),
+        big,
+      )
       times.push(performance.now() - start)
       assert.equal(await app.evaluate(() => globalThis.replyProbe.reads), 0)
       if (!round) {
-        await page
-          .getByRole('tab')
-          .filter({ hasText: basename(small) })
-          .click()
-        await shown(small)
+        await show(
+          () =>
+            page
+              .getByRole('tab')
+              .filter({ hasText: basename(small) })
+              .click(),
+          small,
+        )
       }
     }
     await page.evaluate(() => {

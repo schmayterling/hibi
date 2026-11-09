@@ -2,6 +2,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import {
   Compartment,
   EditorState,
+  type Extension,
+  Prec,
   StateEffect,
   StateField,
   Transaction,
@@ -13,13 +15,16 @@ import {
   keymap,
   WidgetType,
 } from '@codemirror/view'
+import { InlineContext } from '@lezer/markdown'
 import '../../src/renderer/src/styles.css'
 import {
   type ChunkedMarkdownProbe,
   uncovered,
 } from '../../src/renderer/src/chunked-markdown'
+import { cellParser } from '../../src/renderer/src/formatted/table-cells'
 import * as formattedTables from '../../src/renderer/src/formatted/tables'
 import {
+  formattedBlockParser,
   formattedDocument,
   showMarkdownMarkers,
 } from '../../src/renderer/src/formatted-contributions'
@@ -96,24 +101,43 @@ class Space extends WidgetType {
     return this.height
   }
 }
-const grow = StateEffect.define<number>()
-/** Space at the note's start, standing in for text above whose height the view estimates again. */
+const grow = StateEffect.define<{ at: number; height: number }>()
+/**
+ * Spaces in the note, standing in for text whose height the view estimates
+ * again; each set again by its position, removed at a height of 0.
+ */
 const above = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(value, transaction) {
+    let set = value.map(transaction.changes)
     for (const effect of transaction.effects)
-      if (effect.is(grow))
-        return Decoration.set(
-          Decoration.widget({
-            widget: new Space(effect.value),
-            block: true,
-            side: -1,
-          }).range(0),
-        )
-    return value.map(transaction.changes)
+      if (effect.is(grow)) {
+        const { at, height } = effect.value
+        set = set.update({
+          filterFrom: at,
+          filterTo: at,
+          filter: (from) => from !== at,
+          add: height
+            ? [
+                Decoration.widget({
+                  widget: new Space(height),
+                  block: true,
+                  side: -1,
+                }).range(at),
+              ]
+            : [],
+        })
+      }
+    return set
   },
   provide: (field) => EditorView.decorations.from(field),
 })
+/** A space of `height` px at `at`, kept as a parsing slice keeps the reader. */
+function growAt(at: number, height: number) {
+  if (!view) return
+  keepReading(view)
+  view.dispatch({ effects: grow.of({ at, height }) })
+}
 const access = (on: boolean) => [
   EditorState.readOnly.of(!on),
   EditorView.editable.of(on),
@@ -150,6 +174,8 @@ Object.assign(window, {
         tabId?: string
         add?: boolean
         slice?: number
+        /** History's `newGroupDelay`, for runs that must not depend on their pace. */
+        historyGroupDelay?: number
       } = {},
     ) {
       if (size)
@@ -174,7 +200,10 @@ Object.assign(window, {
           extensions: [
             livePreview(syntax),
             options.editable
-              ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
+              ? [
+                  history({ newGroupDelay: options.historyGroupDelay }),
+                  keymap.of([...defaultKeymap, ...historyKeymap]),
+                ]
               : [],
             editable.of(access(!!options.editable)),
             above,
@@ -192,6 +221,55 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    /** Count real block-proof work without a clock or replacing the grammar. */
+    watchBlockProofs() {
+      const current = view!
+      const grammar = current.state.facet(formattedBlockParser)(current.state)
+      const work = { calls: 0, units: 0 }
+      const measured = Object.assign(Object.create(grammar), {
+        parse(text: string) {
+          work.calls++
+          work.units += text.length
+          return grammar.parse(text)
+        },
+      })
+      current.dispatch({
+        effects: StateEffect.appendConfig.of(
+          Prec.highest(formattedBlockParser.of(() => measured)),
+        ),
+      })
+      return work
+    },
+    /** Count real inline parsing; restore the shared grammar after each measurement. */
+    watchInlineParses() {
+      const grammar = cellParser(view!.state)
+      const parse = grammar.parse
+      const char = InlineContext.prototype.char
+      const work = { calls: 0, units: 0, steps: 0 }
+      grammar.parse = (...args) => {
+        work.calls++
+        work.units += args[0].length
+        InlineContext.prototype.char = function (position) {
+          work.steps++
+          return char.call(this, position)
+        }
+        try {
+          return parse.apply(grammar, args)
+        } finally {
+          InlineContext.prototype.char = char
+        }
+      }
+      return {
+        work,
+        stop: () => {
+          grammar.parse = parse
+        },
+      }
+    },
+    /** install source extensions, as a format addon does. */
+    extend(extension: Extension) {
+      view?.dispatch({ effects: StateEffect.appendConfig.of(extension) })
+    },
     /** Apply another view's edit without recording it in this view's history. */
     echo(insert: string) {
       if (!view) return
@@ -204,9 +282,8 @@ Object.assign(window, {
     },
     settling: () => view && syntax?.settling(view.state),
     /**
-     * Whether the text in view is parsed. A viewport that moves during an
-     * edit's reparse ends its settling first: the view then shows the text it
-     * has not reached yet unparsed.
+     * Whether the text in view has its current parsed layout, including
+     * after a viewport move during an edit's unfinished reparse.
      */
     parsed: () =>
       !!view &&
@@ -247,11 +324,9 @@ Object.assign(window, {
      * Give the text above `height` px more, keeping the reader as a parsing
      * slice does, as when the view estimates text it has not drawn again.
      */
-    growAbove(height: number) {
-      if (!view) return
-      keepReading(view)
-      view.dispatch({ effects: grow.of(height) })
-    },
+    growAbove: (height: number) => growAt(0, height),
+    /** The same with the space at `at`, or without it at a height of 0. */
+    growAt,
     /** Make the mounted editor read-only and not editable, or editable again. */
     setEditable: (on: boolean) =>
       view?.dispatch({ effects: editable.reconfigure(access(on)) }),

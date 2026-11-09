@@ -4,8 +4,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { electronEnvironment } from '../scripts/electron-runtime.mjs'
-import { electron } from './electron.mjs'
+import { electronEnvironment } from '../../scripts/electron-runtime.mjs'
+import { electron } from '../electron.mjs'
 
 test('development runtime uses the hibi bundle name and supplied icon', {
   skip: process.platform !== 'darwin',

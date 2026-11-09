@@ -59,7 +59,7 @@ test('production entry keeps editor implementations behind demand imports', asyn
     .join('\n')
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor)\.tsx/,
+    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor)\.tsx|src\/renderer\/src\/document-media\.ts/,
   )
   assert.doesNotMatch(initial, /node_modules\/@tiptap\//)
   assert.doesNotMatch(
@@ -119,9 +119,110 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // addon's features adds 93 (#766).
   // Marking the app when Linux window controls are hidden, so the title bar
   // gives back their space, adds 109 (#733).
+  // Keeping the redo steps an edit replaces as a branch, and the step each
+  // save wrote, so a note's undo history outlives closing it, adds 2,933
+  // (#782); storing and restoring that history loads later.
+  // Going to a step of that tree, knowing which of its states saves kept as
+  // versions, and restoring a saved version as an edit undo takes back, adds
+  // 877 (#786); the History view loads later.
+  // Autosave waiting until an input method commits what it composes adds
+  // 332 (#790).
+  // Registering the undo history flush at app boot, so pages without the
+  // preload can load the document runtime, adds 17 (#793).
+  // Leaving Enter and Escape to an input method while it composes, in the
+  // explorer, the palette, find and dialogs, adds 150 (#804).
+  // Counting a step's carets in the undo history's size adds 92 (#795).
+  // Running a menu or shortcut command that arrives during a file operation
+  // once it finishes, instead of dropping it, a save among them first, adds
+  // 499 (#794).
+  // Past the step limit, making old steps typed without a pause into one, so
+  // undo still reaches the oldest text, adds 940 (#803).
+  // Keeping the newest 32 undo steps as they were typed adds 20 (#807).
+  // Letting tab clicks, tab closes, links, file opens, media and addon
+  // commands wait for a file operation like keys do, and dropping what
+  // arrives behind a file dialog, adds 785 (#808).
+  // Finding History by "version" in the palette adds 61 (#814).
+  // Image documents and their demand-loaded viewer add 1,801 (#815).
+  // Sending repeated Save commands to their coalescing handler adds 27 (#818).
+  // Loading the stream resolver inside the image viewer's effect, without a
+  // nested Suspense delay, adds 132 (#817).
+  // Keeping the undo steps a save took as it took them, through redo, a save
+  // landing late or writing a later version and steps going, adds 149 (#810).
+  // Remembering which states saves kept as versions when a note reopens adds
+  // 70 (#820).
+  // Flagging only the texts a save kept as versions adds 55 (#830).
+  // Letting tab keys, addon tab clicks and tab moves wait for a file operation,
+  // telling screen readers so, and dropping what arrives while editing is paused, adds 461 (#822).
+  // Letting each media drop and each new note or open an addon asks for wait
+  // for a file operation on its own adds 22 (#825).
+  // Letting close split wait for a file operation adds 62 (#826).
+  // Restoring a saved version that History returns once a file operation is
+  // done, and showing its change in the editor, adds 24 (#828).
+  // Letting an addon send an edit again after a busy answer adds 41 (#836).
+  // Saving through a program holding a note, and saying why it can't, adds 225 (#858).
+  // Letting dropped files wait, each going in before the next starts, adds 139 (#862).
+  // Showing any error an addon can throw, however long or unreadable, adds 92 (#854).
+  // Saying when a program holds a note, and a held autosave's turns and notice,
+  // adds 958 (#866).
+  // Keeping one likely-addon list across different errors adds 924 (#872).
+  // Asking after launch whether a crash left unsaved text, and opening what it
+  // left, adds 528 (#878).
+  // Reading display blocks as Obsidian reads fenced math, including their
+  // closed state, preferences and shared list bounds, adds 894 (#731).
+  // Not taking a write's late storage notice for someone else's change, which
+  // made autocomplete forget words typed after a save, adds 97 (#936).
+  // Not taking an older storage notice over a newer commit, or over a newer
+  // schema learned from a refused write, adds 40 (#937).
+  // Applying an edit at every line of a large selection, such as Tab over a
+  // megabyte of code, in one pass over the source tree adds 1,207 (#964).
+  // Default-on autosave and resting from each attempt's end, for at most five
+  // minutes, adds 227 (#883).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109,
+    bytes <=
+      677008 +
+        88 +
+        65 +
+        27 +
+        491 +
+        539 +
+        36 +
+        1504 +
+        93 +
+        109 +
+        2933 +
+        877 +
+        332 +
+        17 +
+        150 +
+        92 +
+        499 +
+        940 +
+        20 +
+        785 +
+        61 +
+        1801 +
+        27 +
+        132 +
+        149 +
+        70 +
+        55 +
+        461 +
+        22 +
+        62 +
+        24 +
+        41 +
+        225 +
+        139 +
+        92 +
+        958 +
+        924 +
+        528 +
+        894 +
+        97 +
+        40 +
+        1207 +
+        227,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
@@ -298,7 +399,7 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   )
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:SettingsScreen|VersionHistory)\.tsx/,
+    /src\/renderer\/src\/(?:SettingsScreen|History)\.tsx/,
   )
   // The formatted view uses SourceEditor; its separate source pane stays unmounted.
   assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)

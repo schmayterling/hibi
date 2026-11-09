@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { prepareDocumentation } from '../scripts/docs-fetch.mjs'
+import { prepareDocumentation } from '../../scripts/docs-fetch.mjs'
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-docs-snapshot-'))

@@ -633,7 +633,7 @@ test('cold math-dense notes accept off-viewport corrections with bounded reads',
 
 test('a leaf correction cannot invalidate an earlier block read-ahead decision', () => {
   for (const prefix of ['', 'paragraph words\n\n'.repeat(3000)]) {
-    const doc = prefix + '>1. $$\n>   x^2\n>   $$'
+    const doc = prefix + '>1. $$\n>    x^2'
     const source = new SourceStore(doc, {
       tabId: 'lookahead',
       revision: 0,
@@ -653,9 +653,10 @@ test('a leaf correction cannot invalidate an earlier block read-ahead decision',
     const builder = new BoundaryTree(index.parser, index.length)
     for (const page of index.pages()) builder.append(page.records)
     const parser = index.parser.full
-    const from = doc.lastIndexOf('   ')
+    // The line after `$$` leaves the quote, so nothing follows it in the item.
+    const from = doc.lastIndexOf('>')
     const transaction = EditorState.create({ doc }).update({
-      changes: { from, to: from + 3, insert: 'e' },
+      changes: { from, to: from + 1, insert: 'e' },
     })
     assert.match(parser.parse(doc).toString(), /BlockMath/)
     assert.doesNotMatch(

@@ -9,6 +9,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -90,7 +91,12 @@ async function open(name) {
     },
     join(folder, 'notes', name),
   )
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, () => pressShortcut(app, `${mod}+o`))
+  // The block drag addon adds its handle after a note's text shows; a pointer
+  // already resting there gets no handle until it moves again.
+  await page
+    .locator('.rich-pane .block-drag-handle')
+    .waitFor({ state: 'attached' })
 }
 
 const markdown = async () =>
@@ -470,6 +476,7 @@ test('the handle moves blocks with its menu, by dragging and from the keyboard, 
     return getComputedStyle(handle).visibility === 'hidden'
   })
   await pressShortcut(app, `${mod}+Shift+[`)
+  await page.locator('.editor-panes.mode-normal').waitFor()
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
 })
 

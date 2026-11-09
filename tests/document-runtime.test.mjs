@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
+import {
+  DocumentRuntime,
+  documentRuntime,
+  observeDocumentErrors,
+} from '../src/renderer/src/document-runtime.ts'
 import { acceptSaved } from '../src/renderer/src/document-saved.ts'
 import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
+import { windowDesktop } from '../src/renderer/src/window-desktop.ts'
+import { admittedOperations } from '../src/shared/admitted-operations.ts'
+import { createDocumentJournal } from '../src/shared/document-journal.ts'
+import { parseSourceOperation } from '../src/shared/source-operations.ts'
+import { keptHistory } from '../src/shared/undo-history.ts'
 
 const document = (text, overrides = {}) => ({
   tabId: 'one',
@@ -692,4 +701,231 @@ test("a closed tab's states stop reaching its source while open tabs read theirs
   assert.deepEqual(errors, [])
   runtime.dispose()
   assert.throws(() => open.markdown, StaleDocumentError)
+})
+
+// Main takes the source when a save's turn comes, so a save waiting behind
+// another file operation writes a version made after it began.
+const keptTexts = (session, saved) => {
+  const history = keptHistory(session)
+  let root = saved
+  const apply = (text, edits) =>
+    edits.reduceRight(
+      (source, edit) =>
+        source.slice(0, edit.from) + edit.insert + source.slice(edit.to),
+      text,
+    )
+  for (let index = history.saved; index !== -1; ) {
+    root = apply(root, history.steps[index].inverse)
+    index = history.steps[index].parent
+  }
+  const texts = []
+  for (const step of history.steps)
+    texts.push(
+      apply(step.parent === -1 ? root : texts[step.parent], step.forward),
+    )
+  return { root, texts }
+}
+const receipt = (runtime, savedVersion) => ({
+  ...runtime.get(),
+  saveReceipt: true,
+  savedVersion,
+})
+const insert = (session, insert, group) => {
+  const at = session.snapshot().utf16Length
+  session.edit([{ from: at, to: at, insert }], 'source', group)
+}
+
+test('a save writing a version made after it began keeps that version as a step', () => {
+  const { runtime } = fixture()
+  runtime.activate(document(''))
+  const session = runtime.session()
+  insert(session, 'a', 'one')
+  const token = runtime.beginSave()
+  insert(session, 'b', 'two')
+  // Main wrote 'ab'. Typing goes on in the group of the step that leads there.
+  const written = session.snapshot().version
+  insert(session, 'c', 'two')
+  runtime.acknowledgeSave(receipt(runtime, written), token)
+  runtime.endSave(token)
+  assert.equal(session.savedSnapshot().materialize(), 'ab')
+  assert.deepEqual(keptTexts(session, 'ab'), { root: '', texts: ['a', 'ab'] })
+  // Undo stops at the saved text too.
+  session.undo()
+  assert.equal(session.snapshot().materialize(), 'ab')
+  runtime.dispose()
+})
+
+test('a late version keeps its history behind a newer save that began before it landed', () => {
+  const { runtime } = fixture()
+  runtime.activate(document(''))
+  const session = runtime.session()
+  insert(session, 'a', 'one')
+  const first = runtime.beginSave()
+  const written = session.snapshot().version
+  insert(session, 'b', 'two')
+  const second = runtime.beginSave()
+  insert(session, 'c', 'three')
+  const late = session.snapshot().version
+  runtime.acknowledgeSave(receipt(runtime, written), first)
+  runtime.endSave(first)
+  insert(session, 'd', 'three')
+  runtime.acknowledgeSave(receipt(runtime, late), second)
+  runtime.endSave(second)
+  assert.deepEqual(keptTexts(session, 'abc'), {
+    root: '',
+    texts: ['a', 'ab', 'abc'],
+  })
+  runtime.dispose()
+})
+
+test('typing joins as before once no save is in flight, whether it landed or failed', () => {
+  const { runtime } = fixture()
+  runtime.activate(document(''))
+  const session = runtime.session()
+  const landed = runtime.beginSave()
+  runtime.acknowledgeSave(receipt(runtime, session.snapshot().version), landed)
+  runtime.endSave(landed)
+  insert(session, 'a', 'one')
+  insert(session, 'b', 'one')
+  assert.equal(session.historyDepth().undo, 1)
+  const failed = runtime.beginSave()
+  runtime.endSave(failed)
+  insert(session, 'c', 'two')
+  insert(session, 'd', 'two')
+  assert.equal(session.historyDepth().undo, 2)
+  runtime.dispose()
+})
+
+test('an admitted edit crosses the preload bridge once', async () => {
+  const sent = [],
+    errors = []
+  let crossed = 0
+  const journal = createDocumentJournal(async (operation) => {
+    sent.push(operation)
+    return {
+      tabId: operation.document.tabId,
+      revision: operation.document.revision,
+      contentVersion: operation.contentVersion,
+      operationId: operation.operationId,
+    }
+  })
+  // Same journal wiring as the preload; contextBridge copies every argument.
+  const admitted = admittedOperations(
+    parseSourceOperation,
+    journal.assertCapacity,
+  )
+  const hibi = {
+    appendSourceOperation: async (operation) =>
+      journal.appendOperation(
+        typeof operation === 'string' ? admitted.take(operation) : operation,
+      ),
+    admitSourceOperation: admitted.admit,
+  }
+  globalThis.window = {
+    hibi: Object.fromEntries(
+      Object.entries(hibi).map(([name, method]) => [
+        name,
+        (...args) => {
+          for (const arg of args) crossed += arg?.changes?.length ?? 0
+          return method(...structuredClone(args))
+        },
+      ]),
+    ),
+  }
+  const stop = observeDocumentErrors((error) => errors.push(error))
+  try {
+    const lines = 16384
+    documentRuntime.activate(
+      document('x\n'.repeat(lines), { canAutosave: false }),
+    )
+    const session = documentRuntime.session()
+    const changes = Array.from({ length: lines }, (_, line) => ({
+      from: line * 2,
+      to: line * 2,
+      insert: '\t',
+    }))
+    session.edit(changes, 'source', 'indent')
+    await journal.flush()
+    assert.deepEqual(errors, [])
+    assert.equal(crossed, lines)
+    assert.equal(sent.length, 1)
+    assert.deepEqual(sent[0].changes, changes)
+  } finally {
+    stop()
+    documentRuntime.dispose()
+    delete globalThis.window
+  }
+})
+
+const admission = (tabId, contentVersion, operationId) => ({
+  document: { tabId, revision: 1 },
+  operationId,
+  baseVersion: contentVersion - 1,
+  contentVersion,
+  origin: 'source',
+  historyGroup: 'typing',
+  changes: [{ from: 0, to: 0, insert: 'a' }],
+})
+
+test('admissions keep one per tab, refuse an id another tab holds and own their payload', () => {
+  const full = createDocumentJournal(async () => {}, { maximumBulkBytes: 300 })
+  assert.throws(
+    () =>
+      admittedOperations(parseSourceOperation, full.assertCapacity).admit(
+        admission('one', 1, 'x'.repeat(100)),
+      ),
+    /recovery is full/,
+  )
+  const admitted = admittedOperations(parseSourceOperation)
+  // A tab's next admission drops one whose edit never reached its append.
+  admitted.admit(admission('one', 2, 'failed'))
+  admitted.admit(admission('two', 1, 'two1'))
+  admitted.admit(admission('one', 2, 'one2'))
+  assert.throws(() => admitted.take('failed'), /Unknown admitted/)
+  assert.equal(admitted.take('two1').document.tabId, 'two')
+  assert.equal(admitted.take('one2').document.tabId, 'one')
+  assert.throws(() => admitted.take('one2'), /Unknown admitted/)
+  // A refused id changes nothing: both tabs keep what they admitted.
+  admitted.admit(admission('two', 2, 'q'))
+  admitted.admit(admission('one', 3, 'p'))
+  assert.throws(() => admitted.admit(admission('two', 3, 'p')), /Conflicting/)
+  assert.equal(admitted.take('q').document.tabId, 'two')
+  assert.equal(admitted.take('p').document.tabId, 'one')
+  // The same tab may admit an id again; the later admission wins.
+  admitted.admit(admission('one', 4, 'r'))
+  admitted.admit(admission('one', 5, 'r'))
+  assert.equal(admitted.take('r').contentVersion, 5)
+  // The caller's object can change after admission; the admission does not.
+  const raw = admission('one', 6, 'm')
+  admitted.admit(raw)
+  raw.operationId = 'other'
+  raw.changes[0].insert = 'changed'
+  assert.throws(() => admitted.take('other'), /Unknown admitted/)
+  assert.equal(admitted.take('m').changes[0].insert, 'a')
+})
+
+test('the addon window stand-in stages admissions the same way', async () => {
+  const hibi = windowDesktop({ states: async () => [] })
+  const raw = admission('one', 2, 'm')
+  hibi.admitSourceOperation(raw)
+  raw.operationId = 'other'
+  raw.contentVersion = 9
+  assert.deepEqual(await hibi.appendSourceOperation('m'), {
+    tabId: 'one',
+    revision: 1,
+    contentVersion: 2,
+    operationId: 'm',
+  })
+  await assert.rejects(hibi.appendSourceOperation('m'), /Unknown admitted/)
+  hibi.admitSourceOperation(admission('two', 2, 'q'))
+  hibi.admitSourceOperation(admission('one', 3, 'p'))
+  assert.throws(
+    () => hibi.admitSourceOperation(admission('two', 3, 'p')),
+    /Conflicting/,
+  )
+  assert.equal((await hibi.appendSourceOperation('q')).tabId, 'two')
+  assert.equal((await hibi.appendSourceOperation('p')).tabId, 'one')
+  hibi.admitSourceOperation(admission('one', 4, 'failed'))
+  hibi.admitSourceOperation(admission('one', 4, 'next'))
+  await assert.rejects(hibi.appendSourceOperation('failed'), /Unknown admitted/)
 })

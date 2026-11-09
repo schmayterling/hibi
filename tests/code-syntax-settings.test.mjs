@@ -229,9 +229,12 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   await block.waitFor()
   await block.evaluate(async (pre, box) => {
     // A redraw may replace the box; wait for the new one.
-    while (box && !pre.isConnected) {
+    const started = performance.now()
+    while (!pre.isConnected || pre.scrollWidth <= pre.clientWidth) {
       pre = document.querySelector(box) ?? pre
-      if (!pre.isConnected) await new Promise(requestAnimationFrame)
+      if (performance.now() - started > 8000)
+        throw new Error('no wide code box is drawn')
+      await new Promise(requestAnimationFrame)
     }
     pre.scrollLeft = pre.scrollWidth
     if (pre.matches('.rich-pane')) pre.scrollTop = pre.scrollHeight
@@ -240,17 +243,21 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   await t.test('wide code can scroll horizontally', async () => {
     assert.ok(
       await block.evaluate(async (pre, box) => {
-        // A redraw may replace the box, and a new box is only as wide as
-        // the view until its long lines are drawn; wait for one that is.
+        // A redraw may replace the box; its width and saved scroll position
+        // return after CodeMirror draws and measures the long lines.
         const started = performance.now()
         for (;;) {
           if (!pre.isConnected) pre = document.querySelector(box) ?? pre
-          if (pre.isConnected && pre.scrollWidth > pre.clientWidth) break
+          if (
+            pre.isConnected &&
+            pre.scrollWidth > pre.clientWidth &&
+            pre.scrollLeft > 0
+          )
+            return true
           if (performance.now() - started > 8000)
-            throw new Error('no wide code box is drawn')
+            throw new Error('wide code lost its horizontal scroll position')
           await new Promise(requestAnimationFrame)
         }
-        return pre.scrollLeft > 0
       }, box),
       'wide code retains horizontal scrolling',
     )
@@ -366,6 +373,7 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
   )
   assert.equal(await page.evaluate(() => window.richRefreshes), 0)
   await pressShortcut(app, `${mod}+Shift+[`)
+  await waitForDocumentEditor(app, page)
   // Accepted difference: the rich editor refreshes its highlighting once when
   // shown; the language ended as it was, so CodeMirror has nothing to redraw.
   await page.waitForFunction(
@@ -517,12 +525,11 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
       '.rich-pane .hibi-lp-codescroll > .cm-line { padding-bottom: 9000px; }',
   })
   await show(wide, right)
-  assert.ok(
-    await page
-      .locator('.rich-pane .hibi-lp-codescroll')
-      .first()
-      .evaluate((box) => box.textContent.length > 20_000),
-    'the whole line is drawn',
+  // A tall line gets a gap again when drawn, until CodeMirror next measures.
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.rich-pane .hibi-lp-codescroll')?.textContent
+        .length > 20_000,
   )
   await tall.evaluate((style) => style.remove())
   // A short first line, then one long line that wraps.

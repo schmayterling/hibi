@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -76,14 +77,17 @@ test('source loading, addon reconfiguration and split editing preserve source an
         document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
         document.querySelector('.source-pane .cm-content')?.isContentEditable,
     )
-  const open = async (file, text) => {
+  // `name` is the editor the window's current mode shows the note in.
+  const open = async (file, text, name = 'Markdown editor') => {
     await app.evaluate(({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
+    await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'), {
+      name,
+    })
     await expectSource(text)
   }
   await hidden()
@@ -116,7 +120,7 @@ test('source loading, addon reconfiguration and split editing preserve source an
   )
   await rich.locator('.cm-line', { hasText: /endings$/ }).waitFor()
   await expectSource(`${original}s`)
-  await open(second, other)
+  await open(second, other, 'Document editor')
   await rich.locator('.cm-line', { hasText: 'untouched content' }).waitFor()
   const before = await page.evaluate(() => window.hibi.getDocument())
   await pressShortcut(app, `${mod}+Shift+]`)

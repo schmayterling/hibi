@@ -1,3 +1,4 @@
+// ci: alone (waits 10 s for 500 notes to index: twice as slow among neighbours)
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

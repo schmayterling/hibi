@@ -12,6 +12,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -166,6 +167,9 @@ before(
       { path: html, size },
     )
     harness = await next
+    // Hosted screens clamp the window, to 681 px on Windows and less on macOS,
+    // and the text in view decides where a long line's rows start.
+    await harness.setViewportSize({ width: 1000, height: 720 })
     harness.setDefaultTimeout(10000)
     await harness.waitForFunction(() => Boolean(window.tables))
     // Hidden windows have no focus; keys and markers need a focused editor.
@@ -716,6 +720,836 @@ test('the text above a long table growing keeps the row under the pane top in pl
   )
   assert.ok(
     result.before !== null && result.before > -61 && result.scrolled !== null,
+    JSON.stringify(result),
+  )
+})
+
+test('the text above growing far keeps the text at the pane top in place in every layout', {
+  timeout: 300000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 300 },
+    (_, i) => `Paragraph ${i} of the text above.`,
+  ).join('\n\n')
+  const rows = Array.from({ length: 10000 }, (_, i) => `| row ${i} | v${i} |`)
+  const table = `| a | b |\n| --- | --- |\n${rows.join('\n')}`
+  const lines = Array.from(
+    { length: 3000 },
+    (_, i) => `line ${i} of one long paragraph`,
+  ).join('\n')
+  const code = Array.from({ length: 3000 }, (_, i) => `code ${i}`).join('\n')
+  const words = Array.from({ length: 3000 }, (_, i) => `word${i}`).join(' ')
+  const more = '\nmore\n'.repeat(200)
+  // A note, the text put at the pane's top, how far below the top, and how
+  // far it may move: inside a long paragraph's one line, the view starts its
+  // rows again after the part it draws, so the text can land one row off.
+  const layouts = [
+    [
+      'table first row',
+      `${paragraphs}\n\n${table}\n\nAfter.\n`,
+      '| row 0 |',
+      10,
+      1,
+    ],
+    [
+      'long paragraph',
+      `${paragraphs}\n\n${lines}\n\nAfter.\n${more}`,
+      'line 1500 of',
+      0,
+      29,
+    ],
+    [
+      'code block',
+      `${paragraphs}\n\n\`\`\`\n${code}\n\`\`\`\n\nAfter.\n`,
+      'code 1500',
+      0,
+      1,
+    ],
+    [
+      'one long line',
+      `${paragraphs}\n\n${words}\n\nAfter.\n${more}`,
+      'word1500 ',
+      0,
+      1,
+    ],
+  ]
+  const results = []
+  for (const grow of [5000, 50000])
+    for (const [name, doc, target, offset, slack] of layouts) {
+      const result = await harness.evaluate(
+        async ({ doc, target, offset, grow }) => {
+          const preview = window.tables
+          await preview.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true },
+          )
+          const view = preview.view()
+          const pane = document.querySelector('.rich-pane')
+          const frame = () => new Promise(requestAnimationFrame)
+          const at = doc.indexOf(target)
+          const where = () => {
+            const box = view.coordsAtPos(at, 1)
+            return box
+              ? Math.round(box.top - pane.getBoundingClientRect().top)
+              : null
+          }
+          // Aimed again until the text shows where the view put it.
+          for (let i = 0; i < 60; i++) {
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(at, {
+                y: 'start',
+                yMargin: -offset,
+              }),
+            })
+            for (let frames = 0; frames < 4; frames++) await frame()
+            const top = where()
+            if (top !== null && Math.abs(top - offset) < 2) break
+          }
+          const still = async () => {
+            let last
+            for (let i = 0, same = 0; i < 200 && same < 5; i++) {
+              await frame()
+              const now = where()
+              same = now === last ? same + 1 : 0
+              last = now
+            }
+            return last
+          }
+          const before = await still()
+          preview.growAbove(grow)
+          return { before, after: await still() }
+        },
+        { doc, target, offset, grow },
+      )
+      results.push({ name, grow, slack, ...result })
+    }
+  const report = JSON.stringify(results)
+  for (const { before, after, slack } of results) {
+    assert.ok(before !== null && after !== null, report)
+    assert.ok(Math.abs(after - before) <= slack, report)
+  }
+})
+
+test('a scroll sent just before a parsing slice still goes where it was sent', {
+  timeout: 60000,
+}, async () => {
+  const code = Array.from({ length: 1024 }, () => 'word '.repeat(51)).join('\n')
+  const doc = `\`\`\`\n  x\n${code}\ny\n\`\`\`\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.tables
+    await preview.mount(doc, { width: 1000, height: 606 }, { editable: true })
+    const view = preview.view()
+    const pane = document.querySelector('.rich-pane')
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    await frames(10)
+    // The place a slice held, at the note's top, is what a reader would keep.
+    pane.scrollTop = 9
+    await frames(4)
+    preview.growAbove(1)
+    await frames(10)
+    const at = doc.lastIndexOf('y')
+    view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+    // A measure can end with the command waiting and none to come, when what
+    // the view draws keeps changing, as on hosted runners; the next slice's
+    // reading position then can't run it first.
+    cancelAnimationFrame(view.measureScheduled)
+    view.measureScheduled = -1
+    preview.growAbove(2)
+    await frames(30)
+    const box = view.coordsAtPos(at, 1)
+    const { top, bottom } = pane.getBoundingClientRect()
+    return {
+      scrollTop: pane.scrollTop,
+      shown: !!box && box.top >= top && box.bottom <= bottom,
+    }
+  }, doc)
+  assert.ok(result.shown, JSON.stringify(result))
+})
+
+test('a scroll waiting after a slice that left no measure asks for one', {
+  timeout: 60000,
+}, async () => {
+  const code = Array.from({ length: 1024 }, () => 'word '.repeat(51)).join('\n')
+  const doc = `\`\`\`\n  x\n${code}\ny\n\`\`\`\n`
+  const asked = await harness.evaluate(async (doc) => {
+    const preview = window.tables
+    await preview.mount(doc, { width: 1000, height: 606 }, { editable: true })
+    const view = preview.view()
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    await frames(10)
+    document.querySelector('.rich-pane').scrollTop = 9
+    await frames(4)
+    preview.growAbove(1)
+    await frames(10)
+    view.dispatch({
+      selection: { anchor: doc.lastIndexOf('y') },
+      scrollIntoView: true,
+    })
+    const unschedule = () => {
+      cancelAnimationFrame(view.measureScheduled)
+      view.measureScheduled = -1
+    }
+    unschedule()
+    preview.growAbove(2)
+    // A view asks for a measure on any update while a command waits, but not
+    // at the end of a measure, where a place kept through it is restored too.
+    unschedule()
+    await Promise.resolve()
+    return view.measureScheduled > -1
+  }, doc)
+  assert.ok(asked)
+})
+
+test('a scroll the view dropped with its state leaves the reading place held', {
+  timeout: 60000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 300 },
+    (_, i) => `Paragraph ${i} of the text above.`,
+  ).join('\n\n')
+  const words = Array.from({ length: 30000 }, (_, i) => `word${i}`).join(' ')
+  const doc = `${paragraphs}\n\n${words}\n\nAfter.\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.tables
+    await preview.mount(doc, { width: 1000, height: 606 }, { editable: true })
+    const view = preview.view()
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    await frames(10)
+    const at = doc.indexOf('word25000 ')
+    const aim = view.constructor.scrollIntoView(at, {
+      y: 'start',
+      yMargin: 30,
+    })
+    view.dispatch({ effects: aim })
+    await frames(10)
+    preview.growAbove(1)
+    await frames(10)
+    // As after a failed edit: the command never runs.
+    view.dispatch({ effects: aim })
+    view.setState(view.state)
+    await frames(10)
+    const before = view.coordsAtPos(at, 1)?.top
+    preview.growAbove(5000)
+    await frames(20)
+    return { before, after: view.coordsAtPos(at, 1)?.top }
+  }, doc)
+  assert.ok(
+    Math.abs(result.after - result.before) <= 30,
+    JSON.stringify(result),
+  )
+})
+
+const hugeParagraphs = Array.from(
+  { length: 300 },
+  (_, i) => `Paragraph ${i} of the text above.`,
+).join('\n\n')
+const hugeMore = '\nmore\n'.repeat(200)
+const hugeWords = Array.from({ length: 30000 }, (_, i) => `word${i}`).join(' ')
+const hugeLines = Array.from(
+  { length: 20000 },
+  (_, i) => `line ${i} of one long paragraph`,
+).join('\n')
+const hugeLine = `${hugeParagraphs}\n\n${hugeWords}\n\nAfter.\n${hugeMore}`
+const hugeParagraph = `${hugeParagraphs}\n\n${hugeLines}\n\nAfter.\n${hugeMore}`
+
+test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
+  timeout: 300000,
+}, async (t) => {
+  // A clipped 800 px pane chooses different line gaps and misses the join.
+  await harness.setViewportSize({ width: 1500, height: 900 })
+  t.after(() => harness.setViewportSize({ width: 1000, height: 720 }))
+  // Lines so long the view draws only the part near the screen: elsewhere
+  // a position's coordinates are the edge of the space standing in for the
+  // rest. The view starts the line's rows again after the part it draws, so
+  // the text can land one row off.
+  const line = [hugeLine, 'word25000 ', 30]
+  // A row off there is 28 px from where the aim left the text, which can
+  // already be a px or two off.
+  const paragraph = [hugeParagraph, 'line 15000 of', 40]
+  // Steps: a space of a height at a position (0 removes it), `frame` to go
+  // on a frame later instead of once the text holds, `scroll` for the
+  // reader's scrolling before the view draws again, `aim` to put the text at
+  // the pane's top again, `top` to measure the text at the pane's top instead,
+  // `read` for the reader's scrolling once the text holds, `join` for that to a
+  // row that starts at a join of lines, `cut` to delete the text and all after
+  // it, `shift` to move the pane down the page. A run's fourth item is its width.
+  const runs = [
+    [
+      'a second change a frame after the first',
+      line,
+      [{ grow: 5000, frame: true }, { grow: 10000 }],
+    ],
+    ['a shrink', line, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
+    ['a shrink', paragraph, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
+    ['a split below the screen', paragraph, [{ grow: 5000, below: 4000 }]],
+    // The reader's scrolling stands, from where the text is put back.
+    [
+      'a scroll before the view draws again',
+      line,
+      [{ grow: 5000, scroll: 300 }],
+    ],
+    [
+      'a scroll before the view draws again',
+      paragraph,
+      [{ grow: 5000, scroll: 300 }],
+    ],
+    // A row there that starts at a join of lines, between elements. Wrapping
+    // decides where one is: a width has one or doesn't.
+    ...[1048, 1000, 1052, 1044, 1060].map((width) => [
+      'a scroll from a row at a join before the view draws again',
+      paragraph,
+      [{ join: true }, { grow: 5000, scroll: 300 }],
+      width,
+    ]),
+    ['a large change', line, [{ grow: 150000 }]],
+    ['a large change', paragraph, [{ grow: 150000 }]],
+    // The place held for one change isn't the reader's for the next, when
+    // the reader, an edit or the page moved on after it.
+    [
+      'a change after scrolling on',
+      paragraph,
+      [{ grow: 5000 }, { read: 300 }, { grow: 5000, top: true }],
+    ],
+    // Back at the same scroll, the heights under it are new: the text there
+    // is other text.
+    [
+      'a change after scrolling away and back',
+      line,
+      [
+        { grow: 5000 },
+        { read: -1000 },
+        { read: 1000 },
+        { grow: 5000, top: true },
+      ],
+    ],
+    [
+      'a change after the text is cut',
+      paragraph,
+      [{ grow: 5000 }, { cut: true }, { grow: 5000, top: true }],
+    ],
+    [
+      'a change after the pane moves',
+      paragraph,
+      [{ grow: 5000 }, { shift: 80 }, { grow: 5000, top: true }],
+    ],
+  ]
+  const results = []
+  // A slower machine runs more parsing slices during each sequence, and a
+  // place read again per slice would lose a row in each: in the paragraph,
+  // where the misses were.
+  const slowed = runs.filter(
+    ([, doc, steps]) =>
+      doc === paragraph &&
+      !steps.some((step) => step.top || step.read || step.join),
+  )
+  const cpu = await harness.context().newCDPSession(harness)
+  // The harness is shared: the tests after this one run at full speed.
+  t.after(async () => {
+    await cpu.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    await cpu.detach()
+  })
+  const sequences = [
+    ...runs.map((run) => [1, run]),
+    ...slowed.map((run) => [2, run]),
+    ...slowed.map((run) => [4, run]),
+  ]
+  for (const [rate, [name, [doc, target, slack], steps, width]] of sequences) {
+    await cpu.send('Emulation.setCPUThrottlingRate', { rate })
+    const result = await harness.evaluate(
+      async ({ doc, target, steps, width }) => {
+        const preview = window.tables
+        await preview.mount(
+          doc,
+          { width: width ?? 1000, height: 800 },
+          { editable: true },
+        )
+        const view = preview.view()
+        const pane = document.querySelector('.rich-pane')
+        const frame = () => new Promise(requestAnimationFrame)
+        const at = doc.indexOf(target)
+        // A character's box reads what is drawn without running a pending
+        // measure, which can move the reveal ahead of the reader's task.
+        const where = (pos = at) => {
+          if (
+            !view.visibleRanges.some(
+              (range) => range.from <= pos && pos < range.to,
+            )
+          )
+            return null
+          for (const at of [pos, pos + 1]) {
+            const { node, offset } = view.domAtPos(at, 1)
+            if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
+              continue
+            const range = document.createRange()
+            range.setStart(node, offset)
+            range.setEnd(node, offset + 1)
+            return Math.round(
+              range.getClientRects()[0].top - pane.getBoundingClientRect().top,
+            )
+          }
+          return null
+        }
+        const still = async (pos = at) => {
+          let last
+          for (let i = 0, same = 0; i < 300 && same < 6; i++) {
+            await frame()
+            const now = where(pos)
+            same = now === last ? same + 1 : 0
+            last = now
+          }
+          return last
+        }
+        const aim = async () => {
+          for (let i = 0; i < 60; i++) {
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(at, {
+                y: 'start',
+                yMargin: 0,
+              }),
+            })
+            for (let frames = 0; frames < 4; frames++) await frame()
+            if (Math.abs(where() ?? 99) < 1) break
+          }
+          return still()
+        }
+        // The position at the start of the content's row at `y` in the pane.
+        const rowAt = (y) => {
+          const content = view.contentDOM.getBoundingClientRect()
+          const caret = document.caretPositionFromPoint(
+            content.left +
+              Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
+              1,
+            pane.getBoundingClientRect().top + y,
+          )
+          return view.posAtDOM(caret.offsetNode, caret.offset)
+        }
+        // How far to scroll, past a px, to have the first row on screen that
+        // starts at a join of lines at the pane's top: wrapping decides where
+        // one is.
+        const toJoin = () => {
+          for (let y = 20; y < 700; y += view.defaultLineHeight)
+            if (view.domAtPos(rowAt(y + 1), 1).node.nodeType !== Node.TEXT_NODE)
+              return y
+          return null
+        }
+        const tops = [await aim()]
+        for (const step of steps) {
+          if (step.aim) tops.push(await aim())
+          else if (step.read || step.join || step.cut || step.shift) {
+            const read = step.join ? toJoin() : step.read
+            if (step.join && read === null) return 'no row at a join'
+            if (read) pane.scrollTop += read
+            if (step.cut)
+              view.dispatch({
+                changes: { from: at - 50, to: view.state.doc.length },
+              })
+            if (step.shift) pane.style.marginTop = `${step.shift}px`
+            for (let frames = 0; frames < 6; frames++) await frame()
+          } else {
+            // A scroll leaves the text above the screen, maybe undrawn: the
+            // text it brings to the pane's top, read before, is measured.
+            let mark = at
+            let expect = 0
+            if (step.scroll || step.top) {
+              mark = rowAt((step.scroll ?? 0) + 1)
+              expect = where(mark) - (step.scroll ?? 0)
+            }
+            preview.growAt(
+              step.below === undefined ? 0 : at + step.below,
+              step.grow,
+            )
+            if (step.scroll) {
+              // The reader's next chance, once the slice is over: a task, and
+              // often the same frame.
+              await new Promise((done) => {
+                const channel = new MessageChannel()
+                channel.port1.onmessage = () => {
+                  channel.port1.close()
+                  channel.port2.close()
+                  done()
+                }
+                channel.port2.postMessage(0)
+              })
+              pane.scrollTop += step.scroll
+            }
+            if (step.frame) await frame()
+            else tops.push((await still(mark)) - expect)
+          }
+        }
+        pane.style.marginTop = ''
+        return tops
+      },
+      { doc, target, steps, width },
+    )
+    results.push({ name, rate, target, slack, width, tops: result })
+  }
+  const report = JSON.stringify(results)
+  const measured = results.filter(({ tops }) => Array.isArray(tops))
+  // The widths tried have a row at a join on every platform's text metrics.
+  assert.ok(
+    measured.some(({ name }) => name.includes('at a join')),
+    report,
+  )
+  for (const { name, tops, slack } of measured) {
+    for (const top of tops)
+      assert.ok(top !== null && Math.abs(top) <= slack, report)
+    // Nothing lays out a row again here: the reader's scrolling stands exactly.
+    if (name.includes('at a join'))
+      assert.ok(Math.abs(tops.at(-1)) <= 2, report)
+  }
+})
+
+for (const [layout, doc, target] of [
+  ['line', hugeLine, 'word25000 '],
+  ['paragraph', hugeParagraph, 'line 15000 of'],
+])
+  test(`the text at the pane's top in a huge ${layout} holds through wheel steps and new widths`, {
+    timeout: 120000,
+  }, async () => {
+    await harness.evaluate(
+      async ({ doc, target }) => {
+        await window.tables.mount(
+          doc,
+          { width: 1400, height: 800 },
+          { editable: true },
+        )
+        const view = window.tables.view()
+        const pane = document.querySelector('.rich-pane')
+        const frame = () => new Promise(requestAnimationFrame)
+        const at = doc.indexOf(target)
+        // The row the page draws the text in: at a row that starts at a join
+        // of lines, coordsAtPos gives the row above.
+        const where = (pos) => {
+          if (
+            !view.visibleRanges.some(
+              (range) => range.from <= pos && pos < range.to,
+            )
+          )
+            return null
+          for (const at of [pos, pos + 1]) {
+            const { node, offset } = view.domAtPos(at, 1)
+            if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
+              const range = document.createRange()
+              range.setStart(node, offset)
+              range.setEnd(node, offset + 1)
+              return range.getClientRects()[0].top
+            }
+          }
+          return view.coordsAtPos(pos, 1).top
+        }
+        for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+          view.dispatch({
+            effects: view.constructor.scrollIntoView(at, {
+              y: 'start',
+              yMargin: 0,
+            }),
+          })
+          for (let frames = 0; frames < 4; frames++) await frame()
+        }
+        for (let frames = 0; frames < 30; frames++) await frame()
+        window.reading = {
+          where,
+          frame,
+          panes: document.querySelector('.editor-panes'),
+          rowAtTop: (y = 1) => {
+            const caret = document.caretPositionFromPoint(
+              view.contentDOM.getBoundingClientRect().left +
+                Number.parseFloat(
+                  getComputedStyle(view.contentDOM).paddingLeft,
+                ) +
+                1,
+              pane.getBoundingClientRect().top + y,
+            )
+            return view.posAtDOM(caret.offsetNode, caret.offset)
+          },
+        }
+      },
+      { doc, target },
+    )
+    await harness.mouse.move(500, 400)
+    // A wheel step moves the text by the step: when the editor moves its line
+    // gaps, the same scroll shows other text.
+    const steps = []
+    for (const delta of [100, -100])
+      for (let step = 0; step < 16; step++) {
+        const before = await harness.evaluate(() => {
+          const { rowAtTop, where } = window.reading
+          const pos = rowAtTop()
+          return { pos, top: where(pos) }
+        })
+        await harness.mouse.wheel(0, delta)
+        const after = await harness.evaluate(async (pos) => {
+          const { where, frame } = window.reading
+          for (let frames = 0; frames < 3; frames++) await frame()
+          return where(pos)
+        }, before.pos)
+        steps.push(after === null ? null : after - before.top + delta)
+      }
+    // A new width wraps the text at once, the editor's estimates follow later.
+    const widths = await harness.evaluate(async () => {
+      const { rowAtTop, where, frame, panes } = window.reading
+      for (let frames = 0; frames < 30; frames++) await frame()
+      // A command already inside the pane moves nothing and keeps the place.
+      const view = window.tables.view()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+      })
+      for (let frames = 0; frames < 3; frames++) await frame()
+      const pos = rowAtTop()
+      const start = where(pos)
+      const offs = []
+      for (const width of [1100, 900, 1400]) {
+        panes.style.width = `${width}px`
+        // What the frame paints: this task runs after it.
+        await frame()
+        await new Promise((done) => setTimeout(done))
+        const painted = where(pos)
+        for (let frames = 0; frames < 30; frames++) await frame()
+        const settled = where(pos)
+        for (const top of [painted, settled])
+          offs.push(top === null ? null : top - start)
+      }
+      return offs
+    })
+    // A row's start is the test's mark, not the text held, which can be further
+    // along the row: rows half as long break it up to two rows away.
+    const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
+    assert.ok(
+      steps.every((off) => off !== null && Math.abs(off) <= 30) &&
+        widths.every(rowsHeld),
+      JSON.stringify({ steps, widths }),
+    )
+    // What happened since doesn't take the place back to where it was, or
+    // the place from where it is now.
+    const since = await harness.evaluate(async () => {
+      const { rowAtTop, where, frame, panes } = window.reading
+      const view = window.tables.view()
+      const pane = document.querySelector('.rich-pane')
+      const settle = async () => {
+        for (let frames = 0; frames < 30; frames++) await frame()
+      }
+      const off = (pos, from) => {
+        const top = where(pos)
+        return top === null ? null : top - from
+      }
+      const pos = rowAtTop()
+      const start = where(pos)
+      view.dispatch({ changes: { from: 0, insert: 'x' } })
+      await settle()
+      panes.style.width = '1200px'
+      await settle()
+      const edited = off(pos + 1, start)
+      pane.style.marginTop = '80px'
+      await settle()
+      panes.style.width = '1000px'
+      await settle()
+      const moved = off(pos + 1, start + 80)
+      pane.style.marginTop = ''
+      await settle()
+      // A cut above moves the text held.
+      const here = rowAtTop()
+      const hereTop = where(here)
+      view.dispatch({ changes: { from: 0, to: 3000 } })
+      await settle()
+      const cutAbove = off(here - 3000, hereTop)
+      // Typing asks for a scroll that moves nothing: the place stays.
+      const typed = rowAtTop()
+      const typedTop = where(typed)
+      view.dispatch({
+        changes: { from: typed + 200, insert: 'z' },
+        selection: { anchor: typed + 201 },
+        scrollIntoView: true,
+      })
+      await settle()
+      panes.style.width = '1100px'
+      await settle()
+      const typing = off(typed, typedTop)
+      // A cut of the text held: the text after it is the place.
+      const gone = rowAtTop()
+      const goneTop = where(gone)
+      view.dispatch({ changes: { from: gone - 20, to: gone + 20 } })
+      await settle()
+      panes.style.width = '1000px'
+      await settle()
+      const nextPlace = off(gone - 20, goneTop)
+      // Under a bar over the pane's top, the text below the bar holds.
+      const bar = document.createElement('div')
+      bar.style.cssText = 'position:fixed;inset:0 0 auto;height:48px;z-index:10'
+      document.body.append(bar)
+      for (let step = 0; step < 5; step++) {
+        pane.scrollTop += 100
+        await frame()
+      }
+      await settle()
+      const under = rowAtTop(50)
+      const underTop = where(under)
+      panes.style.width = '800px'
+      await settle()
+      const covered = off(under, underTop)
+      bar.remove()
+      panes.style.width = '1000px'
+      await settle()
+      // A jump past what the editor draws, as the scrollbar's, stands: a line
+      // gap's edge is no place to hold.
+      const jumpTo = pane.scrollTop + 8000
+      pane.scrollTop = jumpTo
+      await settle()
+      const jumped = pane.scrollTop - jumpTo
+      // A cut of the text held, and all after it: the place is past the note's
+      // end now.
+      pane.scrollTop += 10
+      await settle()
+      view.dispatch({
+        changes: { from: rowAtTop() - 50, to: view.state.doc.length },
+      })
+      await settle()
+      const asked = view.state.doc.toString().indexOf('Paragraph 250 ')
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(asked, {
+          y: 'start',
+          yMargin: 0,
+        }),
+      })
+      await settle()
+      delete window.reading
+      return {
+        edited,
+        moved,
+        cutAbove,
+        typing,
+        nextPlace,
+        covered,
+        jumped,
+        asked: off(asked, pane.getBoundingClientRect().top),
+      }
+    })
+    assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
+  })
+
+test("a new width lays out a huge paragraph at the pane's top in the frame that paints it", {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(
+    async ({ doc, at, start }) => {
+      await window.tables.mount(
+        doc,
+        { width: 1400, height: 800 },
+        { editable: true, slice: 100000 },
+      )
+      const view = window.tables.view()
+      const pane = document.querySelector('.rich-pane')
+      const panes = document.querySelector('.editor-panes')
+      const frame = () => new Promise(requestAnimationFrame)
+      const settle = async () => {
+        for (let frames = 0; frames < 30; frames++) await frame()
+      }
+      const text = (pos) => {
+        const { node, offset } = view.domAtPos(pos, 1)
+        return node.nodeType === Node.TEXT_NODE && offset < node.length
+          ? { node, offset }
+          : null
+      }
+      const where = (pos) => {
+        if (
+          !view.visibleRanges.some(
+            (range) => range.from <= pos && pos < range.to,
+          )
+        )
+          return null
+        const drawn = text(pos) ?? text(pos + 1)
+        if (!drawn) return view.coordsAtPos(pos, 1).top
+        const range = document.createRange()
+        range.setStart(drawn.node, drawn.offset)
+        range.setEnd(drawn.node, drawn.offset + 1)
+        return range.getClientRects()[0].top
+      }
+      const rowAtTop = (y = 1) => {
+        const caret = document.caretPositionFromPoint(
+          view.contentDOM.getBoundingClientRect().left +
+            Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
+            1,
+          pane.getBoundingClientRect().top + y,
+        )
+        return view.posAtDOM(caret.offsetNode, caret.offset)
+      }
+      // The text the view says it shows, as the reading place reads it when
+      // an update ends, is text the page draws.
+      const undrawn = []
+      let checking = false
+      window.tables.extend(
+        view.constructor.updateListener.of(({ view }) => {
+          if (!checking) return
+          for (const { from, to } of view.visibleRanges)
+            for (const pos of to - from > 4 ? [from + 1, to - 3] : [])
+              if (!text(pos) && !text(pos + 1)) undrawn.push(pos)
+        }),
+      )
+      for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+        // Advance within the joined block so viewport work keeps its head.
+        const next = Math.min(
+          at,
+          Math.max(start, view.lineBlockAt(start).to - 1),
+        )
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(next, {
+            y: 'start',
+            yMargin: 0,
+          }),
+        })
+        for (let frames = 0; frames < 4; frames++) await frame()
+      }
+      await settle()
+      // The whole paragraph parsed, one line from its start: the screen is
+      // far into it. Parsing ahead runs while the page is idle.
+      for (let i = 0; view.lineBlockAt(at).from !== start; i++) {
+        if (i === 600) return 'paragraph not parsed'
+        await new Promise((done) => setTimeout(done, 100))
+      }
+      await settle()
+      await settle()
+      // A few rows above the place held, still inside the text drawn.
+      pane.scrollTop -= 600
+      await settle()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+      })
+      for (let frames = 0; frames < 3; frames++) await frame()
+      const pos = rowAtTop()
+      const top = where(pos)
+      const offs = []
+      checking = true
+      for (const width of [1200, 800, 1400]) {
+        panes.style.width = `${width}px`
+        // What the frame paints: this task runs after it.
+        await frame()
+        await new Promise((done) => setTimeout(done))
+        const painted = where(pos)
+        await settle()
+        const settled = where(pos)
+        for (const shown of [painted, settled])
+          offs.push(shown === null ? null : shown - top)
+      }
+      checking = false
+      return { offs, undrawn }
+    },
+    {
+      doc: hugeParagraph,
+      at: hugeParagraph.indexOf('line 15000 of'),
+      start: hugeParagraphs.length + 2,
+    },
+  )
+  const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
+  assert.ok(
+    typeof result === 'object' &&
+      !result.undrawn.length &&
+      result.offs.every(rowsHeld),
     JSON.stringify(result),
   )
 })
@@ -2038,6 +2872,64 @@ test('a <br> in a cell is one line break, drawn alike in the cell and its editor
   assert.deepEqual(await breaks(), { editing: true, breaks: 1 })
 })
 
+test('cell formatting survives a late table snapshot and refreshes when it arrives', async (t) => {
+  const doc = '| a | b |\n| --- | --- |\n| one<br>two | c |\n'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'two' }).click()
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => {
+    const table = document.querySelector('.hibi-lp-table')
+    const prototype = Object.getPrototypeOf(table.cmTile.widget)
+    const update = prototype.updateDOM
+    let pending
+    window.holdCellSnapshot = () => {
+      pending = null
+      prototype.updateDOM = function (dom, view) {
+        if (dom !== table) return update.call(this, dom, view)
+        pending = () => update.call(this, dom, view)
+        return true
+      }
+    }
+    window.holdCellSnapshot()
+    window.releaseCellSnapshot = () => {
+      prototype.updateDOM = update
+      if (!pending) throw new Error('The cell edit did not update its table.')
+      pending()
+    }
+    window.restoreCellSnapshot = () => {
+      prototype.updateDOM = update
+    }
+  })
+  t.after(() => harness.evaluate(() => window.restoreCellSnapshot()))
+  const breaks = () =>
+    harness.locator('.hibi-lp-cell-editor .cm-content br').count()
+  await harness.keyboard.insertText('Q')
+  assert.equal((await state()).doc, doc.replace('two', 'twoQ'))
+  await t.test(
+    'existing line breaks stay drawn while the table is stale',
+    async () => {
+      assert.equal(await breaks(), 1)
+    },
+  )
+  await harness.evaluate(() => {
+    window.releaseCellSnapshot()
+    window.holdCellSnapshot()
+  })
+  await harness.keyboard.press('Shift+Enter')
+  const expected = doc.replace('two', 'twoQ<br>')
+  assert.equal((await state()).doc, expected)
+  await harness.evaluate(() => window.releaseCellSnapshot())
+  await t.test(
+    'the current snapshot draws the new line break too',
+    async () => {
+      assert.equal(await breaks(), 2)
+    },
+  )
+  const selected = await state()
+  assert.equal(selected.doc, expected)
+  assert.equal(selected.head, expected.indexOf('twoQ<br>') + 'twoQ<br>'.length)
+})
+
 test('cell editors move with tab and arrows and leave with escape', {
   timeout: 30000,
 }, async () => {
@@ -2089,6 +2981,240 @@ test('cell editors move with tab and arrows and leave with escape', {
   await harness.keyboard.press('Tab')
   assert.equal((await state()).cell, '4:0')
   assert.match((await state()).doc, /\| e \|\n\| {2}\| {2}\|\n\nafter/)
+})
+
+test('tab in the last cell edits the added row once a slow parse draws it', {
+  timeout: 30000,
+}, async () => {
+  // Each parse runs out of time, as on a slow machine: the table draws its
+  // new row in a later slice, and typing still goes to the row's first cell.
+  await harness.evaluate(() =>
+    window.tables.mount(
+      'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter',
+      { width: 1000, height: 800 },
+      { editable: true, slice: 0 },
+    ),
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+  await harness.keyboard.press('Tab')
+  await harness.keyboard.type('x')
+  await harness.waitForFunction(() => !window.tables.settling())
+  const { doc, cell } = await state()
+  assert.equal(cell, '3:0')
+  assert.equal(
+    doc,
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n| x |  |\n\nafter',
+  )
+})
+
+test('table actions take early text in their target cell while parsing', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n| e | f |\n\nafter'
+  const header = '| a | b |\n| - | - |'
+  const cases = [
+    ['row-before', `${header}\n| x\\|<br>y |  |\n| c | d |\n| e | f |`, '2:0'],
+    ['row-after', `${header}\n| c | d |\n| x\\|<br>y |  |\n| e | f |`, '3:0'],
+    ['row-delete', `${header}\n| x\\|<br>ye | f |`, '2:0'],
+    [
+      'column-before',
+      '| a |  | b |\n| - | --- | - |\n| c | x\\|<br>y | d |\n| e |  | f |',
+      '2:1',
+    ],
+    [
+      'column-after',
+      '| a | b |  |\n| - | - | --- |\n| c | d | x\\|<br>y |\n| e | f |  |',
+      '2:2',
+    ],
+    ['column-delete', '| a |\n| - |\n| x\\|<br>yc |\n| e |', '2:0'],
+  ]
+  for (const [action, source, cell] of cases)
+    await t.test(action, async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        doc,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td', { hasText: /^d$/ }).click()
+      assert.equal(
+        await harness.evaluate(
+          (id) => window.tables.runTableAction(id),
+          action,
+        ),
+        true,
+      )
+      // Pipes and line breaks must remain cell text during the parse gap.
+      await harness.keyboard.insertText('x|\ny')
+      await harness.waitForFunction(() => !window.tables.settling())
+      const current = await state()
+      assert.equal(current.cell, cell)
+      assert.equal(current.doc, `before\n\n${source}\n\nafter`)
+    })
+})
+
+test('a column action gives an implicit target cell a source span before parsing', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c |\n\nafter'
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td').nth(1).click()
+  assert.equal(
+    await harness.evaluate(() => window.tables.runTableAction('column-after')),
+    true,
+  )
+  await harness.keyboard.insertText('x|')
+  await harness.waitForFunction(() => !window.tables.settling())
+  const current = await state()
+  assert.equal(current.cell, '2:2')
+  assert.equal(
+    current.doc,
+    'before\n\n| a | b |  |\n| - | - | --- |\n| c |  | x\\| |\n\nafter',
+  )
+  await harness.keyboard.press(undoKey)
+  await harness.waitForFunction(() => !window.tables.settling())
+  assert.equal(
+    (await state()).doc,
+    'before\n\n| a | b |  |\n| - | - | --- |\n| c |  |  |\n\nafter',
+  )
+  await harness.keyboard.press(undoKey)
+  await harness.waitForFunction(() => !window.tables.settling())
+  assert.equal((await state()).doc, doc)
+})
+
+test('edit keys stay in a table action cell while its parse is pending', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  const group = process.platform === 'darwin' ? 'Alt' : 'Control'
+  const keys = [
+    'Enter',
+    'Shift+Enter',
+    'Backspace',
+    'Shift+Backspace',
+    'Delete',
+    `${group}+Backspace`,
+    `${group}+Delete`,
+    ...(process.platform === 'darwin'
+      ? ['Meta+Backspace', 'Meta+Delete', 'Control+h', 'Control+d']
+      : []),
+  ]
+  for (const key of keys)
+    for (const kind of ['new', 'existing'])
+      await t.test(`${key}: ${kind}`, async () => {
+        const existing = kind === 'existing'
+        await harness.evaluate(
+          (doc) =>
+            window.tables.mount(
+              doc,
+              { width: 1000, height: 800 },
+              { editable: true, slice: 0 },
+            ),
+          doc,
+        )
+        await harness.waitForFunction(() => !window.tables.settling())
+        await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+        if (existing)
+          await harness.evaluate(() =>
+            window.tables.runTableAction('column-delete'),
+          )
+        else await harness.keyboard.press('Tab')
+        await harness.keyboard.press(key)
+        await harness.waitForFunction(() => !window.tables.settling())
+        await harness.keyboard.type('x')
+        await harness.waitForFunction(() => !window.tables.settling())
+        const br = key.includes('Enter') ? '<br>' : ''
+        const deleted = key.includes('Delete') || key.endsWith('+d')
+        const expected = existing
+          ? `before\n\n| a |\n| - |\n| ${br}x${deleted ? '' : 'c'} |\n\nafter`
+          : doc.replace('\n\nafter', `\n| ${br}x |  |\n\nafter`)
+        // Native deletion can remove padding if the cell opens before the key.
+        const content = (text) => text.replace(/[ \t]*\|[ \t]*/g, '|')
+        assert.equal(content((await state()).doc), content(expected))
+        assert.equal((await state()).cell, existing ? '2:0' : '3:0')
+      })
+})
+
+test('document commands leave an undrawn action cell intact and focused', {
+  timeout: 30000,
+}, async (t) => {
+  // Longer than one parse chunk: the action's reparse is still pending when
+  // the key comes, as in a long note.
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph text'.repeat(450)
+  for (const key of [
+    { key: 'Tab' },
+    { key: 'Tab', shiftKey: true },
+    { key: 'ArrowUp', altKey: true },
+    { key: 'ArrowUp', altKey: true, shiftKey: true },
+    ...(process.platform === 'darwin' ? [{ key: 'o', ctrlKey: true }] : []),
+  ])
+    await t.test(JSON.stringify(key), async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        doc,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+      // Dispatch in the action's turn, before its parser can draw the cell.
+      const result = await harness.evaluate((key) => {
+        const view = window.tables.view()
+        const done = window.tables.runTableAction('row-after')
+        const waiting = {
+          pending: window.tables.settling(),
+          focused: view.hasFocus,
+          cell: !!document.activeElement?.closest('td, th'),
+        }
+        const before = view.state.doc
+        const event = new KeyboardEvent('keydown', {
+          ...key,
+          bubbles: true,
+          cancelable: true,
+        })
+        view.contentDOM.dispatchEvent(event)
+        return {
+          waiting,
+          done,
+          prevented: event.defaultPrevented,
+          unchanged: view.state.doc === before,
+          focused: view.hasFocus,
+        }
+      }, key)
+      // The action's cell has not drawn yet when the key comes.
+      assert.deepEqual(result.waiting, {
+        pending: true,
+        focused: true,
+        cell: false,
+      })
+      delete result.waiting
+      assert.deepEqual(result, {
+        done: true,
+        prevented: true,
+        unchanged: true,
+        focused: true,
+      })
+      await harness.waitForFunction(() => !window.tables.settling())
+    })
 })
 
 /** The text of the cell that holds the page selection's head, and the selected text. */
@@ -2190,6 +3316,783 @@ test('enter, shift-enter and mod-enter break the line in a cell, as the rich edi
   now = await state()
   assert.equal(now.cell, '2:1')
   assert.match(now.doc, /^\| <br>cell \| x<br><br><br> \|\n\nafter$/m)
+})
+
+test('keys typed in a cell while its table waits for a reparse all land, in order', {
+  timeout: 60000,
+}, async (t) => {
+  // Text after the table that one parsing step does not reach.
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph'.repeat(2000)
+  const short = doc.replace('| c | d |', '| c |')
+  const compact = doc.replace('| c | d |', '|c|d|')
+  const filter = (kind) => () =>
+    harness.evaluate((kind) => {
+      const view = window.tables.view()
+      let first = true
+      window.tables.extend(
+        view.state.constructor.transactionFilter.of((transaction) => {
+          if (!first || !transaction.docChanged) return transaction
+          first = false
+          return kind === 'move'
+            ? [
+                transaction,
+                {
+                  changes: { from: 0, insert: 'prefix\n\n' },
+                  sequential: true,
+                },
+              ]
+            : []
+        }),
+      )
+    }, kind)
+  // Another change while the table waits.
+  const edit = (find, insert) => () =>
+    harness.evaluate(
+      ({ find, insert }) => {
+        const view = window.tables.view()
+        const from = view.state.doc.toString().indexOf(find)
+        view.dispatch({ changes: { from, to: from + find.length, insert } })
+      },
+      { find, insert },
+    )
+  const cases = [
+    { name: 'x y z', note: doc, cell: 1, keys: ['x', 'y', 'z'], row: 'dxyz' },
+    {
+      name: 'Enter x',
+      note: doc,
+      cell: 1,
+      keys: ['Enter', 'x'],
+      row: 'd<br>x',
+    },
+    // The row ends before the cell: the first key adds it.
+    {
+      name: 'new cell',
+      note: short,
+      cell: 1,
+      keys: ['x', 'y', 'z'],
+      row: 'xyz',
+    },
+    // A change from elsewhere may remake the table: keys typed before it
+    // draws again go nowhere, not in at a place the table no longer has.
+    {
+      name: 'row changed',
+      note: doc,
+      cell: 1,
+      keys: ['x', edit('dx |', 'dx | e |'), 'y'],
+      row: 'dx | e',
+    },
+    // A pipe added in the cell's text makes another cell.
+    {
+      name: 'pipe added in the cell',
+      note: doc,
+      cell: 1,
+      keys: ['x', edit('dx', 'dx | e'), 'y'],
+      row: 'dx | e',
+    },
+    {
+      name: 'normalized parent change',
+      note: doc,
+      cell: 1,
+      keys: [filter('move'), 'x', 'y'],
+      row: 'dx',
+      saved: 'prefix\n\n' + doc.replace('| c | d |', '| c | dx |'),
+    },
+    {
+      name: 'emptied cell',
+      note: compact,
+      cell: 1,
+      keys: ['Home', 'Shift+End', 'Backspace', 'x', 'y'],
+      row: 'xy',
+      saved: compact.replace('|c|d|', '|c|xy|'),
+    },
+    {
+      name: 'normalized empty cell',
+      note: compact,
+      cell: 1,
+      keys: [filter('move'), 'Home', 'Shift+End', 'Backspace', 'y'],
+      row: '',
+      saved: 'prefix\n\n' + compact.replace('|c|d|', '|c||'),
+    },
+    {
+      name: 'refused parent change',
+      note: doc,
+      cell: 1,
+      keys: ['x', filter('reject'), 'y', 'z'],
+      row: 'dx',
+    },
+  ]
+  for (const { name, note, cell, keys, row, saved } of cases)
+    await t.test(name, async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        note,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td').nth(cell).click()
+      await harness.keyboard.press('End')
+      // Each key's reparse misses its slice, and idle time, where it goes on,
+      // waits until the keys are in: they come while the table still shows
+      // the text before the first.
+      await harness.evaluate(() => {
+        let held = []
+        const own = window.requestIdleCallback
+        window.requestIdleCallback = (callback, options) =>
+          own(
+            (deadline) => (held ? held.push(callback) : callback(deadline)),
+            options,
+          )
+        window.releaseIdle = () => {
+          window.requestIdleCallback = own
+          for (const callback of held)
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+          held = null
+        }
+      })
+      for (const key of keys)
+        await (typeof key === 'string' ? harness.keyboard.press(key) : key())
+      assert.ok(await harness.evaluate(() => window.tables.settling()))
+      await harness.evaluate(() => window.releaseIdle())
+      await harness.waitForFunction(() => !window.tables.settling())
+      const now = await state()
+      assert.equal(
+        now.doc,
+        saved ?? note.replace(/\| c \|.*\n/, `| c | ${row} |\n`),
+      )
+      assert.equal(now.cell, '2:1')
+      // The cell's editor holds the same text; a break draws as a widget.
+      if (!row.includes('<br>')) assert.equal(now.editor, row.split(' | ')[0])
+    })
+})
+
+test('cell keys and changes while a table waits for a reparse land where they would after it', {
+  timeout: 120000,
+}, async (t) => {
+  const tail = '\n\nparagraph'.repeat(2000)
+  const doc = `before\n\n| a | b |\n| - | - |\n| c | d |\n| e |\n\nafter${tail}`
+  const full = doc.replace('| e |', '| e | f |')
+  const last = `before\n\n| a | b |\n| - | - |\n| c | d |${tail}`
+  const endRows = '| u | v |\n'.repeat(2000)
+  const atEnd = `| a | b |\n| - | - |\n${endRows}| c | d`
+  const marked = doc.replace('| c | d |', '| c | **b**<br>e |')
+  // A change from elsewhere, as another pane's, replacing text in the note.
+  const edit = (find, insert) => () =>
+    harness.evaluate(
+      ({ find, insert }) => {
+        const view = window.tables.view()
+        const from = view.state.doc.toString().indexOf(find)
+        view.dispatch({ changes: { from, to: from + find.length, insert } })
+      },
+      { find, insert },
+    )
+  // A toolbar table action at the caret.
+  const action = (id) => () =>
+    harness.evaluate((id) => window.tables.runTableAction(id), id)
+  // Holds idle time, where a missed reparse goes on, until released.
+  const hold = () =>
+    harness.evaluate(() => {
+      let held = []
+      const own = window.requestIdleCallback
+      window.requestIdleCallback = (callback, options) =>
+        own(
+          (deadline) => (held ? held.push(callback) : callback(deadline)),
+          options,
+        )
+      window.releaseIdle = () => {
+        window.requestIdleCallback = own
+        for (const callback of held)
+          callback({ didTimeout: false, timeRemaining: () => 50 })
+        held = null
+      }
+    })
+  const shown = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table :is(th, td)')].map(
+        (cell) => cell.textContent,
+      ),
+    )
+  // Stale: whether the table shows the keys' text before it draws again.
+  const run = async (note, start, keys, stale, drawn) => {
+    let cells = null
+    await harness.evaluate(
+      ({ doc, stale }) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 800 },
+          // The settled run parses each edit in its own transaction, so it
+          // never waits on idle slices; the other does. Undo steps follow the
+          // same policy in both, whatever a machine's pace.
+          {
+            editable: true,
+            slice: stale ? 0 : 100000,
+            historyGroupDelay: 3600000,
+          },
+        ),
+      { doc: note, stale },
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    // The last row is virtualized; a source selection brings it into view.
+    if (note === atEnd)
+      await harness.evaluate(() => {
+        const view = window.tables.view()
+        view.focus()
+        view.dispatch({
+          selection: {
+            anchor: view.state.doc.toString().lastIndexOf('| c |') + 2,
+          },
+        })
+      })
+    await harness
+      .locator('.hibi-lp-table :is(th, td)', {
+        hasText: new RegExp(`^${start}$`),
+      })
+      .click()
+    await harness.keyboard.press('End')
+    if (stale) await hold()
+    try {
+      for (const key of keys) {
+        await (typeof key === 'string' ? harness.keyboard.press(key) : key())
+        if (!stale)
+          await harness.waitForFunction(() => !window.tables.settling())
+      }
+      // Every key came while the table still showed the text before the first.
+      if (stale)
+        assert.ok(await harness.evaluate(() => window.tables.settling()))
+      if (stale && drawn) cells = await shown()
+    } finally {
+      if (stale) await harness.evaluate(() => window.releaseIdle())
+    }
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness.evaluate(() => window.tables.settle())
+    const { doc, cell, editor, head } = await state()
+    // The note's tail only slows the parse.
+    return {
+      doc: doc.replace(tail, '').replace(endRows, ''),
+      cell,
+      editor,
+      head,
+      // Which of its rows a long table shows depends on where it scrolled.
+      cells: (cells ?? (await shown())).filter(
+        (text) => note !== atEnd || (text !== 'u' && text !== 'v'),
+      ),
+    }
+  }
+  const cases = [
+    ['Tab', doc, 'c', ['x', 'Tab', 'y']],
+    ['Tab with nothing after', doc, 'c', ['x', 'Tab']],
+    ['Tab twice', full, 'c', ['x', 'Tab', 'y', 'Tab', 'z']],
+    ['Tab to the next row', doc, 'd', ['x', 'Tab', 'y']],
+    ['Tab to a cell its row lacks', doc, 'e', ['x', 'Tab', 'y']],
+    [
+      'fill a missing cell, then a sibling change',
+      doc,
+      'e',
+      ['x', 'Tab', 'y', edit('c', 'cat'), 'z'],
+    ],
+    ['Tab in the last cell', last, 'd', ['x', 'Tab', 'y']],
+    // Keys in the row Tab adds move as in a drawn one.
+    ['Tab in the last cell, then Tab', last, 'd', ['x', 'Tab', 'Tab', 'y']],
+    [
+      'Tab in the last cell, then Shift+Tab',
+      last,
+      'd',
+      ['x', 'Tab', 'Shift+Tab', 'y'],
+    ],
+    [
+      'Tab in the last cell, then ArrowUp',
+      last,
+      'd',
+      ['x', 'Tab', 'ArrowUp', 'y'],
+    ],
+    [
+      'Tab in the last cell, then ArrowRight',
+      last,
+      'd',
+      ['x', 'Tab', 'y', 'ArrowRight', 'z'],
+    ],
+    [
+      'Tab in the last cell, then ArrowLeft',
+      last,
+      'd',
+      ['x', 'Tab', 'y', 'ArrowLeft', 'z'],
+    ],
+    [
+      'Tab in the last cell, then an arrow from a selected cell edge',
+      last,
+      'd',
+      ['x', 'Tab', 'ArrowUp', 'Shift+Tab', 'ArrowRight', 'y'],
+    ],
+    // Leaving the table or adding a row from it goes as from a drawn row.
+    [
+      'Tab in the last cell, then Escape',
+      last,
+      'd',
+      ['x', 'Tab', 'Escape', 'y'],
+    ],
+    [
+      'Tab in the last cell, then ArrowDown',
+      last,
+      'd',
+      ['x', 'Tab', 'y', 'ArrowDown', 'z'],
+    ],
+    [
+      'Tab in the last cell, then ArrowRight out',
+      last,
+      'd',
+      ['x', 'Tab', 'Tab', 'y', 'ArrowRight', 'z'],
+    ],
+    [
+      'Tab in the last cell, then Mod+Enter',
+      last,
+      'd',
+      ['x', 'Tab', 'ControlOrMeta+Enter', 'y'],
+    ],
+    [
+      'Tab in the last cell, then Tab in the added row',
+      last,
+      'd',
+      ['x', 'Tab', 'Tab', 'Tab', 'y'],
+    ],
+    [
+      'Tab in the last cell at document end, then Escape',
+      atEnd,
+      'd',
+      ['x', 'Tab', 'y', 'Escape', 'z'],
+    ],
+    [
+      'Tab in the last cell at document end, then Mod+Enter',
+      atEnd,
+      'd',
+      ['x', 'Tab', 'ControlOrMeta+Enter', 'y'],
+    ],
+    [
+      'Tab in the last cell, then toolbar actions',
+      last,
+      'd',
+      ['x', 'Tab', action('column-after'), action('row-delete'), 'y'],
+    ],
+    // So does a move to a cell its row lacks.
+    [
+      'Tab in an added row, then down to a cell its row lacks',
+      doc,
+      'c',
+      ['x', action('row-after'), 'Tab', 'ArrowDown', 'y'],
+    ],
+    // A toolbar action there acts on the table the last one left.
+    [
+      'an action in an added row',
+      doc,
+      'c',
+      ['x', action('row-before'), action('column-after'), 'y'],
+    ],
+    // An undo that takes the note back to the text the table shows keeps it.
+    [
+      'fill a missing cell, Shift+Tab, then undo',
+      doc,
+      'e',
+      ['Tab', 'y', 'Shift+Tab', 'ControlOrMeta+z', 'z'],
+    ],
+    ['Shift+Tab', doc, 'c', ['x', 'Shift+Tab', 'y']],
+    ['ArrowDown', doc, 'c', ['x', 'ArrowDown', 'y']],
+    ['ArrowUp', doc, 'c', ['x', 'ArrowUp', 'y']],
+    ['ArrowRight', doc, 'c', ['x', 'ArrowRight', 'y']],
+    ['ArrowLeft', doc, 'd', ['Home', 'x', 'ArrowLeft', 'ArrowLeft', 'y']],
+    ['Escape', doc, 'c', ['x', 'Escape', 'y']],
+    ['ArrowDown out of the table', full, 'f', ['x', 'ArrowDown', 'y']],
+    ['Escape after a deletion', full, 'f', ['Backspace', 'Escape', 'y']],
+    ['Mod+Enter', last, 'd', ['x', 'ControlOrMeta+Enter', 'y']],
+    [
+      'before a table at the start',
+      doc.replace('before\n\n', ''),
+      'a',
+      ['x', 'ArrowUp', 'y', 'z'],
+    ],
+    ['Escape at document end', atEnd, 'd', ['x', 'Escape', 'y', 'z']],
+    [
+      'Mod+Enter at document end',
+      atEnd,
+      'd',
+      ['x', 'ControlOrMeta+Enter', 'y', 'z'],
+    ],
+    ['leave before the first edit', atEnd, 'd', ['Escape', 'y', 'z']],
+    // Undo, redo and other changes inside the cell's text keep its place.
+    ['undo', doc, 'd', ['x', 'y', 'ControlOrMeta+z', 'z']],
+    ['redo', doc, 'd', ['x', 'ControlOrMeta+z', redoKey, 'z']],
+    ['undo, then Tab', doc, 'c', ['x', 'ControlOrMeta+z', 'Tab', 'y']],
+    ['a change in the cell', doc, 'd', ['x', edit('dx', 'dQ'), 'y']],
+    // A cell opened before the draw shows its formatting and line breaks.
+    ['ArrowRight into formatting', marked, 'c', ['x', 'ArrowRight', 'y']],
+    // So do changes inside other cells' text: the table keeps its shape.
+    ['undo in another cell', doc, 'c', ['x', 'Tab', 'ControlOrMeta+z', 'w']],
+    [
+      'undo in another cell, then Tab',
+      doc,
+      'c',
+      ['x', 'Tab', 'ControlOrMeta+z', 'Tab', 'w'],
+    ],
+    ['a change in another cell', doc, 'c', ['x', 'Tab', edit('cx', 'cQ'), 'y']],
+  ]
+  // A change elsewhere may remake the table, as an open fence above it
+  // does: the cell takes no keys with its old spans.
+  await t.test('a change outside the cell', async () => {
+    const keys = ['x', edit('before', '~~~\nbefore'), 'y']
+    const { doc: now } = await run(doc, 'c', keys, true, false)
+    assert.equal(
+      now,
+      `~~~\n${doc.replace('| c |', '| cx |').replace(tail, '')}`,
+    )
+  })
+  // So does one that leaves the table's text and the note's length as drawn.
+  await t.test('a change outside the table of the same length', async () => {
+    const keys = [edit('before', '~~~~~~'), 'y']
+    const { doc: now } = await run(doc, 'c', keys, true, false)
+    assert.equal(now, doc.replace('before', '~~~~~~').replace(tail, ''))
+  })
+  // Without an opening pipe, valid cell text can begin another block instead.
+  // Such edits must not keep the old table's place, including after own input.
+  const unpiped = `a | b\n--- | ---\nc | d\ne | f\n\nafter${tail}`
+  for (const start of ['a', 'c'])
+    for (const prefix of ['# ', '> ', '- ', '~~~'])
+      await t.test(
+        `block prefix in ${start}: ${JSON.stringify(prefix)}`,
+        async () => {
+          const keys = ['x', edit(`${start}x`, `${prefix}${start}x`), 'y']
+          const { doc: now } = await run(unpiped, start, keys, true, false)
+          assert.equal(
+            now,
+            unpiped
+              .replace(tail, '')
+              .replace(`${start} |`, `${prefix}${start}x |`),
+          )
+        },
+      )
+  await t.test('a large unpiped first cell keeps later keys', async () => {
+    const text = 'q'.repeat(9000)
+    const { doc: now } = await run(
+      unpiped,
+      'c',
+      ['Home', 'Shift+End', () => harness.keyboard.insertText(text), 'x'],
+      true,
+      false,
+    )
+    assert.equal(
+      now.replace(text, 'CELL'),
+      unpiped.replace(tail, '').replace('c | d', 'CELLx | d'),
+    )
+  })
+  // So must such an edit of another cell while this one is edited.
+  for (const prefix of ['# ', '> ', '- ', '~~~'])
+    await t.test(
+      `block prefix in another cell: ${JSON.stringify(prefix)}`,
+      async () => {
+        const keys = ['x', edit('c ', `${prefix}c `), 'y']
+        const { doc: now } = await run(unpiped, 'd', keys, true, false)
+        assert.equal(
+          now,
+          unpiped.replace(tail, '').replace('c | d', `${prefix}c | dx`),
+        )
+      },
+    )
+  await t.test(
+    'a block prefix of the same length in another cell',
+    async () => {
+      const keys = [edit('c ', '# '), 'y']
+      const { doc: now } = await run(unpiped, 'd', keys, true, false)
+      assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# | d'))
+    },
+  )
+  await t.test('an emptied first cell without an opening pipe', async () => {
+    const keys = ['Home', 'Shift+End', 'Backspace', 'y']
+    const { doc: now } = await run(unpiped, 'c', keys, true, false)
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', ' | d'))
+  })
+  await t.test('a typed block prefix stops using the old cell', async () => {
+    const { doc: now } = await run(
+      unpiped,
+      'c',
+      ['Home', '#', 'Space', 'y'],
+      true,
+      false,
+    )
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# c | d'))
+  })
+  await t.test(
+    'a fence in a cell cannot delete the former table body',
+    async () => {
+      const remove = async () =>
+        assert.equal(
+          await harness.evaluate(() =>
+            window.tables.runTableAction('table-delete'),
+          ),
+          false,
+        )
+      const { doc: now } = await run(
+        unpiped,
+        'c',
+        ['x', edit('cx', '~~~cx'), remove, 'y'],
+        true,
+        false,
+      )
+      assert.equal(now, unpiped.replace(tail, '').replace('c | d', '~~~cx | d'))
+    },
+  )
+  await t.test(
+    'a change outside the left paragraph clears its place',
+    async () => {
+      const { doc: now } = await run(
+        atEnd,
+        'd',
+        ['x', 'Escape', edit('| a |', '| A |'), 'y'],
+        true,
+        false,
+      )
+      assert.equal(
+        now,
+        atEnd
+          .replace(endRows, '')
+          .replace('| a |', '| A |')
+          .replace('| c | d', '| c | dx') + '\n\n',
+      )
+    },
+  )
+
+  // A kept span is not proof that an earlier edit left its row a table.
+  for (const start of ['a', 'c'])
+    for (const prefix of ['# ', '> ', '- ', '~~~'])
+      await t.test(
+        `a broken ${start} row stays unknown after a sibling edit: ${JSON.stringify(prefix)}`,
+        async () => {
+          const remove = async () =>
+            assert.equal(
+              await harness.evaluate(() =>
+                window.tables.runTableAction('table-delete'),
+              ),
+              false,
+            )
+          const { doc: now } = await run(
+            unpiped,
+            start,
+            [
+              'x',
+              edit(`${start}x`, `${prefix}${start}x`),
+              edit('d', 'dQ'),
+              remove,
+              'y',
+            ],
+            true,
+            false,
+          )
+          assert.equal(
+            now,
+            unpiped
+              .replace(tail, '')
+              .replace(`${start} |`, `${prefix}${start}x |`)
+              .replace(' | d\n', ' | dQ\n'),
+          )
+        },
+      )
+  cases.push(
+    ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
+    ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
+    ['unpiped first cell changed', unpiped, 'd', ['x', edit('c ', 'cQ '), 'y']],
+  )
+  for (const [name, note, start, keys] of cases)
+    await t.test(name, async () => {
+      const settled = await run(note, start, keys, false)
+      // The row Tab adds in the last cell draws with the table, and a
+      // line break in a cell draws as one then too.
+      const drawn =
+        !name.startsWith('Tab in the last cell') &&
+        !name.startsWith('Tab in an added row') &&
+        name !== 'an action in an added row' &&
+        name !== 'Mod+Enter' &&
+        name !== 'before a table at the start'
+      assert.deepEqual(await run(note, start, keys, true, drawn), settled)
+    })
+})
+
+test('typing in a table only proves rows while waiting for a redraw', {
+  timeout: 120000,
+}, async (t) => {
+  for (const [name, header, waiting] of [
+    ['current body', false, false],
+    ['current header', true, false],
+    ['waiting body', false, true],
+    ['waiting header', true, true],
+  ])
+    await t.test(name, async () => {
+      const text = 'q'.repeat(50000)
+      const row = text + ' | b |'
+      const note =
+        `before\n\n${header ? row : '| a | b |'}\n| - | - |\n${header ? '| c | d |' : row}\n\nafter` +
+        '\n\nparagraph'.repeat(2000)
+      await harness.evaluate(
+        ({ doc, waiting }) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            {
+              editable: true,
+              slice: waiting ? 0 : 100000,
+            },
+          ),
+        { doc: note, waiting },
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness
+        .locator(header ? '.hibi-lp-table th' : '.hibi-lp-table td')
+        .first()
+        .click({ position: { x: 20, y: 15 } })
+      await harness.keyboard.press('Home')
+      await harness.keyboard.press('ArrowRight')
+      const result = await harness.evaluate(() => {
+        const work = window.tables.watchBlockProofs()
+        const inline = window.tables.watchInlineParses()
+        const own = window.requestIdleCallback
+        let held = []
+        window.requestIdleCallback = (callback, options) =>
+          own(
+            (deadline) => (held ? held.push(callback) : callback(deadline)),
+            options,
+          )
+        window.releaseIdle = () => {
+          window.requestIdleCallback = own
+          for (const callback of held)
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+          held = null
+        }
+        const cell = document.querySelector('.hibi-lp-cell-editor .cm-content')
+          .cmTile.root.view
+        try {
+          for (let key = 0; key < 5; key++) {
+            const at = cell.state.selection.main.head
+            cell.dispatch({
+              changes: { from: at, insert: 'x' },
+              selection: { anchor: at + 1 },
+              userEvent: 'input.type',
+            })
+          }
+        } finally {
+          inline.stop()
+        }
+        return {
+          ...work,
+          inline: inline.work,
+          doc: window.tables.view().state.doc.toString(),
+          settling: window.tables.settling(),
+        }
+      })
+      try {
+        assert.equal(result.settling, waiting)
+        assert.ok(
+          result.doc === note.replace(text, `qxxxxx${text.slice(1)}`),
+          'all five keys reach their cell',
+        )
+        // A drawn header also renders both cells for its table layout key.
+        const headerKey = header && !waiting
+        assert.ok(
+          result.inline.calls <= (headerKey ? 15 : 5),
+          `${result.inline.calls} inline parses`,
+        )
+        assert.ok(
+          result.inline.units <= (headerKey ? 10 : 5) * 50100,
+          `${result.inline.units} inline units`,
+        )
+        assert.ok(
+          result.inline.steps <= 100,
+          `${result.inline.steps} inline steps`,
+        )
+        const budget = waiting ? 5 : 0
+        assert.ok(result.calls <= budget, `${result.calls} block proofs`)
+        assert.ok(result.units <= budget * 50100, `${result.units} block units`)
+      } finally {
+        await harness.evaluate(() => window.releaseIdle())
+      }
+      await harness.waitForFunction(() => !window.tables.settling())
+    })
+})
+
+test('typing formats a cell while its table waits for a reparse', async () => {
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    `before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter${'\n\nparagraph'.repeat(2000)}`,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness
+    .locator('.hibi-lp-table td')
+    .first()
+    .click({ position: { x: 10, y: 10 } })
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => {
+    const own = window.requestIdleCallback
+    let held = []
+    window.requestIdleCallback = (callback, options) =>
+      own(
+        (deadline) => (held ? held.push(callback) : callback(deadline)),
+        options,
+      )
+    window.releaseIdle = () => {
+      window.requestIdleCallback = own
+      for (const callback of held)
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      held = null
+    }
+  })
+  try {
+    await harness.keyboard.type(' **b** `e`')
+    const cell = await harness.evaluate(() => {
+      const content = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      return {
+        settling: window.tables.settling(),
+        strong: content.querySelector('.hibi-lp-strong')?.textContent,
+        code: content.querySelector('.hibi-lp-code')?.textContent,
+      }
+    })
+    assert.deepEqual(cell, { settling: true, strong: '**b**', code: 'e' })
+  } finally {
+    await harness.evaluate(() => window.releaseIdle())
+  }
+  await harness.waitForFunction(() => !window.tables.settling())
+})
+
+test('deleting a table at document end needs no waiting-cell shape', async (t) => {
+  for (const [name, doc, action] of [
+    ['table only', '| a | b |\n| - | - |\n| c | d |', 'table-delete'],
+    [
+      'after a paragraph',
+      'before\n\n| a | b |\n| - | - |\n| c | d |',
+      'table-delete',
+    ],
+    ['last column', '| a |\n| - |\n| c |', 'column-delete'],
+    ['last header row', '| a |\n| - |', 'row-delete'],
+  ])
+    await t.test(name, async () => {
+      await mount(doc)
+      await harness.locator('.hibi-lp-table th').first().click()
+      assert.equal(
+        await harness.evaluate(
+          (action) => window.tables.runTableAction(action),
+          action,
+        ),
+        true,
+      )
+      await harness.evaluate(() => window.tables.settle())
+      assert.equal(
+        (await state()).doc,
+        doc.startsWith('before') ? 'before\n\n' : '',
+      )
+    })
 })
 
 test('a cell editor follows its row when rows are added or deleted around it', {
@@ -2546,6 +4449,7 @@ test('unfinished syntax never resolves or writes cells with old spans', {
   }
   // A settled parse may reuse its tree; its mapped widgets still need a new snapshot.
   await mount(doc)
+  await harness.waitForFunction(() => window.tables.parsed())
   await harness.evaluate(() => {
     const view = window.tables.view()
     view.focus()
@@ -3309,6 +5213,100 @@ test('cell editors take no input while the formatted view takes none', {
   await harness.evaluate(() => window.tables.setEditable(true))
 })
 
+test('keys typed in a cell of a read-only view change nothing', {
+  timeout: 60000,
+}, async (t) => {
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  // The keys' offsets once sent the view and the cell's editor between two
+  // selections for good, in microtasks. Past this many the loop stops, so
+  // that the test fails instead of hanging.
+  const limit = 2000
+  await harness.evaluate((limit) => {
+    const queue = window.queueMicrotask
+    window.microtasks = { queue, count: 0 }
+    window.queueMicrotask = (task) => {
+      if (window.microtasks.count++ < limit) queue(task)
+    }
+  }, limit)
+  t.after(async () => {
+    harness.off('pageerror', listen)
+    await harness.evaluate(() => {
+      window.queueMicrotask = window.microtasks.queue
+    })
+  })
+  const doc = 'before\n\n| a | stuvwx |\n| - | - |\n| mnopqr | d |\n\nafter'
+  const left = ['ArrowLeft', 'ArrowLeft', 'ArrowLeft']
+  const type = async (name) => {
+    await harness.evaluate(() => {
+      window.microtasks.count = 0
+    })
+    await harness.keyboard.type('BLOCKED')
+    await harness.evaluate(() => window.tables.settle())
+    assert.ok(
+      (await harness.evaluate(() => window.microtasks.count)) < limit,
+      name,
+    )
+    assert.deepEqual(errors, [], name)
+  }
+  const open = async (keys) => {
+    await mount(doc)
+    await harness.locator('.hibi-lp-table td', { hasText: 'mnopqr' }).click()
+    for (const key of keys) await harness.keyboard.press(key)
+    await harness.evaluate(() => window.tables.settle())
+    await harness.evaluate(() => window.tables.setEditable(false))
+  }
+  for (const [name, keys, typed] of [
+    ['caret at the end', ['End'], 'mnopqrW'],
+    ['caret inside', ['End', ...left], 'mnoWpqr'],
+    ['range to the end', ['End', ...left, 'Shift+End'], 'mnoW'],
+    [
+      'range from the end',
+      ['End', 'Shift+ArrowLeft', 'Shift+ArrowLeft', 'Shift+ArrowLeft'],
+      'mnoW',
+    ],
+  ]) {
+    await open(keys)
+    const held = await state()
+    await type(name)
+    assert.deepEqual(await state(), held, name)
+    await harness.evaluate(() => window.tables.setEditable(true))
+    await harness.keyboard.type('W')
+    assert.equal((await state()).editor, typed, name)
+  }
+  // A change from elsewhere shortens the open cell's text under one of a
+  // pick's points, before the pick's selection change arrives.
+  for (const [name, points] of [
+    ['anchor in the cell', ['mnopqr', 6, 'stuvwx', 2]],
+    ['focus in the cell', ['stuvwx', 2, 'mnopqr', 6]],
+  ]) {
+    await open(['End'])
+    await harness.keyboard.press('Shift')
+    await harness.evaluate(([anchor, anchorOffset, focus, focusOffset]) => {
+      const text = (value) => {
+        const walker = document.createTreeWalker(
+          document.querySelector('.hibi-lp-table'),
+          NodeFilter.SHOW_TEXT,
+        )
+        while (walker.nextNode())
+          if (walker.currentNode.nodeValue === value) return walker.currentNode
+        throw new Error(value)
+      }
+      document
+        .getSelection()
+        .setBaseAndExtent(text(anchor), anchorOffset, text(focus), focusOffset)
+      const view = window.tables.view()
+      const from = view.state.doc.toString().indexOf('pqr')
+      view.dispatch({ changes: { from, to: from + 3 } })
+    }, points)
+    await harness.evaluate(() => window.tables.settle())
+    assert.deepEqual(errors, [], name)
+    assert.match((await state()).doc, /^\| mno \| d \|$/m, name)
+    await harness.evaluate(() => window.tables.setEditable(true))
+  }
+})
+
 test('a cell editor that a change drops while the view takes no input is back once it does', {
   timeout: 60000,
 }, async (t) => {
@@ -3490,12 +5488,22 @@ test('a long table shows the edited row in its place once the pane scrolled away
   await harness.keyboard.press('End')
   await harness.keyboard.type('Z')
   // Scrolled back to the top, the window draws the rows there and keeps the
-  // edited row mounted after them, out of its place.
-  const away = () =>
-    harness.evaluate(async () => {
-      document.querySelector('.rich-pane').scrollTop = 0
-      for (let i = 0; i < 3; i++) await window.tables.settle()
-    })
+  // edited row mounted after them, out of its place. The cell editor's own
+  // scroll to its caret, after typing, lands first, or it pulls the pane back.
+  const away = async () =>
+    assert.ok(
+      await harness.evaluate(async () => {
+        const preview = window.tables
+        await preview.settle()
+        document.querySelector('.rich-pane').scrollTop = 0
+        const placed = () =>
+          document.querySelector('.hibi-lp-table tr[data-line="1803"]')
+            ?.previousElementSibling?.dataset.line === '1802'
+        for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+        return !placed()
+      }),
+      'the edited row starts out of its place',
+    )
   // The focused cell, and whether it is inside the pane once the window is
   // drawn for where the pane scrolled.
   const shown = () =>
@@ -3542,6 +5550,492 @@ test('a long table shows the edited row in its place once the pane scrolled away
     { cell: '1803:0', before: '1802', inside: true },
     'typing',
   )
+})
+
+// Until a changed table's layout comes, the table cannot find a position's
+// cell in its old text. A scroll to the edited row, kept beside a window that
+// scrolled away from it, still goes to the row's place: the window draws
+// there, while it moves the kept row on as it draws elsewhere. The row's line
+// start, which linked scrolling and the reading place ask for, is there too,
+// also in a table without outer pipes, where it is in the first cell's text.
+test("a long table shows the edited row in its place when an undo, a redo or an edit scrolls to it before the table's new layout comes", {
+  timeout: 180000,
+}, async () => {
+  for (const { pipes, column, text } of [
+    { pipes: true, column: 1, text: 'v1801' },
+    { pipes: false, column: 0, text: 'row 1801' },
+  ]) {
+    const form = pipes ? 'outer pipes' : 'no outer pipes'
+    const row = (cells) =>
+      pipes ? `| ${cells.join(' | ')} |` : cells.join(' | ')
+    const rows = Array.from({ length: 3000 }, (_, i) =>
+      row([`row ${i}`, `v${i}`]),
+    )
+    const doc = `${row(['a', 'b'])}\n${row(['---', '---'])}\n${rows.join('\n')}\n\nAfter.\n`
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 606 },
+          // An edit parses one step; the rest of its reparse waits for idle time.
+          { editable: true, slice: 0 },
+        ),
+      doc,
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness.evaluate(async (at) => {
+      const preview = window.tables
+      await preview.settle()
+      const view = preview.view()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+      })
+      await preview.settle()
+      await preview.settle()
+    }, doc.indexOf('row 1801 '))
+    await harness
+      .locator('.hibi-lp-table tr[data-line="1803"] td')
+      .nth(column)
+      .click()
+    await harness.keyboard.press('End')
+    await harness.keyboard.type('Z')
+    // Once the layout came, the pane scrolls back to the top, where the window
+    // keeps the edited row mounted after its rows.
+    const away = async () => {
+      await harness.waitForFunction(() => !window.tables.settling())
+      assert.ok(
+        await harness.evaluate(async () => {
+          const preview = window.tables
+          await preview.settle()
+          document.querySelector('.rich-pane').scrollTop = 0
+          const placed = () =>
+            document.querySelector('.hibi-lp-table tr[data-line="1803"]')
+              ?.previousElementSibling?.dataset.line === '1802'
+          for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+          return !placed()
+        }),
+        `${form}: the edited row starts out of its place`,
+      )
+    }
+    // A slow machine has no idle time while it draws the frames after a step:
+    // the parse steps that bring the table's layout wait until they are let go,
+    // and with one pending the parser starts no other.
+    const hold = () =>
+      harness.evaluate(() => {
+        const held = []
+        const request = window.requestIdleCallback
+        window.requestIdleCallback = (callback) => held.push(callback)
+        window.letIdle = () => {
+          window.requestIdleCallback = request
+          for (const callback of held) request(callback)
+        }
+      })
+    // Whether the step landed before the layout, and the focused cell then and
+    // once the layout came: in its row's place, inside the pane.
+    const shown = async () => {
+      const read = () =>
+        harness.evaluate(async () => {
+          for (let i = 0; i < 3; i++) await window.tables.settle()
+          const cell = document.activeElement?.closest('td')
+          const box = cell?.getBoundingClientRect()
+          const pane = document
+            .querySelector('.rich-pane')
+            .getBoundingClientRect()
+          return {
+            cell: cell
+              ? `${cell.parentElement.dataset.line}:${cell.cellIndex}`
+              : null,
+            placed:
+              cell?.parentElement.previousElementSibling?.dataset.line ===
+              '1802',
+            inside: !!box && box.top >= pane.top && box.bottom <= pane.bottom,
+          }
+        })
+      const settling = await harness.evaluate(() => window.tables.settling())
+      const early = await read()
+      await harness.evaluate(() => window.letIdle())
+      await harness.waitForFunction(() => !window.tables.settling())
+      return { settling, early, late: await read() }
+    }
+    const placed = { cell: `1803:${column}`, placed: true, inside: true }
+    const expected = { settling: true, early: placed, late: placed }
+    await away()
+    await hold()
+    await harness.keyboard.press(undoKey)
+    assert.deepEqual(await shown(), expected, `${form}: undo`)
+    assert.equal((await state()).doc, doc)
+    await away()
+    await hold()
+    await harness.keyboard.press(redoKey)
+    assert.deepEqual(await shown(), expected, `${form}: redo`)
+    assert.ok((await state()).doc.includes(`${text}Z |`), form)
+    // An edit from the formatted view, as a replace, scrolls to its change.
+    await away()
+    await hold()
+    await harness.evaluate((text) => {
+      const view = window.tables.view()
+      const at = view.state.doc.toString().indexOf(`${text}Z`) + text.length + 1
+      view.dispatch({
+        changes: { from: at, insert: 'Q' },
+        selection: { anchor: at + 1 },
+        scrollIntoView: true,
+      })
+    }, text)
+    assert.deepEqual(await shown(), expected, `${form}: edit`)
+    assert.ok((await state()).doc.includes(`${text}ZQ |`), form)
+    // An edit in another row leaves the layout to come; the edited row's line
+    // start is where it will be once it came.
+    await away()
+    await hold()
+    const pending = await harness.evaluate(() => {
+      const view = window.tables.view()
+      view.dispatch({
+        changes: {
+          from: view.state.doc.toString().indexOf('row 5 '),
+          insert: 'W',
+        },
+      })
+      return {
+        settling: window.tables.settling(),
+        top: view.coordsAtPos(view.state.doc.line(1804).from)?.top ?? null,
+      }
+    })
+    await harness.evaluate(() => window.letIdle())
+    // The layout came once the table draws the other row's new text.
+    await harness.waitForFunction(() =>
+      document
+        .querySelector('.hibi-lp-table tr[data-line="7"] td')
+        ?.textContent.startsWith('Wrow 5'),
+    )
+    const came = await harness.evaluate(() => {
+      const view = window.tables.view()
+      return view.coordsAtPos(view.state.doc.line(1804).from)?.top ?? null
+    })
+    assert.equal(pending.settling, true, `${form}: line start`)
+    assert.ok(
+      pending.top !== null && came !== null && Math.abs(pending.top - came) < 1,
+      `${form}: line start ${pending.top} before the layout, ${came} after`,
+    )
+  }
+})
+
+test("a scroll to the start or end of a long table's edited row lands on it in its place once the pane scrolled away from it", {
+  timeout: 120000,
+}, async () => {
+  // Every fifth row breaks a cell over three lines: the rows drawn around the
+  // edited row measure taller than the estimate a scroll would start from.
+  const rows = Array.from(
+    { length: 3000 },
+    (_, i) => `| row ${i} | ${i % 5 ? `v${i}` : 'a<br>b<br>c'} |`,
+  )
+  // As in the test above: the note starts with the table, in a pane that
+  // fits the harness window.
+  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 606 },
+        { editable: true },
+      ),
+    doc,
+  )
+  await harness.evaluate(async (at) => {
+    const preview = window.tables
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const view = preview.view()
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+    await preview.settle()
+    await preview.settle()
+  }, doc.indexOf('v1801 '))
+  await harness.locator('.hibi-lp-table tr[data-line="1803"] td').nth(1).click()
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('Z')
+  // Scrolled to the note's top, the window draws the rows there and keeps
+  // the edited row after them; scrolled to its end, before them. A scroll
+  // that puts the caret at the pane's top or bottom, as no in-app caller asks
+  // of a cell yet, then lands on the row in its place.
+  const scroll = (to, y) =>
+    harness.evaluate(
+      async ({ to, y }) => {
+        const preview = window.tables
+        const pane = document.querySelector('.rich-pane')
+        // The cell editor scrolls to its caret after the typing first.
+        await preview.settle()
+        pane.scrollTop = to === 'top' ? 0 : pane.scrollHeight
+        const row = () =>
+          document.querySelector('.hibi-lp-table tr[data-line="1803"]')
+        const placed = () =>
+          row().previousElementSibling?.dataset.line === '1802' &&
+          row().nextElementSibling?.dataset.line === '1804'
+        // The window moves to the rows there once the table measures there.
+        for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+        const away = !placed()
+        const view = preview.view()
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(
+            view.state.selection.main.head,
+            { y },
+          ),
+        })
+        for (let i = 0; i < 4; i++) await preview.settle()
+        const editor = view.constructor.findFromDOM(
+          document.activeElement.closest('.cm-editor'),
+        )
+        const caret = editor.coordsAtPos(editor.state.selection.main.head)
+        const cell = document.activeElement.closest('td')
+        const bounds = pane.getBoundingClientRect()
+        return {
+          away,
+          cell: `${cell.parentElement.dataset.line}:${cell.cellIndex}`,
+          placed: placed(),
+          // How far the caret is from the pane edge it was scrolled to.
+          edge: Math.round(
+            y === 'start'
+              ? caret.top - bounds.top
+              : bounds.bottom - caret.bottom,
+          ),
+        }
+      },
+      { to, y },
+    )
+  for (const [to, y] of [
+    ['top', 'start'],
+    ['bottom', 'end'],
+  ]) {
+    const result = await scroll(to, y)
+    assert.ok(result.away, `the edited row starts out of its place: ${to}`)
+    assert.deepEqual(
+      [result.cell, result.placed],
+      ['1803:1', true],
+      JSON.stringify(result),
+    )
+    // CodeMirror leaves a few pixels between the line and the pane's edge.
+    assert.ok(result.edge >= 0 && result.edge < 20, JSON.stringify(result))
+  }
+})
+
+test("a long table keeps its height and its rows' places while the edited row is out of its place", {
+  timeout: 300000,
+}, async () => {
+  const note = (edited) => {
+    const rows = Array.from({ length: 3000 }, (_, i) =>
+      i === 1801 ? `| row ${i} | ${edited} |` : `| row ${i} | v${i} |`,
+    )
+    // As in the tests above: the note starts with the table, in a pane that
+    // fits the harness window.
+    return `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  }
+  // The pane scrolled to the note's top leaves the edited row after the
+  // window; to its end, before it; to a table line between, after or before
+  // it with rows on both sides of the window. A scroll to a row 10 rows from
+  // it draws the window right beside it. Then the row goes back in its place.
+  // Rows the window hasn't drawn, on either side of it, estimate their places
+  // throughout, with the row's own height: it may be a tall one, or wrap as
+  // the pane narrows while it is away.
+  for (const { to, far, edited = 'v1801', near, narrow } of [
+    { to: 'top', far: [2400] },
+    { to: 'bottom', far: [1200] },
+    { to: 1200, far: [600, 2400] },
+    { to: 2400, far: [1200, 2800] },
+    { to: 'top', far: [2400], near: { row: 1791, beside: 'previous' } },
+    { to: 'top', far: [2400], near: { row: 1812, beside: 'next' } },
+    { to: 'top', far: [2400], edited: 'a<br>b<br>v1801' },
+    { to: 'bottom', far: [1200, 2400], edited: 'a<br>b<br>v1801' },
+    ...[
+      { to: 'top', far: [2400] },
+      { to: 'bottom', far: [1200, 2400] },
+      { to: 1200, far: [600, 2400] },
+      { to: 2400, far: [1200, 2800] },
+    ].map((pass) => ({
+      ...pass,
+      edited: `v1801 ${'wrapping words '.repeat(5)}end`,
+      narrow: true,
+    })),
+  ]) {
+    const form = `${to}${near ? `, near ${near.row}` : ''}${narrow ? ', narrowed' : ''}, ${edited.slice(0, 8)}`
+    const doc = note(edited)
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 606 },
+          { editable: true },
+        ),
+      doc,
+    )
+    await harness.evaluate(async (at) => {
+      const preview = window.tables
+      for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+        await new Promise((done) => setTimeout(done, 20))
+      await preview.settle()
+      const view = preview.view()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+      })
+      await preview.settle()
+      await preview.settle()
+    }, doc.indexOf('v1801 '))
+    await harness
+      .locator('.hibi-lp-table tr[data-line="1803"] td')
+      .nth(1)
+      .click()
+    await harness.keyboard.press('End')
+    await harness.keyboard.type('Z')
+    const result = await harness.evaluate(
+      async ({ to, far, near, narrow }) => {
+        const preview = window.tables
+        const view = preview.view()
+        const pane = document.querySelector('.rich-pane')
+        const table = document.querySelector('.hibi-lp-table')
+        const row = (line) => table.querySelector(`tr[data-line="${line}"]`)
+        const placed = () =>
+          row(1803).previousElementSibling?.dataset.line === '1802' &&
+          row(1803).nextElementSibling?.dataset.line === '1804'
+        const top = (box) =>
+          box ? Math.round(box.top - table.getBoundingClientRect().top) : null
+        // Where a table line's first cell shows; table line n is the note's
+        // line n + 1.
+        const shows = (line) =>
+          top(view.coordsAtPos(view.state.doc.line(line + 1).from + 3))
+        // The cell editor scrolls to its caret after the typing first.
+        await preview.settle()
+        if (typeof to === 'number') {
+          // The line at the pane's middle, from where it estimates it shows.
+          const bounds = pane.getBoundingClientRect()
+          pane.scrollTop +=
+            shows(to) +
+            table.getBoundingClientRect().top -
+            (bounds.top + bounds.height / 2)
+        } else pane.scrollTop = to === 'top' ? 0 : pane.scrollHeight
+        for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+        // A nearest scroll draws the 10 rows on each side of its row.
+        if (near) {
+          view.dispatch({
+            effects: view.constructor.scrollIntoView(
+              view.state.doc.line(near.row + 3).from + 3,
+            ),
+          })
+          for (let i = 0; i < 4; i++) await preview.settle()
+        }
+        const tall = row(1803).getBoundingClientRect().height
+        let early
+        if (narrow) {
+          document.querySelector('.editor-panes').style.width = '420px'
+          // The pane's own resize observers, as the reading place's, read
+          // places before the view measures again; a view that has just
+          // updated, as a slow parse's slices do, drops the resize.
+          early = far.map(shows)
+          for (let i = 0; i < 6; i++) await preview.settle()
+        }
+        const away = {
+          out: !placed(),
+          beside:
+            near &&
+            row(1803)[`${near.beside}ElementSibling`]?.dataset.line ===
+              (near.beside === 'next' ? '1804' : '1802'),
+          grew: row(1803).getBoundingClientRect().height - tall,
+          height: Math.round(table.getBoundingClientRect().height),
+          kept: shows(1803),
+          far: far.map(shows),
+          early,
+        }
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(
+            view.state.selection.main.head,
+          ),
+        })
+        for (let i = 0; i < 4; i++) await preview.settle()
+        const inPlace = {
+          in: placed(),
+          height: Math.round(table.getBoundingClientRect().height),
+          kept: top(row(1803).getBoundingClientRect()),
+          far: far.map(shows),
+        }
+        if (narrow) document.querySelector('.editor-panes').style.width = ''
+        return { away, placed: inPlace }
+      },
+      { to, far, near, narrow },
+    )
+    const { away, placed } = result
+    assert.ok(away.out && placed.in, `${form}: ${JSON.stringify(result)}`)
+    if (near) assert.ok(away.beside, `${form}: ${JSON.stringify(result)}`)
+    if (narrow) assert.ok(away.grew > 30, `${form}: ${JSON.stringify(result)}`)
+    for (const [index, value] of (away.early ?? []).entries())
+      assert.ok(
+        Math.abs(value - placed.far[index]) <= 1,
+        `${form}, early: ${JSON.stringify(result)}`,
+      )
+    // Out of its place, the table is as tall as with the row in it, and the
+    // row and the far ones estimate where they show once drawn.
+    for (const key of ['height', 'kept', 'far']) {
+      const then = [placed[key]].flat()
+      for (const [index, value] of [away[key]].flat().entries())
+        assert.ok(
+          Math.abs(value - then[index]) <= 1,
+          `${form}, ${key}: ${JSON.stringify(result)}`,
+        )
+    }
+  }
+})
+
+test("a long table's edited first row shows where it is while the window starts right after it", {
+  timeout: 120000,
+}, async () => {
+  const rows = Array.from({ length: 3000 }, (_, i) => `| row ${i} | v${i} |`)
+  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 606 },
+        { editable: true },
+      ),
+    doc,
+  )
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  await harness.locator('.hibi-lp-table tr[data-line="2"] td').nth(1).click()
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('Z')
+  const result = await harness.evaluate(async (at) => {
+    const preview = window.tables
+    const view = preview.view()
+    const pane = document.querySelector('.rich-pane')
+    const table = document.querySelector('.hibi-lp-table')
+    const row = table.querySelector('tr[data-line="2"]')
+    // The cell editor scrolls to its caret after the typing first. Then the
+    // pane at the note's end keeps the row mounted before the window there.
+    await preview.settle()
+    pane.scrollTop = pane.scrollHeight
+    for (let i = 0; i < 20 && row.nextElementSibling?.dataset.line === '3'; i++)
+      await preview.settle()
+    const away = row.nextElementSibling?.dataset.line !== '3'
+    // A scroll to row 11 draws the 10 rows around it, from the row after the
+    // edited one: the spacer before the window, empty, hides.
+    view.dispatch({ effects: view.constructor.scrollIntoView(at) })
+    for (let i = 0; i < 4; i++) await preview.settle()
+    // Where the row's first cell shows: outside the window, its place,
+    // where it is drawn now.
+    const box = view.coordsAtPos(view.state.doc.line(3).from + 3)
+    return {
+      away,
+      before: row.previousElementSibling?.className,
+      shows: box && Math.round(box.top - row.getBoundingClientRect().top),
+    }
+  }, doc.indexOf('| row 11 |') + 3)
+  assert.deepEqual(result, {
+    away: true,
+    before: 'hibi-lp-table-spacer hibi-lp-table-empty',
+    shows: 0,
+  })
 })
 
 test('a cell editor shows its cell formatted as it opens', {
@@ -3732,7 +6226,6 @@ test('two views of a tab keep the table sizes each other stores', {
           window.tables.layouts('two').some((table) => table.key === key),
         ),
       keys,
-      { timeout: 3000 },
     )
     .catch(() => {})
   assert.deepEqual(
@@ -4268,7 +6761,6 @@ test('a save that waits for the workspace stays ahead of the next one', {
     (expected) =>
       JSON.stringify(window.tables.layouts('queue')[0]?.rows) === expected,
     JSON.stringify(heights),
-    { timeout: 5000 },
   )
 })
 
@@ -4389,10 +6881,19 @@ const openFormatted = async () => {
   })
   await page.reload()
   await waitForDocumentEditor(app, page)
-  await pressShortcut(
-    app,
-    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
-  )
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (revision) => {
+        const current = await window.hibi.getDocument()
+        return current.name === 'tables.md' && current.revision > revision
+      },
+      revision,
+    )
+  })
   await page.locator('.rich-pane .hibi-lp-table').first().waitFor()
   // Hidden windows have no focus; editors need a focused page.
   const session = await page.context().newCDPSession(page)
@@ -4766,13 +7267,14 @@ test('toolbar formatting preserves genuine DOM picks across table redraws', {
             filePaths: [file],
           })
         }, file)
-        await clickMenu(app, 'Open…')
-        await waitForAsync(
-          page,
-          async (name) => (await window.hibi.getDocument()).name === name,
-          name,
-        )
-        await waitForDocumentEditor(app, page)
+        await openInDocumentEditor(app, page, async () => {
+          await clickMenu(app, 'Open…')
+          await waitForAsync(
+            page,
+            async (name) => (await window.hibi.getDocument()).name === name,
+            name,
+          )
+        })
         const rich = page.getByRole('textbox', {
           name: 'Document editor',
           exact: true,
@@ -4933,4 +7435,153 @@ test('a caret moved in a cell while its table is stale reaches the formatted vie
     }
   })
   assert.deepEqual([heads.editor, heads.main], [2, heads.cell])
+})
+
+test('in the app, text typed before an added row draws reaches its cell', {
+  timeout: 60000,
+}, async () => {
+  await openFormatted()
+  // A table longer than one parse chunk, so the added row's reparse is
+  // still pending when the next key comes.
+  const doc = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
+    { length: 400 },
+    (_, row) => `| r${row} | v${row} |`,
+  ).join('\n')}\n`
+  const file = join(folder, 'slow-tab.md')
+  await writeFile(file, doc)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [file],
+    })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(
+    () => document.activeElement?.closest('td')?.textContent.trim() === 'v399',
+  )
+  // No user setting forces a parse to miss its slice. Exhaust its deadline
+  // during Tab and hold idle work until the early key has arrived.
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance)
+    const idle = requestIdleCallback.bind(window)
+    const cancel = cancelIdleCallback.bind(window)
+    const pending = new Map()
+    let late = 0
+    let held = true
+    const slow = (event) => {
+      if (event.key !== 'Tab') return
+      document.removeEventListener('keydown', slow, true)
+      performance.now = () => {
+        late += 10
+        return now() + late
+      }
+      window.requestIdleCallback = (callback, options) => {
+        const id = idle((deadline) => {
+          if (held) pending.set(id, () => callback(deadline))
+          else callback(deadline)
+        }, options)
+        return id
+      }
+      window.cancelIdleCallback = (id) => {
+        pending.delete(id)
+        cancel(id)
+      }
+    }
+    document.addEventListener('keydown', slow, true)
+    window.releaseTableParse = () => {
+      held = false
+      document.removeEventListener('keydown', slow, true)
+      performance.now = () => now() + late
+      window.requestIdleCallback = idle
+      window.cancelIdleCallback = cancel
+      for (const resume of pending.values()) resume()
+    }
+  })
+  try {
+    await page.keyboard.press('Tab')
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.getAttribute('aria-label'),
+      ),
+      'Document editor',
+    )
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('x')
+  } finally {
+    await page.evaluate(() => window.releaseTableParse())
+  }
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.closest('td')?.parentElement.dataset.line ===
+      '402',
+  )
+  await page.keyboard.type('y')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    `${doc}| <br>xy |  |\n`,
+  )
+})
+
+test("a cell's paste that moves the viewport keeps the cell editor before the table's new layout comes", {
+  timeout: 60000,
+}, async () => {
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph'.repeat(2000)
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: /^d$/ }).click()
+  await harness.keyboard.press('End')
+  const big = 'z'.repeat(30000)
+  // A slow machine has no idle time for the rest of the paste's reparse; the
+  // pasted text makes the table taller than the viewport and moves it.
+  const pasted = await harness.evaluate((big) => {
+    const held = []
+    const request = window.requestIdleCallback
+    window.requestIdleCallback = (callback) => held.push(callback)
+    window.letIdle = () => {
+      window.requestIdleCallback = request
+      for (const callback of held) request(callback)
+    }
+    window.pastedTable = document.querySelector('.hibi-lp-table')
+    const { viewport } = window.tables.view()
+    const data = new DataTransfer()
+    data.setData('text/plain', big)
+    document.activeElement.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true }),
+    )
+    return { settling: window.tables.settling(), viewport }
+  }, big)
+  try {
+    assert.ok(pasted.settling)
+    const shown = await harness.evaluate(async (before) => {
+      for (let i = 0; i < 3; i++) await window.tables.settle()
+      const { viewport } = window.tables.view()
+      return {
+        moved: viewport.from !== before.from || viewport.to !== before.to,
+        table: window.pastedTable.isConnected,
+        focused: !!document.activeElement?.closest('.hibi-lp-cell-editor'),
+      }
+    }, pasted.viewport)
+    assert.deepEqual(shown, { moved: true, table: true, focused: true })
+  } finally {
+    await harness.evaluate(() => window.letIdle())
+  }
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.evaluate(() => window.tables.settle())
+  await harness.keyboard.type('y')
+  assert.equal(
+    await harness.evaluate(() => window.tables.view().state.doc.toString()),
+    doc.replace('| c | d |', `| c | d${big}y |`),
+  )
 })

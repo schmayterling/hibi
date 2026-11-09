@@ -8,7 +8,7 @@ import { parseRow } from '../src/shared/markdown-table-source.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
@@ -500,13 +500,14 @@ test('toolbar actions preserve native formatting, caret and history', {
           filePaths: [file],
         })
       }, file)
-      await clickMenu(app, 'Open…')
-      await waitForAsync(
-        page,
-        async (name) => (await window.hibi.getDocument()).name === name,
-        `${item.name}.md`,
-      )
-      await waitForDocumentEditor(app, page)
+      await openInDocumentEditor(app, page, async () => {
+        await clickMenu(app, 'Open…')
+        await waitForAsync(
+          page,
+          async (name) => (await window.hibi.getDocument()).name === name,
+          `${item.name}.md`,
+        )
+      })
       await rich.focus()
       await rich.evaluate((root, item) => {
         window.actionInputs = []

@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -87,14 +91,13 @@ test("a background addon's editor features that never finish setting up leave ne
 }, async (t) => {
   const { app, page } = await launch(t)
   const before = await page.evaluate(() => window.hungFeatureCreates ?? 0)
-  await clickMenu(app, 'Open…')
+  // The note's formatted editor asks the addon to set up its feature, and
+  // takes input without waiting for it.
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
-  // The note's formatted editor asks the addon to set up its feature, and
-  // takes input without waiting for it.
-  await waitForDocumentEditor(app, page)
   assert.ok((await page.evaluate(() => window.hungFeatureCreates)) > before)
   await page.locator('.rich-pane .cm-content').click()
   await page.keyboard.press('End')
@@ -212,12 +215,13 @@ async function launchHeld(t, shortcuts) {
 }
 
 const openNote = async (app, page) => {
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+  })
 }
 
 test("a background addon's editor feature joins a new editor once it is set up, while another's never finishes", {

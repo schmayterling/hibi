@@ -389,12 +389,13 @@ test('finishing a file operation preserves newer settings input focus', {
 })
 
 test('settings opened while a restored version, file, tab or new note opens stay open when it finishes', {
-  timeout: 30000,
+  timeout: 60000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
   const folder = join(root, 'workspace')
   await mkdir(folder)
-  await writeFile(join(folder, 'one.md'), 'first note')
+  // A saved version above the preview limit restores through the main process.
+  await writeFile(join(folder, 'one.md'), 'first note\n'.repeat(200000))
   await writeFile(join(folder, 'two.md'), 'second note')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
@@ -450,15 +451,14 @@ test('settings opened while a restored version, file, tab or new note opens stay
           .fill('version history')
         await page.getByRole('option').first().waitFor()
         await page.keyboard.press('Enter')
-        const history = page.getByRole('dialog', { name: /^version history$/i })
+        const history = page.getByRole('dialog', { name: /^history$/i })
         await history
-          .getByRole('navigation', { name: /saved versions/i })
-          .getByRole('button')
+          .getByRole('listbox', { name: /points to return to/i })
+          .getByRole('option')
+          .filter({ hasText: /saved version/i })
           .last()
           .click()
-        await history
-          .getByRole('button', { name: /restore to editor/i })
-          .click()
+        await history.getByRole('button', { name: /^restore$/i }).click()
       },
       'one.md',
       // The restored version is an unsaved change.
@@ -501,6 +501,8 @@ test('settings opened while a restored version, file, tab or new note opens stay
         return note.name === name && (dirty === null || note.dirty === dirty)
       },
       [name, dirty],
+      // The editor loads a large restored version before this can read it.
+      { timeout: 30000 },
     )
     await page.locator('.app[aria-busy="false"]').waitFor()
     await page.evaluate(async () => {

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { DiagnosticIngress } from '../src/main/local-diagnostics/ingress.ts'
 
-test('a failed pre-entry observer preserves the normal renderer diagnostics bridge', async () => {
+test('a failed pre-entry observer preserves the normal renderer diagnostics bridge', async (t) => {
   const records = []
   const ingress = new DiagnosticIngress('debug', [], (wire) => {
     records.push(JSON.parse(wire))
@@ -19,7 +19,8 @@ test('a failed pre-entry observer preserves the normal renderer diagnostics brid
     define: { 'import.meta.env.DEV': 'false' },
     write: false,
   })
-  new Function('require', 'process', outputFiles[0].text)(
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  new Function('require', 'process', 'globalThis', outputFiles[0].text)(
     (id) => {
       assert.equal(id, 'electron')
       return {
@@ -40,6 +41,7 @@ test('a failed pre-entry observer preserves the normal renderer diagnostics brid
       }
     },
     { isMainFrame: true },
+    new EventTarget(),
   )
   try {
     assert.ok(exposed.hibiTransport, 'document bridge remains available')
@@ -57,7 +59,7 @@ test('a failed pre-entry observer preserves the normal renderer diagnostics brid
       ),
       true,
     )
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    t.mock.timers.tick(250)
     assert.ok(records.some((record) => record.code === 'RENDERER_ERROR'))
   } finally {
     ingress.dispose()

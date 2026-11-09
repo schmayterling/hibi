@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { wrapWithRootFrameSync } from '@codspeed/core'
-import { AsyncBench } from '../bench/desktop/async-bench.mjs'
+import { AsyncBench } from '../../bench/desktop/async-bench.mjs'
 
 test('desktop benchmark registration does not run CodSpeed callbacks before profile setup', async () => {
   const bench = new AsyncBench({

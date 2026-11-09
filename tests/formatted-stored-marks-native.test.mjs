@@ -6,7 +6,7 @@ import test from 'node:test'
 import { marked } from 'marked'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
@@ -177,13 +177,14 @@ test('stored mark review cases through native input and toolbar', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
     await rich.focus()
     await rich.evaluate(
       (element, raw) =>
@@ -192,6 +193,12 @@ test('stored mark review cases through native input and toolbar', {
     )
   }
   const action = async (id) => {
+    await page.waitForFunction((id) => {
+      const button = document.querySelector(
+        `.editor-toolbar [data-toolbar-id="format.${id}"]`,
+      )
+      return button && !button.disabled
+    }, id)
     await page.evaluate((id) => {
       const button = document.querySelector(
         `.editor-toolbar [data-toolbar-id="format.${id}"]`,
@@ -208,13 +215,23 @@ test('stored mark review cases through native input and toolbar', {
     )
     await rich.focus()
   }
+  // Native shortcuts queue input; a CDP source read can beat its renderer handler.
+  const settled = (source) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
   const history = async (source, typed) => {
     await pressShortcut(app, `${mod}+z`)
+    await settled(source)
     assert.equal(await snapshot(), source, 'one undo restores exact source')
     await pressShortcut(
       app,
       process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
     )
+    await settled(typed)
     assert.equal(await snapshot(), typed, 'redo restores typed text')
   }
   for (const item of scenarios)
@@ -237,6 +254,12 @@ test('stored mark review cases through native input and toolbar', {
     assert.equal(marked.parseInline(typed), marked.parseInline('a ``bx`y``'))
     await history(source, typed)
     await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
     assert.equal(await snapshot(), source)
     await page.keyboard.type('Z')
     const replaced = await snapshot()
@@ -388,6 +411,10 @@ test('stored mark review cases through native input and toolbar', {
     await action('bold')
     await page.keyboard.type('X')
     await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === 'plain end',
+    )
     assert.equal(await snapshot(), 'plain end')
     await page.keyboard.type('Y')
     const typed = await snapshot()

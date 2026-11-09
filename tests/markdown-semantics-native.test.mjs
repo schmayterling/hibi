@@ -116,7 +116,8 @@ const formattedDifferences = {
   '1/forward references/0': { text: 'ref # [ref]' },
 }
 
-// Frozen outcomes, checked by the native control before its removal.
+// Frozen outcomes, checked by the native control before its removal, with
+// accepted corrections noted below.
 const formattedOutcomes = {
   '0/intraword non-bmp symbol/0': {
     text: 'ab**😀cd**ef',
@@ -164,10 +165,12 @@ const formattedOutcomes = {
     headings: ['first', 'nested', 'outer'],
     counts: { words: 5, characters: 35 },
   },
+  // Re-recorded on clean main c9c691a1: #731 aligned counts with the view.
+  // Subtext ends the first quote; the second adds its own block separator.
   '0/lazy quote/0': {
-    text: '\nfirst\nsmall\nlast\nouter',
+    text: '\nfirst\nsmall\n\nlast\nouter',
     headings: ['outer'],
-    counts: { words: 4, characters: 23 },
+    counts: { words: 4, characters: 24 },
   },
   '0/lazy definition/0': {
     text: '\nplain text\nref\nafter',
@@ -296,9 +299,9 @@ const formattedOutcomes = {
     counts: { words: 5, characters: 39 },
   },
   '1/lazy quote/0': {
-    text: '\nfirst\nsmall\nlast\n# outer',
+    text: '\nfirst\nsmall\n\nlast\n# outer',
     headings: [],
-    counts: { words: 4, characters: 25 },
+    counts: { words: 4, characters: 26 },
   },
   '1/lazy definition/0': {
     text: '\nplain text\nref\n# after',
@@ -645,7 +648,7 @@ test('semantic fixtures preserve source, headings and formatted counts', {
             assert.equal(
               actual.counts,
               formattedCount,
-              'formatted counts exclude Markdown syntax, as the frozen native outcome does',
+              'formatted counts exclude Markdown syntax and preserve block separators',
             )
             await rich.evaluate((element) => element.blur())
             /** The view's visible text, or whether it is `expected`. */

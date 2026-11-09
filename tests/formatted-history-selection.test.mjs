@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
@@ -187,8 +187,7 @@ for (const item of cases)
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
     await saved(item.source)
     // The cell editor is another .cm-content.
     const root = page.locator('.rich-pane [aria-label="Document editor"]')
@@ -384,8 +383,7 @@ for (const item of adjacency)
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
     const saved = (text) =>
       waitForAsync(
         page,

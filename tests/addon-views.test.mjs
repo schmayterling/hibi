@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -570,11 +575,13 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await page.evaluate(() => {
     window.viewsFixture.handles.follow = window.viewsFixture.follow.open()
   })
-  await clickMenu(app, 'New')
-  await page.waitForFunction(
-    (id) => window.viewsFixture.context.editor.getDocument().tabId !== id,
-    first,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'New')
+    await page.waitForFunction(
+      (id) => window.viewsFixture.context.editor.getDocument().tabId !== id,
+      first,
+    )
+  })
   await replaceRichText(page, editor, 'second document')
   const second = await page.evaluate(
     () => window.viewsFixture.context.editor.getDocument().tabId,
@@ -589,14 +596,16 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
       document.querySelector('.addon-sidebar .bound-text')?.textContent ===
       'second document',
   )
-  const focused = await page.evaluate(() =>
-    window.viewProps['view-fixture.panel:first'].focusDocument(),
-  )
-  assert.equal(focused, true)
-  await page.waitForFunction(
-    (id) => window.viewsFixture.context.editor.getDocument().tabId === id,
-    first,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    const focused = await page.evaluate(() =>
+      window.viewProps['view-fixture.panel:first'].focusDocument(),
+    )
+    assert.equal(focused, true)
+    await page.waitForFunction(
+      (id) => window.viewsFixture.context.editor.getDocument().tabId === id,
+      first,
+    )
+  })
   assert.equal(await editor.textContent(), 'first document')
   const firstRevision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision
@@ -645,6 +654,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   )
   await page.getByRole('button', { name: 'Close split' }).click()
   await page.locator('.editor-page[data-side]').waitFor({ state: 'detached' })
+  await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
     window.viewsFixture.handles.slow = window.viewsFixture.slow.open()
   })
@@ -755,7 +765,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     .waitFor()
   await page
     .locator(
-      '[role="tab"][id^="document-tab-"][aria-selected="true"][aria-disabled="false"]',
+      '.document-tabs[aria-busy="false"] [role="tab"][id^="document-tab-"][aria-selected="true"]',
     )
     .waitFor()
   await page.waitForFunction(
@@ -781,7 +791,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await page.keyboard.press('ArrowLeft')
   await page
     .locator(
-      '[role="tab"][id^="document-tab-"][aria-selected="true"][aria-disabled="false"]',
+      '.document-tabs[aria-busy="false"] [role="tab"][id^="document-tab-"][aria-selected="true"]',
     )
     .waitFor()
   await addonTab.click()

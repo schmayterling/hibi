@@ -3,7 +3,12 @@ import { link, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForAsync,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 const gif = Buffer.from(
@@ -79,11 +84,16 @@ test('large local images stream; external changes refresh one image and svg rema
     const { revision } = await window.hibi.getDocument()
     return {
       small: await window.hibi.readDocumentImage('assets/stable.gif', revision),
-      large: await window.hibi.readDocumentImage('assets/large.gif', revision),
+      large: (await window.hibi.readDocumentImage('assets/large.gif', revision))
+        ?.length,
     }
   })
   assert.match(oldBridge.small, /^data:image\/gif;base64,/)
-  assert.equal(oldBridge.large, null)
+  assert.equal(
+    oldBridge.large,
+    'data:image/gif;base64,'.length +
+      4 * Math.ceil((9 * 1024 * 1024 + gif.length) / 3),
+  )
   const headers = await page.evaluate(async (url) => {
     const response = await fetch(url)
     return Object.fromEntries(response.headers)
@@ -201,7 +211,13 @@ test('large local images stream; external changes refresh one image and svg rema
   )
 
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await pressShortcut(app, mod + '+n')
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, mod + '+n')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'untitled.md',
+    )
+  })
   await pressShortcut(app, mod + '+Shift+]')
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()

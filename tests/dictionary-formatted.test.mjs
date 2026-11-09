@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAddonShortcut,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -97,13 +98,12 @@ async function launch(t, files, { held = false } = {}) {
       },
       join(profile, name),
     )
-    await clickMenu(app, 'Open…')
+    await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
     await waitForAsync(
       page,
       async (name) => (await window.hibi.getDocument()).name === name,
       name,
     )
-    await waitForDocumentEditor(app, page)
   }
   return { app, page, open }
 }
@@ -469,7 +469,8 @@ test('in the formatted view a right-click offers the dictionary for the pressed 
   await define.waitFor()
   // The menu stays open after the page has moved its caret.
   await new Promise((resolve) => setTimeout(resolve, 300))
-  await define.click({ timeout: 1000 })
+  assert.equal(await define.isVisible(), true)
+  await define.click()
   await page
     .getByRole('dialog', { name: 'Define “Happy”' })
     .getByText('Music makes me feel happy.')

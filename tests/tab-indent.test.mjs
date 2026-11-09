@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import {
   codeIndentLines,
   detectIndentUnit,
@@ -45,6 +45,52 @@ test('indentation follows the first indented line', () => {
   edit({ from: 4, insert: '\n\t\t' })
   assert.equal(unit(), '\t')
   assert.equal(state.field(sourceIndent).from, 5)
+})
+
+test('source indentation walks unindented lines without repeated tree lookups', () => {
+  const prefix = 'plain\n\n'.repeat(800)
+  for (const tail of ['', '    late']) {
+    const doc = Text.of((prefix + tail).split('\n'))
+    let lookups = 0
+    for (const method of ['lineAt', 'line']) {
+      const original = doc[method].bind(doc)
+      doc[method] = (position) => {
+        lookups++
+        return original(position)
+      }
+    }
+    const state = EditorState.create({ doc, extensions: sourceIndent })
+    assert.deepEqual(
+      state.field(sourceIndent),
+      tail
+        ? { unit: '    ', from: prefix.length, to: prefix.length + tail.length }
+        : null,
+    )
+    assert.ok(lookups <= 2, `${lookups} tree lookups for ${doc.lines} lines`)
+  }
+})
+
+test('source indentation bounds iterator steps to edited lines', (t) => {
+  const state = EditorState.create({
+    doc: Text.of(Array(200000).fill('plain')),
+    extensions: sourceIndent,
+  })
+  assert.equal(state.field(sourceIndent), null)
+  // Initial detection may scan the document; a keystroke may not.
+  let steps = 0
+  const iterLines = Text.prototype.iterLines
+  t.mock.method(Text.prototype, 'iterLines', function (...args) {
+    const lines = iterLines.apply(this, args)
+    const next = lines.next.bind(lines)
+    lines.next = (...args) => {
+      steps++
+      return next(...args)
+    }
+    return lines
+  })
+  const edited = state.update({ changes: { from: 1, insert: 'x' } }).state
+  assert.equal(edited.field(sourceIndent), null)
+  assert.ok(steps > 0 && steps <= 3, `${steps} iterator steps for one edit`)
 })
 
 test('Tab preserves paragraph, code, list, table, focus and source behavior', {

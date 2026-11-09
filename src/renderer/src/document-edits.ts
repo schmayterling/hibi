@@ -1,5 +1,6 @@
 import {
   parseSourceEditRequest,
+  retriesSourceEdit,
   type SourceEditRequest,
   type SourceEditResult,
   sourceEditMatches,
@@ -100,6 +101,7 @@ export const documentEdits = {
                   }
                 })()
           Object.freeze(result)
+          if (retriesSourceEdit(result)) return result
           results.set(request.requestId, { fingerprint, result })
           cachedSize += fingerprint.length
           while (results.size > 128 || cachedSize > 8 * 1024 * 1024) {

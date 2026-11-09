@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -120,11 +124,19 @@ async function open(t, { source, presentation, code }) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
+  await openInDocumentEditor(
+    app,
     page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    source,
+    async () => {
+      await pressShortcut(app, `${mod}+o`)
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        source,
+      )
+    },
+    { timeout: 20000 },
   )
   const pane = presentation === 'formatted' ? '.rich-pane' : '.source-pane'
   if (presentation === 'source')
@@ -1561,7 +1573,17 @@ test('a startup failure of an addon formatted feature stays reported when anothe
   const message = 'Bad ext could not start its formatted editor feature.'
   await reported(page, message)
   // Opening a note clears the last document error, not an addon's failure.
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
   await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async ({ revision, plain }) => {
+      const current = await window.hibi.getDocument()
+      return current.revision > revision && current.markdown === plain
+    },
+    { revision, plain },
+  )
   await page.locator('.app[aria-busy="false"]').waitFor()
   await frame(page)
   assert.equal(

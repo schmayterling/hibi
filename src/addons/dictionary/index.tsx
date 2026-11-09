@@ -318,10 +318,14 @@ export default defineAddon({
       (views: Map<EditorView, ViewId>) =>
       async (editorContext?: EditorExtensionContext) => {
         if (!editorContext) return []
-        return (await import('./source')).trackSourceViews(
-          views,
-          editorContext.viewId,
-        )
+        // The editor has loaded CodeMirror already, so a view is tracked as it
+        // opens; the lookup code loads when a lookup asks for it.
+        const { ViewPlugin } = await import('@codemirror/view')
+        const { viewId } = editorContext
+        return ViewPlugin.define((view) => {
+          views.set(view, viewId)
+          return { destroy: () => views.delete(view) }
+        })
       }
     context.editor.registerSource({ id: 'lookup', create: track(sourceViews) })
     context.editor.registerFormatted({
@@ -348,6 +352,14 @@ export default defineAddon({
       // editor. Their selections are read after the module loads.
       const views = selection.editor === 'rich' ? formattedViews : sourceViews
       const source = views.size ? await import('./source') : null
+      // The text or editor can change while the lookup code loads.
+      const current = source && context.editorViews.getSelection(view)
+      if (
+        !current?.ok ||
+        current.value.editor !== selection.editor ||
+        current.value.contentVersion !== selection.contentVersion
+      )
+        return null
       const codeMirror = [...views].find(([editor, viewId]) =>
         at(
           viewId,

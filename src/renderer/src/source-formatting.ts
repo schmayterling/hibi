@@ -856,8 +856,8 @@ export function sourceFormatting(
   },
 ) {
   const editable = () => !view.state.readOnly
-  let lastDocument = view.state.doc,
-    text = lastDocument.toString()
+  let lastDocument: EditorState['doc'] | undefined,
+    text = ''
   const selection = (values?: InsertValues): DocumentSelection => {
     if (lastDocument !== view.state.doc) {
       lastDocument = view.state.doc
@@ -1326,6 +1326,24 @@ export function sourceFormatting(
       return inspect().state(id)
     },
     inspect,
+    /**
+     * Reads the text under `coords` now. The function returned gives that place
+     * later, past edits on one side of it, or null if they came on both.
+     */
+    place(coords: { x: number; y: number }) {
+      const before = view.state.doc,
+        at = view.posAtCoords(coords)
+      return () => {
+        const doc = view.state.doc
+        if (at === null || doc === before) return at ?? coords
+        const after = doc.length - before.length + at
+        return doc.sliceString(after) === before.sliceString(at)
+          ? after
+          : doc.sliceString(0, at) === before.sliceString(0, at)
+            ? at
+            : null
+      }
+    },
     capture(coords?: { x: number; y: number } | number) {
       const doc = view.state.doc,
         position =

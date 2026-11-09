@@ -7,6 +7,7 @@ import type { SourceSnapshot } from '../shared/source-buffer'
 import { readMarkdown, readMarkdownChunks, writeText } from './files'
 
 type Version = DocumentVersion & { hash: string }
+const AUTOSAVE_GAP = 3 * 60 * 1000
 const hashes = new WeakMap<SourceSnapshot, { hash: string; bytes: number }>()
 const directory = (path: string) =>
   join(
@@ -76,41 +77,57 @@ export async function* readVersionChunks(
 ): AsyncGenerator<string> {
   yield* readMarkdownChunks(await versionPath(path, id))
 }
+/** The SHA-256 of a source's saved bytes, hashed between other work and kept per snapshot. */
+export async function sourceHash(markdown: string | SourceSnapshot) {
+  const cached = typeof markdown === 'string' ? undefined : hashes.get(markdown)
+  if (cached) return cached
+  const digest = createHash('sha256')
+  let bytes = 0
+  if (typeof markdown === 'string') {
+    digest.update(markdown)
+    bytes = Buffer.byteLength(markdown)
+  } else {
+    let started = performance.now(),
+      scanned = 0
+    for (const chunk of markdown.encodedChunks()) {
+      digest.update(chunk)
+      bytes += chunk.byteLength
+      scanned += chunk.byteLength
+      if (scanned >= 65536 || performance.now() - started >= 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        scanned = 0
+        started = performance.now()
+      }
+    }
+  }
+  const hashed = { hash: digest.digest('hex'), bytes }
+  if (typeof markdown !== 'string') hashes.set(markdown, hashed)
+  return hashed
+}
+/** `automatic`: autosave wrote the last of `markdowns`. */
 export async function recordVersions(
   path: string,
   markdowns: (string | SourceSnapshot)[],
+  automatic = false,
 ): Promise<void> {
   const current = await versions(path)
   const folder = directory(path)
   const next = [...current]
   let copyFailure: { error: unknown } | undefined
+  let reflagged = false
   try {
     for (const markdown of markdowns) {
-      const cached =
-        typeof markdown === 'string' ? undefined : hashes.get(markdown)
-      const digest = cached ? null : createHash('sha256')
-      let bytes = cached?.bytes ?? 0
-      if (typeof markdown === 'string') {
-        digest!.update(markdown)
-        bytes = Buffer.byteLength(markdown)
-      } else if (!cached) {
-        let started = performance.now(),
-          scanned = 0
-        for (const chunk of markdown.encodedChunks()) {
-          digest!.update(chunk)
-          bytes += chunk.byteLength
-          scanned += chunk.byteLength
-          if (scanned >= 65536 || performance.now() - started >= 1) {
-            await new Promise<void>((resolve) => setImmediate(resolve))
-            scanned = 0
-            started = performance.now()
-          }
+      const { hash, bytes } = await sourceHash(markdown)
+      const last = next.at(-1)
+      if (last?.hash === hash) {
+        // Asked for now, whoever wrote this text first.
+        if (!automatic && last.automatic && markdown === markdowns.at(-1)) {
+          const { automatic: _written, ...asked } = last
+          next[next.length - 1] = asked
+          reflagged = true
         }
+        continue
       }
-      const hash = cached?.hash ?? digest!.digest('hex')
-      if (typeof markdown !== 'string' && !cached)
-        hashes.set(markdown, { hash, bytes })
-      if (next.at(-1)?.hash === hash) continue
       if (next.length === current.length)
         await mkdir(folder, { recursive: true, mode: 0o700 })
       const id = randomUUID()
@@ -123,18 +140,33 @@ export async function recordVersions(
         hash,
         savedAt: Date.now(),
         bytes,
+        ...(automatic && markdown === markdowns.at(-1)
+          ? { automatic: true as const }
+          : {}),
       })
     }
   } catch (error) {
     if (next.length === current.length) throw error
     copyFailure = { error }
   }
-  if (next.length === current.length) return
+  if (next.length === current.length && !reflagged) return
   const added = next.slice(current.length)
   let bytes = next.reduce((sum, version) => sum + version.bytes, 0)
   const expired: Version[] = []
   while (next.length > 2 && (next.length > 100 || bytes > 20 * 1024 * 1024)) {
-    const version = next.shift()
+    // Autosaves come far more often: they make room before saves asked for,
+    // first those it leaves no gap to miss, as the list shows them minutes
+    // apart. The text a save asked for replaced goes last of all.
+    const spare = next.slice(0, next.at(-1)?.automatic ? -1 : -2)
+    const crowded = spare.findIndex(
+      (version, index) =>
+        version.automatic &&
+        index > 0 &&
+        next[index + 1]!.savedAt - next[index - 1]!.savedAt < AUTOSAVE_GAP,
+    )
+    const autosave =
+      crowded >= 0 ? crowded : spare.findIndex((version) => version.automatic)
+    const [version] = next.splice(Math.max(autosave, 0), 1)
     if (version) {
       expired.push(version)
       bytes -= version.bytes

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { waitForProgress, workerBusyProgress } from './worker-progress.mjs'
+import { waitForProgress, workerBusyProgress } from '../worker-progress.mjs'
 
 function clock(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })

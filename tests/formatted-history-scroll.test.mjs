@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -160,13 +161,14 @@ test('codemirror: undo and redo scroll to the selection they restore', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
     // The table opens its cell editor after the view's focus update.
     if (focus)
       await page.waitForFunction(
@@ -190,19 +192,16 @@ test('codemirror: undo and redo scroll to the selection they restore', {
       text,
     )
     // The view scrolls at its next measure; the table's rows render after it.
-    let last = null
-    for (let read = 0; read < 30; read++) {
-      await page.waitForTimeout(100)
-      const now = await page.evaluate(restored, scroller)
-      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
-    }
+    let last
+    const landed = () =>
+      last.shown &&
+      (!cell || JSON.stringify(last.cell) === JSON.stringify(cell))
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      last = await page.evaluate(restored, scroller)
+      return landed()
+    }).catch(() => {})
     t.diagnostic(JSON.stringify({ name, ...last }))
-    if (
-      !last.shown ||
-      (cell && JSON.stringify(last.cell) !== JSON.stringify(cell))
-    )
-      differences.push(`${name}: ${JSON.stringify(last)}`)
+    if (!landed()) differences.push(`${name}: ${JSON.stringify(last)}`)
   }
 
   // Tab in the last cell adds a row and edits its first cell. Undo takes it
@@ -215,12 +214,97 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   await step('undo of an added row', undoKey, table, '.rich-pane', [81, 1])
   await step('redo of an added row', redoKey, added, '.rich-pane', [82, 0])
   await step('undo after a redo', undoKey, table, '.rich-pane', [81, 1])
+  // On a slow machine the step's parse runs out of its time: the new row
+  // shows as text below the table, where the view scrolls, and the table
+  // draws it in a later slice. Its cell, taller than that text, still shows.
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance)
+    let late = 0
+    const modifier = (event) =>
+      ['Control', 'Meta', 'Shift', 'Alt'].includes(event.key)
+    const key = (event) => {
+      if (modifier(event)) return
+      document.removeEventListener('keydown', key, true)
+      performance.now = () => {
+        late += 10
+        return now() + late
+      }
+    }
+    const done = (event) => {
+      if (modifier(event)) return
+      document.removeEventListener('keydown', done)
+      performance.now = () => now() + late
+    }
+    document.addEventListener('keydown', key, true)
+    document.addEventListener('keydown', done)
+  })
+  await step('slow redo of an added row', redoKey, added, '.rich-pane', [82, 0])
 
   await open('table-typing', table, '.rich-pane td')
   await page.keyboard.type('x')
   const typed = await changed(table)
   await step('undo of typing in a cell', undoKey, table)
   await step('redo of typing in a cell', redoKey, typed)
+
+  // On a slow machine each key's parse runs out of its time, and the table
+  // draws the cell's text in a later slice: keys typed before it does all
+  // land in the cell, in order.
+  const slow = () =>
+    page.evaluate(() => {
+      const now = performance.now.bind(performance)
+      const idle = window.requestIdleCallback
+      let held = []
+      let late = 0
+      performance.now = () => {
+        late += 10
+        return now() + late
+      }
+      // Idle work waits until the keys are in.
+      window.requestIdleCallback = (callback, options) =>
+        idle(
+          (deadline) => (held ? held.push(callback) : callback(deadline)),
+          options,
+        )
+      window.releaseParse = () => {
+        performance.now = () => now() + late
+        window.requestIdleCallback = idle
+        for (const callback of held)
+          callback({ didTimeout: false, timeRemaining: () => 50 })
+        held = null
+      }
+    })
+  const release = () =>
+    page.evaluate(async () => {
+      window.releaseParse()
+      await window.hibi.flushDocumentChanges()
+    })
+  await open('table-slow-typing', table, '.rich-pane td')
+  await slow()
+  await page.keyboard.type('x')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('yz')
+  await release()
+  assert.equal((await markdown()).split('\n').at(-2), '| r79 | v79x<br>yz |')
+  // Keys that move to another cell then go on in that cell, and undo in
+  // the cell shows there with typing going on after it, as without the
+  // slow parse.
+  const moves = async (name, slowly) => {
+    await open(name, table, '.rich-pane td')
+    if (slowly) await slow()
+    await page.keyboard.type('x')
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.type('y')
+    await page.keyboard.press('Tab')
+    await page.keyboard.type('z')
+    await page.keyboard.press(undoKey)
+    await page.keyboard.type('q')
+    if (slowly) await release()
+    else await page.evaluate(() => window.hibi.flushDocumentChanges())
+    return (await markdown()).split('\n').at(-2)
+  }
+  const moved = await moves('table-moves', false)
+  assert.match(moved, /^\| y \|/)
+  assert.equal(await moves('table-slow-moves', true), moved)
 
   // In the middle of the table, the table's edges, where the view scrolls to
   // for a place in it, do not show the cell.
@@ -452,13 +536,14 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
   }
   // The caret of the note's pane and whether it shows there.
   const caret = (pane) =>
@@ -517,13 +602,11 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
       async (from) => (await window.hibi.getDocument()).markdown === from,
       from,
     )
-    let last = null
-    for (let read = 0; read < 30; read++) {
-      await page.waitForTimeout(100)
-      const now = await caret(pane)
-      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
-    }
+    let last
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      last = await caret(pane)
+      return last.shown && last.head === at
+    }).catch(() => {})
     t.diagnostic(JSON.stringify({ name, at, ...last }))
     if (!last.shown || last.head !== at)
       differences.push(`${name}: ${JSON.stringify({ at, ...last })}`)

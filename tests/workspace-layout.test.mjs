@@ -1,3 +1,4 @@
+// ci: alone (asserts a write stays under a wall-clock limit)
 import assert from 'node:assert/strict'
 import {
   lstat,

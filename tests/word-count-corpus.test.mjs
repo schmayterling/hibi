@@ -70,6 +70,19 @@ const read = (counter) => {
 const bodyOf = (source, syntax) =>
   syntax.frontmatter ? (readFrontmatter(source)?.content ?? source) : source
 
+/**
+ * States whose rich text was recorded under the old `$$` block rule. Their
+ * math is Obsidian 1.13.7's reading, checked when this list was made, so the
+ * recorded text is no oracle for them; math-formatted holds that reading.
+ */
+const obsidianBlockStates = new Set(
+  (
+    '6:13 6:14 6:15 6:16 6:17 6:18 6:19 6:20 6:21 6:22 6:23 6:24 16:2 ' +
+    '16:3 16:4 16:5 16:6 16:8 16:9 16:10 26:7 26:8 26:9 26:10 26:11 ' +
+    '26:12 26:13'
+  ).split(' '),
+)
+
 /** Every corpus state with its counts, rich text and product classification. */
 function corpusResults() {
   const results = []
@@ -383,10 +396,27 @@ test('schema corpus: formatted counts match the rich parser and schema in every 
   const quirks = new Map(
     richQuirks.flatMap((quirk) => quirk.states.map((state) => [state, quirk])),
   )
+  // The list only holds what the new rule changed, with display math on: a
+  // state that matches its recorded text again, or has it off, is compared.
+  assert.deepEqual(
+    results
+      .filter(
+        (result) =>
+          obsidianBlockStates.has(`${result.doc}:${result.step}`) &&
+          (!differs(result.formatted, result.rich) ||
+            corpus.configs[result.config].disabledFeatures.includes(
+              'math.block',
+            )),
+      )
+      .map(summary),
+    [],
+  )
   assert.deepEqual(
     results
       .filter((result) => {
-        const quirk = quirks.get(`${result.doc}:${result.step}`)
+        const state = `${result.doc}:${result.step}`
+        if (obsidianBlockStates.has(state)) return false
+        const quirk = quirks.get(state)
         return quirk
           ? result.rich.words - result.formatted.words !==
               quirk.difference.words ||
@@ -469,6 +499,7 @@ async function openCorpus(config) {
                 worker,
                 streamId: data.head.streamId,
                 tabId: data.head.tabId,
+                revision: data.head.revision,
               })
             return post(data, ...rest)
           }
@@ -535,7 +566,7 @@ async function openCorpus(config) {
       )
     }
     let opened = false
-    return { page, errors, open, close }
+    return { app, page, errors, open, close }
   } catch (error) {
     await close()
     throw error
@@ -550,8 +581,10 @@ async function openCorpus(config) {
 const formattedCount = async ({ source, text }) => {
   const shell = await window.hibi.getDocument()
   if (shell?.markdown !== source) return null
+  // A note opened into an empty tab keeps its tab id and version 0; only the
+  // revision tells its stream from the empty tab's.
   const open = window.countOpens.findLast(
-    (entry) => entry.tabId === shell.tabId,
+    (entry) => entry.tabId === shell.tabId && entry.revision === shell.revision,
   )
   const reply = window.countReplies.findLast(
     (entry) =>
@@ -587,6 +620,36 @@ const formattedCount = async ({ source, text }) => {
   }
 }
 
+test('formatted count of a note opened into an empty tab waits for its own stream', async (t) => {
+  const { app, page, open, close } = await openCorpus(corpus.configs[0])
+  t.after(close)
+  await waitForAsync(page, formattedCount, { source: '', text: '' })
+  // A slow window: main has opened the note, the window still shows the
+  // empty tab and its count.
+  await app.evaluate(({ ipcMain }) => {
+    const original = ipcMain._invokeHandlers.get('document:open')
+    const held = new Promise((resolve) => {
+      globalThis.releaseOpen = resolve
+    })
+    ipcMain._invokeHandlers.set('document:open', async (...args) => {
+      const reply = await original(...args)
+      await held
+      return reply
+    })
+  })
+  const source = 'plain words'
+  const arg = { source, text: source }
+  try {
+    await open('held.md', source)
+    assert.equal(await page.evaluate(formattedCount, arg), null)
+  } finally {
+    await app.evaluate(() => globalThis.releaseOpen())
+  }
+  await waitForAsync(page, formattedCount, arg)
+  const { result, want } = await page.evaluate(formattedCount, arg)
+  assert.deepEqual({ words: result.words, characters: result.characters }, want)
+})
+
 test('canonical path keeps native word-count syntax choices', {
   timeout: 120000,
 }, async (t) => {
@@ -619,7 +682,18 @@ test('canonical path keeps native word-count syntax choices', {
 test('native corpus: formatted counts equal the rich text counts in the app', {
   timeout: 1800000,
 }, async (t) => {
-  const results = corpusResults()
+  // Each state opens as its own note, so no edit runs here; the schema corpus
+  // checks every state. The first and last state of each note hold every
+  // syntax setting. Two middle states hold what no first or last state does:
+  // an empty heading, and a code block with no content lines, which reaches
+  // the app's check of the code extents the document worker sends.
+  const middle = new Set(['42:3', '52:14'])
+  const results = corpusResults().filter(
+    (result, index, all) =>
+      result.step === 'initial' ||
+      all[index + 1]?.doc !== result.doc ||
+      middle.has(`${result.doc}:${result.step}`),
+  )
   const quirks = new Map(
     richQuirks.flatMap((quirk) => quirk.states.map((state) => [state, quirk])),
   )
@@ -674,7 +748,9 @@ test('native corpus: formatted counts equal the rich text counts in the app', {
           },
           { ...syntax, disabledFeatures: syntax.disabledFeatures.toSorted() },
         )
-        const quirk = quirks.get(`${result.doc}:${result.step}`)
+        const state = `${result.doc}:${result.step}`
+        if (obsidianBlockStates.has(state)) continue
+        const quirk = quirks.get(state)
         const want = quirk
           ? {
               words: native.want.words - quirk.difference.words,

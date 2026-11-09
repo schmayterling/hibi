@@ -42,6 +42,7 @@ import {
   ACCESSIBILITY_CHANNELS,
   APP_INFO_CHANNEL,
   type AppInfo,
+  type AutosaveResult,
   BOOTSTRAP_CHANNELS,
   DOCUMENT_CHANNELS,
 } from '../shared/desktop'
@@ -70,11 +71,13 @@ import {
 } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
+import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
@@ -132,6 +135,7 @@ import {
   saveAppearance,
   titleBarColors,
 } from './appearance'
+import { fileHeldOpen, fileReadOnly } from './atomic-rename'
 import { BackgroundMode } from './background'
 import {
   autosaveDocument,
@@ -148,6 +152,8 @@ import {
   getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
+  getSavedDocument,
+  getUnsavedNotes,
   hasOpenDocumentPath,
   hasUnsavedDocuments,
   loadDocument,
@@ -156,6 +162,7 @@ import {
   navigateDocument,
   newDocument,
   openDocument,
+  openRecovered,
   renameDocument,
   restoreDocument,
   saveDocument,
@@ -166,12 +173,13 @@ import {
   updateDocumentEdited,
 } from './document'
 import { createDocumentTransfers } from './document-transfer'
-import { isDocumentName } from './document-types'
+import { isOpenableName } from './document-types'
 import { sweepSiteScratch } from './export-scratch'
 import { externalFileArguments } from './external-files'
 import {
   fileOperationDialogOpened,
   fileOperationHasDialog,
+  onFileOperationDialog,
   withinFileOperation,
 } from './file-operation-dialog'
 import { GlobalShortcuts } from './global-shortcuts'
@@ -208,6 +216,21 @@ import {
   observeKnownWorkspaces,
   setKnownWorkspace,
 } from './recent-workspaces'
+import {
+  discardRecovery,
+  dismissRecovery,
+  previewRecoverySettings,
+  recoveryChanged,
+  recoveryOpened,
+  recoverySettings,
+  recoverySettled,
+  recoveryText,
+  recoveryWritten,
+  setRecoverySettings,
+  startRecoveryJournal,
+  waitingCopy,
+  waitingRecovery,
+} from './recovery-journal'
 import { refreshRemoteImage, remoteImageResponse } from './remote-images'
 import {
   CONTENT_SECURITY_POLICY,
@@ -223,6 +246,19 @@ import {
   outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
+import {
+  acceptUndoHistoryFlushed,
+  clearUndoHistory,
+  flushUndoHistory,
+  keepsUndoHistory,
+  pruneUndoHistory,
+  readUndoHistory,
+  relocateUndoHistory,
+  removeUndoHistory,
+  setKeepUndoHistory,
+  storeUndoHistory,
+  undoHistoryWritten,
+} from './undo-history'
 import {
   cancelUpdateInstall,
   checkForUpdates,
@@ -860,6 +896,7 @@ async function lockFileOperation<T>(
   } finally {
     pendingFileOperations.delete(completed)
     settle()
+    recoverySettled()
   }
 }
 
@@ -1066,8 +1103,7 @@ function createWindow(): void {
       shortcut && actions.find(({ id }) => hotkeys[id] === shortcut)
     if (action) {
       event.preventDefault()
-      if (!input.isAutoRepeat)
-        window.webContents.send(HOTKEY_CHANNELS.command, action.id)
+      if (!input.isAutoRepeat) sendCommand(window, action.id)
       return
     }
     const addon = shortcut ? addonHotkeys.resolve(shortcut) : undefined
@@ -1172,12 +1208,18 @@ function createWindow(): void {
       )
         showMainWindow()
       if (await confirmDiscardAll(window)) {
+        // Saves made in the prompts reach the notes' undo histories first.
+        if (journalReady && !rendererGone) await flushUndoHistory(window)
+        await undoHistoryWritten()
         const installed = finishUpdateInstall()
         if (installed === false) {
           quitting = false
           return
         }
         discardChanges()
+        // Every note is saved or discarded now, and leaves no copy behind.
+        recoverySettled()
+        await recoveryWritten()
         allowClose = true
         if (quitting || installed) releaseAddonWindows()
         if (!installed) {
@@ -1275,13 +1317,27 @@ function createWindow(): void {
     )
       return
     console.error('failed to load app:', error)
+    // The failed document has no editor to answer journal or undo-history flushes.
+    journalReady = false
     void showStartupError(error, window)
   })
 }
 
+// The renderer runs a command that arrives during a file operation once the
+// operation ends. One sent while its dialog or prompt is open would run after
+// that is answered, so it is dropped, as file operations are then.
+function sendCommand(window: BrowserWindow | null, action: AppCommand) {
+  if (!fileOperationHasDialog())
+    window?.webContents.send(HOTKEY_CHANNELS.command, action)
+}
+// The renderer drops clicks and requests that arrive behind one too.
+onFileOperationDialog((open) => {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(DOCUMENT_CHANNELS.fileDialog, open)
+})
+
 function installMenu(): void {
-  const command = (action: AppCommand) => () =>
-    mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  const command = (action: AppCommand) => () => sendCommand(mainWindow, action)
   // The app window runs undo and redo in its focused editor; its devtools and
   // other windows keep the browser's own.
   const history =
@@ -2275,6 +2331,46 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.tabsEnabled, (event, enabled: unknown) =>
         runFileOperation(event, (window) => setTabsEnabled(window, enabled)),
       )
+      startRecoveryJournal(getUnsavedNotes, (message) =>
+        mainWindow?.webContents.send(HISTORY_CHANNELS.notice, message),
+      )
+      handle(RECOVERY_CHANNELS.list, () => waitingRecovery())
+      handle(RECOVERY_CHANNELS.later, () => dismissRecovery())
+      handle(RECOVERY_CHANNELS.discard, (_event, id: unknown) =>
+        discardRecovery(id),
+      )
+      handle(RECOVERY_CHANNELS.restore, (event, id: unknown) =>
+        runFileOperation(event, async (window) => {
+          const copy = await waitingCopy(id)
+          if (!copy) throw new Error('This recovery copy is no longer here.')
+          let opened: Awaited<ReturnType<typeof openRecovered>>
+          try {
+            opened = await openRecovered(window, copy, () => recoveryText(copy))
+          } catch (error) {
+            // A note's tab or a new one may be showing by now: the window follows.
+            console.error('Could not open a recovery copy:', error)
+            window.webContents.send(
+              HISTORY_CHANNELS.notice,
+              'Hibi could not read this recovery copy. It stays waiting.',
+            )
+            return getDocument()
+          }
+          // The text is open now. A copy that can't be written says so at its next try.
+          if (opened)
+            await recoveryOpened(copy.id, opened.tabId).catch(
+              (error: unknown) =>
+                console.error('Could not write a recovery copy:', error),
+            )
+          return opened
+        }),
+      )
+      handle(RECOVERY_CHANNELS.settings, () => recoverySettings())
+      handle(RECOVERY_CHANNELS.preview, (_event, next: unknown) =>
+        previewRecoverySettings(next),
+      )
+      handle(RECOVERY_CHANNELS.setSettings, (_event, next: unknown) =>
+        setRecoverySettings(next),
+      )
       handle(HISTORY_CHANNELS.list, (event) =>
         readAfterFileOperation(event, () => listVersions(getDocumentPath())),
       )
@@ -2290,6 +2386,43 @@ if (!app.requestSingleInstanceLock()) {
           return restoreDocument(window, content)
         }),
       )
+      // Not a file operation: tab closes wait on these.
+      handle(
+        UNDO_HISTORY_CHANNELS.store,
+        (event, tabId: unknown, history: unknown) => {
+          trustedWindow(event)
+          const document = getSavedDocument(tabId)
+          return document
+            ? storeUndoHistory(document.path, document.saved, history)
+            : undefined
+        },
+      )
+      handle(UNDO_HISTORY_CHANNELS.flushed, (event, token: unknown) => {
+        trustedWindow(event)
+        acceptUndoHistoryFlushed(token)
+      })
+      handle(
+        UNDO_HISTORY_CHANNELS.read,
+        (event, tabId: unknown, version: unknown) =>
+          readAfterFileOperation(event, async () => {
+            const document = getSavedDocument(tabId)
+            return document && document.saved.version === version
+              ? readUndoHistory(document.path, document.saved)
+              : null
+          }),
+      )
+      handle(UNDO_HISTORY_CHANNELS.keep, (event) => {
+        trustedWindow(event)
+        return keepsUndoHistory()
+      })
+      handle(UNDO_HISTORY_CHANNELS.setKeep, (event, keep: unknown) => {
+        trustedWindow(event)
+        return setKeepUndoHistory(keep)
+      })
+      handle(UNDO_HISTORY_CHANNELS.clear, (event) => {
+        trustedWindow(event)
+        return clearUndoHistory()
+      })
       handle(DOCUMENT_CHANNELS.pdfImage, (event, source, revision) => {
         trustedWindow(event)
         return readPdfImage(source, revision)
@@ -2484,15 +2617,29 @@ if (!app.requestSingleInstanceLock()) {
           destinationPath: unknown,
           expectedVersion: unknown,
         ) =>
-          mutateAddonFile(event, owner, (isCurrent) =>
-            renameWorkspaceFile(
+          mutateAddonFile(event, owner, async (isCurrent) => {
+            const root = workspaceRoot()
+            const result = await renameWorkspaceFile(
               target as WorkspaceTarget,
               sourcePath,
               destinationPath,
               expectedVersion,
               isCurrent,
-            ),
-          ),
+            )
+            // A note an addon moves keeps its undo history, as one Hibi
+            // moves does; a move that kept both names moved nothing. It goes
+            // by the note's real path, whatever case the addon spelled it in.
+            if (root && result.ok && result.value.sourceRemoved) {
+              const moved = join(root, result.value.destinationPath)
+              void relocateUndoHistory(
+                join(root, result.value.path),
+                await realpath(moved).catch(() => moved),
+              ).catch((error: unknown) =>
+                console.error('Could not move undo history:', error),
+              )
+            }
+            return result
+          }),
       )
       handle(
         WORKSPACE_CHANNELS.trashFile,
@@ -2508,7 +2655,16 @@ if (!app.requestSingleInstanceLock()) {
               target as WorkspaceTarget,
               path,
               expectedVersion,
-              (file) => shell.trashItem(file),
+              async (file) => {
+                // Kept histories go by the note's real path, whatever case
+                // the addon spelled it in.
+                const note = await realpath(file).catch(() => file)
+                await shell.trashItem(file)
+                // Open notes aren't trashed here, so no tab sends steps later.
+                void removeUndoHistory(note).catch((error: unknown) =>
+                  console.error('Could not remove undo history:', error),
+                )
+              },
               isCurrent,
             ),
           ),
@@ -2656,11 +2812,13 @@ if (!app.requestSingleInstanceLock()) {
           throw new Error('Invalid document change.')
         updateDocument(value)
         updateDocumentEdited(window)
+        recoveryChanged()
       })
       handle(DOCUMENT_CHANNELS.append, (event, change: unknown) => {
         const window = trustedWindow(event)
         const ack = appendDocumentChange(change)
         updateDocumentEdited(window)
+        recoveryChanged()
         return ack
       })
       handle(DOCUMENT_CHANNELS.recoveryHead, (event, tabId: unknown) => {
@@ -2711,7 +2869,7 @@ if (!app.requestSingleInstanceLock()) {
           const kept = new Set<string>()
           for (const path of externalFiles.splice(0)) {
             try {
-              if (!isDocumentName(path))
+              if (!isOpenableName(path))
                 throw new Error('Unsupported document format.')
               const file = await realpath(path).catch(() => path)
               if (kept.has(file)) continue
@@ -2802,11 +2960,25 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.autosave,
         (event, tabId: unknown, revision: unknown) => {
           trustedWindow(event)
-          if (fileOperation) return { status: 'skipped', document: null }
+          // Closing refuses file operations until its prompts are answered.
+          if (fileOperation || closing)
+            return { status: 'skipped', document: null }
           return runFileOperation(event, async (window) => {
             const target =
               typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
-            const result = await autosaveDocument(window, tabId, revision)
+            let result: AutosaveResult
+            try {
+              result = await autosaveDocument(window, tabId, revision)
+            } catch (error) {
+              if (fileReadOnly(error))
+                return {
+                  status: 'held',
+                  document: null,
+                  message: (error as Error).message,
+                }
+              if (!fileHeldOpen(error)) throw error
+              return { status: 'held', document: null }
+            }
             if (result.status === 'saved')
               await documentFileChanged(target, target, false)
             return result
@@ -2852,6 +3024,15 @@ if (!app.requestSingleInstanceLock()) {
       installMenu()
       await updatesReady
       startUpdateChecks()
+      // Once a launch, after it settles: notes missing for 30 days let go of
+      // their kept undo history.
+      setTimeout(
+        () =>
+          void pruneUndoHistory().catch((error: unknown) =>
+            console.error('Could not prune undo history:', error),
+          ),
+        15_000,
+      ).unref()
     })
     .catch((error: unknown) => {
       console.error('startup failed:', error)

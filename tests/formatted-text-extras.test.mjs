@@ -9,6 +9,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -82,7 +83,19 @@ async function open(name) {
     },
     join(folder, 'notes', name),
   )
-  await pressShortcut(app, `${mod}+o`)
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async ({ name, revision }) => {
+        const current = await window.hibi.getDocument()
+        return current.name === name && current.revision > revision
+      },
+      { name, revision },
+    )
+  })
   await waitForAsync(
     page,
     async (name) => (await window.hibi.getDocument()).name === name,
@@ -477,12 +490,26 @@ test('backspace at the start of small text keeps the recorded rich view block be
 
 test('with their syntax settings or the flavor off, subscripts and small text stay as written', {
   timeout: 90000,
-}, async () => {
+}, async (t) => {
+  // A failure here must not leave later tests without these marks.
+  t.after(async () => {
+    await page.evaluate(() => {
+      localStorage.removeItem('hibi:markdown-syntax-disabled')
+      for (const key of Object.keys(localStorage))
+        if (key.startsWith('hibi:flavor:')) localStorage.removeItem(key)
+    })
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  })
   const literal = async (check) => {
     await page.reload()
     await waitForDocumentEditor(app, page)
+    // Entities read this way only once the parse has reached the line; the
+    // lines above read the same before and after.
     await page
-      .locator('.rich-pane .cm-line', { hasText: 'Water is H~2~O' })
+      .locator('.rich-pane .cm-line', {
+        hasText: '-# a line of small text & ©',
+      })
       .waitFor()
     assert.deepEqual(
       await page.evaluate(() => ({
@@ -526,9 +553,6 @@ test('with their syntax settings or the flavor off, subscripts and small text st
     )
   }, id)
   await literal('flavor off')
-  await page.evaluate((id) => localStorage.removeItem(`hibi:flavor:${id}`), id)
-  await page.reload()
-  await waitForDocumentEditor(app, page)
 })
 
 test('20,000 subscripts: only those near the viewport render and typing redraws only its line', {

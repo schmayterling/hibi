@@ -10,6 +10,7 @@ import {
 } from '../src/shared/preservation.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -377,11 +378,13 @@ test('custom source stays locked while its addon enables and survives rich editi
       filePaths: [file],
     })
   }, plain)
-  await clickMenu(app, 'Open…')
-  await page.waitForFunction(
-    async () => (await window.hibi.getDocument()).name === 'created.md',
-  )
-  await waitForDocumentEditor(app, page, { name: 'Document editor' })
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'created.md',
+    )
+  })
   await bodyEditor.evaluate((element) =>
     element.cmTile.root.view.dispatch({ selection: { anchor: 0 } }),
   )

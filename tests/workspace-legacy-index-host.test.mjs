@@ -19,8 +19,10 @@ test('unchanged legacy bulk requests reuse bounded source text after the first r
     join(profile, 'addons.json'),
     JSON.stringify({ graph: false, tags: false, math: false, mermaid: false }),
   )
+  const markdown = `# note\n${'body '.repeat(13000)}`
+  assert.ok(Buffer.byteLength(markdown) * 303 > 16 * 1024 * 1024)
   for (let i = 0; i < 303; i++)
-    await writeFile(join(notes, `note-${i}.md`), '# note')
+    await writeFile(join(notes, `note-${i}.md`), markdown)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -52,6 +54,8 @@ test('unchanged legacy bulk requests reuse bounded source text after the first r
   for (let i = 0; i < 3; i++) {
     const index = await page.evaluate(() => window.hibi.getWorkspaceIndex())
     assert.equal(index.pages.length, 303)
+    assert.equal(index.pages[0].markdown, markdown)
+    assert.equal(index.pages.at(-1).markdown, markdown)
     reads.push(
       await app.evaluate(() => {
         const reads = globalThis.legacySourceReads

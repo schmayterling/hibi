@@ -5,6 +5,7 @@ import { Component } from './api/core/component'
 import { Keymap, Scope } from './api/core/keymap'
 import type { Plugin } from './api/core/plugin'
 import { prepareMoment } from './api/moment'
+import { invokeObsidianProfile } from './api/native-client'
 import { acquireObsidianProtocols } from './api/protocol'
 import {
   createObsidianContributions,
@@ -31,34 +32,25 @@ declare global {
     | undefined
 }
 const scripts = new Map<string, ScriptBridge>()
-let hosts = 0
-let previousBridge: PropertyDescriptor | undefined
+const takeScript = scripts.get.bind(scripts)
+const deleteScript = scripts.delete.bind(scripts)
+let scriptBridgeInstalled = false
 
-function acquireScriptBridge() {
-  if (hosts++ === 0) {
-    previousBridge = Object.getOwnPropertyDescriptor(
-      globalThis,
-      '__hibiObsidianHost',
-    )
-    Object.defineProperty(globalThis, '__hibiObsidianHost', {
-      configurable: true,
-      value: {
-        take(identity: string) {
-          const bridge = scripts.get(identity)
-          scripts.delete(identity)
-          if (!bridge) throw new Error('This plugin load is no longer current.')
-          return bridge
-        },
+function installScriptBridge() {
+  if (scriptBridgeInstalled) return
+  Object.defineProperty(window, '__hibiObsidianHost', {
+    configurable: false,
+    writable: false,
+    value: Object.freeze({
+      take(identity: string) {
+        const bridge = takeScript(identity)
+        deleteScript(identity)
+        if (!bridge) throw new Error('This plugin load is no longer current.')
+        return bridge
       },
-    })
-  }
-  return () => {
-    if (--hosts === 0) {
-      if (previousBridge)
-        Object.defineProperty(globalThis, '__hibiObsidianHost', previousBridge)
-      else Reflect.deleteProperty(globalThis, '__hibiObsidianHost')
-    }
-  }
+    }),
+  })
+  scriptBridgeInstalled = true
 }
 
 function loadScript(
@@ -134,7 +126,7 @@ export class ObsidianHost {
       lastEvent: null,
       isDarkMode: () => hibi.colorschemes.getActive().appearance === 'dark',
     }
-    this.owner.register(acquireScriptBridge())
+    installScriptBridge()
     this.owner.register(() => keymap.clear())
     this.owner.registerDomEvent(
       document,
@@ -209,7 +201,6 @@ export class ObsidianHost {
     this.owner.addChild(owner)
     const { manifest, hash } = descriptor
     this.loading.set(manifest.id, owner)
-    const identity = `global:${manifest.id}:${hash}`
     const base = `app://hibi/obsidian-plugins/global/${manifest.id}/${hash}`
     try {
       // Host resource IDs stay stable across package upgrades without exposing native paths.
@@ -243,11 +234,15 @@ export class ObsidianHost {
         document.head.append(style)
         owner.register(() => style.remove())
       }
+      const nonce = await invokeObsidianProfile<string>('preparePluginLoad', {
+        id: manifest.id,
+        hash,
+      })
       const exports = await loadScript(
         owner,
-        identity,
+        `global:${manifest.id}:${hash}:${nonce}`,
         api,
-        `${base.replace('app://hibi/', 'app://obsidian-plugins/')}/main.js`,
+        `${base.replace('app://hibi/', 'app://obsidian-plugins/')}/main.js?load=${nonce}`,
         (token) => {
           capability = token
         },

@@ -26,7 +26,10 @@ async function modules(t) {
     ],
   })
   t.after(() => server.close())
-  return (path) => server.ssrLoadModule('/src/addons/obsidian/api/' + path)
+  return (path) =>
+    server.ssrLoadModule(
+      path === 'electron' ? path : '/src/addons/obsidian/api/' + path,
+    )
 }
 
 test('native transport preserves binary over local HTTP and validates requests before sending', async (t) => {
@@ -443,6 +446,141 @@ test('network concurrency admits 32 per plugin and bounds total work across plug
   assert.ok(
     (await Promise.all(pending)).every((error) => /abort/i.test(error.message)),
   )
+})
+
+test('script load tickets are single-use, short-lived and bound to sender, package and activation', async (t) => {
+  const load = await modules(t)
+  const capabilities = await load('network/capabilities.ts')
+  t.after(() => capabilities.clearPluginRequestCapabilities())
+  let now = 1000
+  let current = true
+  t.mock.method(Date, 'now', () => now)
+  const scope = { senderId: 7, isCurrent: () => current }
+  const hash = 'a'.repeat(64)
+  const prepare = () =>
+    capabilities.preparePluginScriptLoad('fixture', hash, scope)
+  const consume = (nonce, id = 'fixture', packageHash = hash, senderId = 7) =>
+    capabilities.consumePluginScriptLoad(id, packageHash, nonce, {
+      senderId,
+      isCurrent: () => true,
+    })
+  const nonce = prepare()
+  assert.equal(consume(nonce, 'other'), undefined)
+  assert.equal(consume(nonce, 'fixture', 'b'.repeat(64)), undefined)
+  assert.equal(consume(nonce, 'fixture', hash, 8), undefined)
+  assert.ok(consume(nonce))
+  assert.equal(consume(nonce), undefined)
+  assert.equal(consume(undefined), undefined)
+  assert.equal(consume(crypto.randomUUID()), undefined)
+  const expired = prepare()
+  now += 60000
+  assert.equal(consume(expired), undefined)
+  const inactive = prepare()
+  current = false
+  assert.equal(consume(inactive), undefined)
+  current = true
+  assert.equal(consume(inactive), undefined, 'invalidated ticket cannot revive')
+  const duplicate = prepare()
+  const token = capabilities.mintPluginRequestCapability('fixture', hash, scope)
+  assert.equal(
+    consume(duplicate),
+    undefined,
+    'unsolicited script cannot replace a live plugin grant',
+  )
+  assert.equal(
+    capabilities.requirePluginRequestCapability('fixture', token, 7).token,
+    token,
+  )
+})
+
+test('invalidation during authorization rechecks and revokes the grant before transport', async (t) => {
+  const load = await modules(t)
+  const capabilities = await load('network/capabilities.ts')
+  const native = await load('network/native.ts')
+  t.after(() => native.stopRequestUrls())
+  let current = true
+  const capability = capabilities.mintPluginRequestCapability(
+    'fixture',
+    'a'.repeat(64),
+    {
+      senderId: 7,
+      isCurrent: () => current,
+    },
+  )
+  const grant = capabilities.requirePluginRequestCapability(
+    'fixture',
+    capability,
+    7,
+  )
+  const authorization = Promise.withResolvers()
+  const response = native.requestUrlNative(
+    {
+      id: 'fixture',
+      capability,
+      requestId: crypto.randomUUID(),
+      request: { url: 'http://localhost' },
+    },
+    () => authorization.promise,
+    7,
+  )
+  current = false
+  authorization.resolve()
+  await assert.rejects(response, /capability/)
+  assert.equal(grant.controller.signal.aborted, true)
+})
+
+test('releasing a grant aborts an in-flight request without renderer cancellation', {
+  timeout: 5000,
+}, async (t) => {
+  const load = await modules(t)
+  const capabilities = await load('network/capabilities.ts')
+  const native = await load('network/native.ts')
+  const { net } = await load('electron')
+  t.after(() => native.stopRequestUrls())
+  const started = Promise.withResolvers()
+  const client = new EventEmitter()
+  let aborted = 0
+  client.end = () => started.resolve()
+  client.abort = () => {
+    aborted++
+  }
+  net.request = () => client
+  const capability = capabilities.mintPluginRequestCapability(
+    'fixture',
+    'a'.repeat(64),
+    {
+      senderId: 7,
+      isCurrent: () => true,
+    },
+  )
+  const response = native.requestUrlNative(
+    {
+      id: 'fixture',
+      capability,
+      requestId: crypto.randomUUID(),
+      request: { url: 'http://localhost' },
+    },
+    async () => {},
+    7,
+  )
+  let timer
+  t.after(() => clearTimeout(timer))
+  const rejected = assert.rejects(
+    Promise.race([
+      response,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('grant-release fixture deadline')),
+          250,
+        )
+      }),
+    ]),
+    /cancel/i,
+  )
+  await started.promise
+  await native.releaseRequestUrl({ id: 'fixture', capability }, 7)
+  await rejected
+  assert.equal(aborted, 1)
 })
 
 test('queued protocol links and network grants stop belonging to an invalidated activation', async (t) => {

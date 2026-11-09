@@ -1100,6 +1100,9 @@
   "79bce0799896": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "6a0117cd91f5": [
+    "src/addons/obsidian/native.ts"
+  ],
   "58ff373bd894": [
     "src/addons/quick-note/Settings.tsx"
   ],
@@ -7759,6 +7762,9 @@
   ],
   "db74ff730bc3": [
     "src/renderer/src/SourceEditor.tsx"
+  ],
+  "a666e9d1f11a": [
+    "src/addons/obsidian/api/network/capabilities.ts"
   ],
   "451aa51a0fb5": [
     "src/renderer/src/ToolbarSettings.tsx"

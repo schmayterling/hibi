@@ -5,8 +5,10 @@ import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { createMetadataNative } from './api/metadata/native'
 import {
+  consumePluginScriptLoad,
   mintPluginRequestCapability,
   type PluginRequestScope,
+  preparePluginScriptLoad,
 } from './api/network/capabilities'
 import {
   cancelRequestUrl,
@@ -227,7 +229,6 @@ export async function obsidianPluginAsset(
     request.method !== 'GET' ||
     url.protocol !== 'app:' ||
     !['hibi', 'obsidian-plugins'].includes(url.host) ||
-    url.search ||
     url.hash ||
     !match
   )
@@ -238,15 +239,24 @@ export async function obsidianPluginAsset(
   if (url.host !== (name === 'main.js' ? 'obsidian-plugins' : 'hibi'))
     return null
   if (!scope.isCurrent()) return null
+  if (name === 'styles.css' && url.search) return null
+  const nonce = url.searchParams.get('load')
+  if (name === 'main.js' && (url.searchParams.size !== 1 || !nonce)) return null
   const place = await obsidianGlobalStore()
   const source = await place.store.enabledPackage(id, hash)
   if (!scope.isCurrent()) return null
-  return name === 'main.js'
+  // Consume after authorization: concurrent tickets cannot replace a live grant.
+  const load =
+    name === 'main.js'
+      ? consumePluginScriptLoad(id, hash, nonce, scope)
+      : undefined
+  if (name === 'main.js' && !load) return null
+  return name === 'main.js' && load
     ? {
         body: wrapObsidianPlugin(
           source.main.toString('utf8'),
-          `${identity}:${id}:${hash}`,
-          mintPluginRequestCapability(id, hash, scope),
+          `${identity}:${id}:${hash}:${nonce}`,
+          mintPluginRequestCapability(id, hash, load),
         ),
         type: 'text/javascript; charset=utf-8',
       }
@@ -331,6 +341,26 @@ export default {
     },
   },
   profileMethods: {
+    async preparePluginLoad(input, context) {
+      const place = await globalPlace(input, context)
+      const id = pluginId(place.data)
+      const hash = (input as { hash?: unknown }).hash
+      if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash))
+        throw new Error('Choose the current plugin package.')
+      const plugins = await place.store.list()
+      place.check()
+      if (
+        !plugins.some(
+          (plugin) =>
+            plugin.manifest.id === id && plugin.hash === hash && plugin.enabled,
+        )
+      )
+        throw new Error('This plugin is disabled or uninstalled.')
+      return preparePluginScriptLoad(id, hash, {
+        senderId: context.senderId,
+        isCurrent: context.isCurrent,
+      })
+    },
     async requestUrl(input, context) {
       const check = addonCheck(context)
       return requestUrlNative(

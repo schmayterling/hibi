@@ -159,7 +159,7 @@ test('trusted API fixture has main-process networking, real moment and local pro
     exact: true,
   })
   const scriptResponse = page.waitForResponse((response) =>
-    response.url().endsWith('/main.js'),
+    new URL(response.url()).pathname.endsWith('/main.js'),
   )
   await enabled.click()
   await page.waitForFunction(
@@ -175,6 +175,132 @@ test('trusted API fixture has main-process networking, real moment and local pro
     'main must mint a capability while loading the plugin script',
   )
   const capability = capabilityMatch[1]
+  await t.test(
+    'script replays cannot replace the bridge, steal a capability or revoke the loaded plugin',
+    async () => {
+      const result = await page.evaluate(
+        async ({ base, scriptUrl }) => {
+          const descriptor = Object.getOwnPropertyDescriptor(
+            globalThis,
+            '__hibiObsidianHost',
+          )
+          let stolen
+          let replaced = false
+          try {
+            Object.defineProperty(globalThis, '__hibiObsidianHost', {
+              configurable: true,
+              value: {
+                take: () => ({
+                  activate: (token) => {
+                    stolen = token
+                  },
+                  require: () => ({}),
+                  loaded() {},
+                  failed() {},
+                }),
+              },
+            })
+            replaced = true
+          } catch {}
+          try {
+            const bare = new URL(scriptUrl)
+            bare.search = ''
+            const plugins = await window.hibi.queryAddon('obsidian', 'list', {})
+            const plugin = plugins.find((entry) => entry.enabled)
+            const pending = await window.hibi.invokeAddonProfile(
+              'obsidian',
+              'preparePluginLoad',
+              {
+                id: plugin.manifest.id,
+                hash: plugin.hash,
+              },
+            )
+            for (const url of new Set([
+              bare.href,
+              scriptUrl,
+              bare.href + '?load=' + crypto.randomUUID(),
+              bare.href + '?load=' + pending,
+            ])) {
+              await new Promise((resolve) => {
+                const script = document.createElement('script')
+                script.src = url
+                script.onload = script.onerror = resolve
+                document.head.append(script)
+                script.remove()
+              })
+            }
+          } finally {
+            if (replaced)
+              Object.defineProperty(
+                globalThis,
+                '__hibiObsidianHost',
+                descriptor,
+              )
+          }
+          let stolenStatus
+          if (stolen) {
+            const plugins = await window.hibi.queryAddon('obsidian', 'list', {})
+            const plugin = plugins.find((entry) => entry.enabled)
+            try {
+              stolenStatus = (
+                await window.hibi.invokeAddonProfile('obsidian', 'requestUrl', {
+                  id: plugin.manifest.id,
+                  capability: stolen,
+                  requestId: crypto.randomUUID(),
+                  request: { url: base + '/review-script-theft' },
+                })
+              ).status
+            } catch {}
+          }
+          const get = Map.prototype.get
+          let missingLookupRejected = false
+          try {
+            Map.prototype.get = () => ({ activate() {} })
+            try {
+              globalThis.__hibiObsidianHost.take('not-a-pending-load')
+            } catch {
+              missingLookupRejected = true
+            }
+          } finally {
+            Map.prototype.get = get
+          }
+          return {
+            replaced,
+            stolen: !!stolen,
+            stolenStatus,
+            configurable: descriptor.configurable,
+            writable: descriptor.writable,
+            frozen: Object.isFrozen(descriptor.value),
+            missingLookupRejected,
+          }
+        },
+        { base, scriptUrl: loadedScript.url() },
+      )
+      assert.equal(
+        hits.includes('/review-script-theft'),
+        false,
+        'renderer replay sent a native request',
+      )
+      assert.deepEqual(result, {
+        replaced: false,
+        stolen: false,
+        stolenStatus: undefined,
+        configurable: false,
+        writable: false,
+        frozen: true,
+        missingLookupRejected: true,
+      })
+      assert.equal(
+        await page.evaluate(
+          async (base) =>
+            (await window.__apiParity.requestUrl(base + '/live-after-replay'))
+              .status,
+          base,
+        ),
+        200,
+      )
+    },
+  )
   await t.test(
     'renderer callers cannot borrow an enabled plugin ID for native networking',
     async () => {

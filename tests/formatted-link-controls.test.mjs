@@ -355,12 +355,14 @@ test('codemirror caret actions and context edit are keyboard reachable', {
     'https://old.example',
   )
   await choose('Open link')
-  await page.waitForFunction(() =>
-    document.activeElement?.closest('.rich-pane .cm-editor'),
-  )
   assert.deepEqual(await openedLinks(app), [
     'https://old.example/',
   ])
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
+      document.activeElement?.closest('.rich-pane .cm-editor'),
+  )
   await choose('Remove link')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.startsWith('See docs here.'),
@@ -721,14 +723,16 @@ test('codemirror link menu holds the editor actions of addons too', {
   await menu.waitFor({ state: 'hidden' })
   assert.equal(await active(), null)
   assert.equal(await controls(), null)
-  // Opening a link keeps the app busy for a moment; the editor then has its
-  // focus back.
-  await page.waitForFunction(() =>
-    document.activeElement?.closest('.rich-pane .cm-editor'),
-  )
   assert.deepEqual(await openedLinks(app), [
     'https://old.example/',
   ])
+  // Opening a link keeps the app busy for a moment; the editor then has its
+  // focus back.
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
+      document.activeElement?.closest('.rich-pane .cm-editor'),
+  )
   // Opened again, the menu and its actions keep their ids.
   await page.keyboard.press('Shift+F10')
   await menu

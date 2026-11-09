@@ -431,6 +431,18 @@ test('plugin command IDs survive replacement by a package with a new content has
   assert.equal(bridgeProperty.configurable, false)
   assert.equal(bridgeProperty.writable, false)
   assert.equal(Object.isFrozen(bridge), true)
+  // A cancelled load's script runs no plugin code and raises no page error.
+  let ran = false
+  vm.runInNewContext(
+    wrapObsidianPlugin('globalThis.ran = true', 'cancelled-load'),
+    {
+      window,
+      set ran(value) {
+        ran = value
+      },
+    },
+  )
+  assert.equal(ran, false)
   assert.throws(
     () => Object.defineProperty(window, '__hibiObsidianHost', { value: {} }),
     TypeError,
@@ -438,7 +450,7 @@ test('plugin command IDs survive replacement by a package with a new content has
   const get = Map.prototype.get
   try {
     Map.prototype.get = () => ({ activate() {} })
-    assert.throws(() => bridge.take('not-a-pending-load'), /no longer current/)
+    assert.equal(bridge.take('not-a-pending-load'), undefined)
   } finally {
     Map.prototype.get = get
   }

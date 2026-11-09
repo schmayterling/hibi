@@ -32,7 +32,7 @@ interface ScriptBridge {
 }
 declare global {
   var __hibiObsidianHost:
-    | { take: (identity: string) => ScriptBridge }
+    | { take: (identity: string) => ScriptBridge | undefined }
     | undefined
 }
 const scripts = new Map<string, ScriptBridge>()
@@ -46,10 +46,10 @@ function installScriptBridge() {
     configurable: false,
     writable: false,
     value: Object.freeze({
+      // A cancelled load's script can still run once fetched; it gets nothing.
       take(identity: string) {
         const bridge = takeScript(identity)
         deleteScript(identity)
-        if (!bridge) throw new Error('This plugin load is no longer current.')
         return bridge
       },
     }),

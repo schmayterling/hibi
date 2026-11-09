@@ -141,6 +141,7 @@ export function wrapObsidianPlugin(
 ): string {
   return `(() => {
 const bridge = window.__hibiObsidianHost.take(${JSON.stringify(identity)});
+if (!bridge) return;
 ${capability ? `bridge.activate(${JSON.stringify(capability)});` : ''}
 const module = { exports: {} };
 try {

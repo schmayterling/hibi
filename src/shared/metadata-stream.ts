@@ -162,12 +162,15 @@ export class RecordReader {
   private roots = 0
   private canonical: (value: string) => string
   private skipHeadings: boolean
+  private skipDetails: boolean
   private skipped = 0
   constructor(
     canonical: (value: string) => string = (value) => value,
     skipHeadings = false,
+    skipDetails = false,
   ) {
     this.skipHeadings = skipHeadings
+    this.skipDetails = skipDetails
     this.canonical = canonical
   }
 
@@ -225,10 +228,11 @@ export class RecordReader {
           const hashes = !!(parent?.hashes || parent?.key === 'values')
           const headings = parent?.key === 'headings'
           const skip =
-            this.skipHeadings &&
-            parent?.headings &&
-            parent.key === 'items' &&
-            token === '['
+            token === '[' &&
+            ((this.skipHeadings &&
+              parent?.headings &&
+              parent.key === 'items') ||
+              (this.skipDetails && parent?.key === 'inlineDetails'))
           this.add(value)
           if (skip) this.skipped = 1
           else this.stack.push({ value, hashes, headings })

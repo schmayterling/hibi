@@ -141,6 +141,29 @@ test('detail reader rejects incomplete streams and invalid primitive tokens', ()
   )
 })
 
+test('metadata-only record reads skip resident inline details while detail reads retain them', () => {
+  const inlineDetails = [
+    ...recordTokens({
+      kind: 'frontmatter',
+      value: { values: { huge: 'z'.repeat(1000000) }, position },
+    }),
+  ]
+  const value = {
+    page: { path: 'note.md', details: { key: 'opaque' } },
+    inlineDetails,
+  }
+  const writer = new RecordWriter()
+  const slices = [...writer.write(recordTokens(value)), writer.finish()]
+  const projected = new RecordReader(undefined, true, true)
+  const complete = new RecordReader()
+  for (const slice of slices) {
+    projected.write(slice)
+    complete.write(slice)
+  }
+  assert.deepEqual(projected.finish(), { page: value.page, inlineDetails: [] })
+  assert.deepEqual(complete.finish(), value)
+})
+
 test('disk detail guards reject identity, size, invalid boundaries, links and truncation', async (t) => {
   const path = await directory(t)
   const writer = new DetailStoreWriter(path, id, identity)

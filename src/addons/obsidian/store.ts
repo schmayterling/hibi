@@ -574,9 +574,14 @@ export class ObsidianStore {
     enabled: boolean,
     check: () => void = () => {},
     fullAccess = false,
+    approvedHash?: string,
   ) {
     return this.mutate(async () => {
       const record = await this.record(id)
+      if (enabled && approvedHash !== undefined && record.hash !== approvedHash)
+        throw new Error(
+          'This plugin changed while confirmation was open. Review it again.',
+        )
       if (enabled) {
         const source = await this.readPackage(record)
         if (source.manifest.isDesktopOnly && fullAccess !== true)

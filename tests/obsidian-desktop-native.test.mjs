@@ -33,7 +33,7 @@ async function nativeHost(t) {
           if (id === '\0desktop-review:electron')
             return `const s = globalThis.__desktopReview
             export const app = {getPath: () => s.root}
-            export const dialog = {showMessageBox: async (options) => {s.dialogs.push(options); return {response: s.response}}}
+            export const dialog = {showMessageBox: async (options) => {s.dialogs.push(options); return s.onDialog ? await s.onDialog(options) : {response: s.response}}}
             export const ipcMain = {on(){}, handle(){}}
             export class BrowserWindow {}
             export const net = {}
@@ -173,7 +173,7 @@ test('one tampered full-access package does not make every plugin list (and revo
   )
 })
 
-test('trusted workspace refuses normal script tickets even for an installed enabled package', async (t) => {
+test('trusted workspace refuses normal script tickets and assets even for an installed enabled package', async (t) => {
   const ctx = await nativeHost(t)
   const data = await ctx.install()
   await ctx.store.setEnabled(data.manifest.id, true, undefined, true)
@@ -185,6 +185,26 @@ test('trusted workspace refuses normal script tickets even for an installed enab
     trusted() {},
   })
   assert.equal(await workspace.initialize(), true)
+  const { preparePluginScriptLoad } = await ctx.load(
+    'api/network/capabilities.ts',
+  )
+  const scope = { senderId: 1, isCurrent: () => true }
+  const nonce = preparePluginScriptLoad(data.manifest.id, data.hash, scope)
+  const { obsidianPluginAsset } = await ctx.load('native.ts')
+  assert.equal(
+    await obsidianPluginAsset(
+      new Request(
+        'app://obsidian-plugins/obsidian-plugins/global/' +
+          data.manifest.id +
+          '/' +
+          data.hash +
+          '/main.js?load=' +
+          nonce,
+      ),
+      scope,
+    ),
+    null,
+  )
   await assert.rejects(
     ctx.native.profileMethods.preparePluginLoad(
       { id: data.manifest.id, hash: data.hash },
@@ -193,3 +213,48 @@ test('trusted workspace refuses normal script tickets even for an installed enab
     /need full computer access/,
   )
 })
+
+for (const timing of ['dialog', 'store queue'])
+  test(
+    'consent naming package A cannot grant package B replaced in the ' + timing,
+    async (t) => {
+      const ctx = await nativeHost(t)
+      const a = await ctx.install()
+      const { token } = await ctx.native.queries.prepareFullAccess(
+        { id: a.manifest.id, hash: a.hash },
+        ctx.context,
+      )
+      let b
+      const replace = async () => {
+        b = await ctx.install(
+          true,
+          'module.exports = class extends require("obsidian").Plugin { /* changed B */ }',
+        )
+      }
+      if (timing === 'dialog') {
+        ctx.state.onDialog = async () => {
+          await replace()
+          return { response: 1 }
+        }
+      } else {
+        ctx.state.response = 1
+        const enable = ctx.store.setEnabled.bind(ctx.store)
+        ctx.store.setEnabled = async (...args) => {
+          await replace()
+          return enable(...args)
+        }
+      }
+      await assert.rejects(
+        ctx.native.methods.enable(
+          { id: a.manifest.id, enabled: true, fullAccess: true, token },
+          ctx.context,
+        ),
+        /changed|review/i,
+      )
+      const [record] = await ctx.store.list()
+      assert.notEqual(a.hash, b.hash)
+      assert.equal(record.hash, b.hash)
+      assert.equal(record.enabled, false)
+      assert.equal(record.fullAccess, undefined)
+    },
+  )

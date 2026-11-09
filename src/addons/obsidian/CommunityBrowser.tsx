@@ -35,7 +35,7 @@ import {
   type CommunityEntry,
   filterCommunityEntries,
 } from './community-types'
-import { setPluginEnabled } from './desktop-client'
+import { revokeFullAccess, setPluginEnabled } from './desktop-client'
 import {
   cancelInstall,
   changed,
@@ -784,14 +784,7 @@ export function InstalledObsidian({
               : 'Full-access plugins and this Hibi window can read and write any file and run programs. Plugins without their own full-access grant are paused.'
           }
         >
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                await window.hibi.invokeAddon('obsidian', 'revokeFullAccess')
-              })
-            }
-          >
+          <Button disabled={busy} onClick={() => void run(revokeFullAccess)}>
             Revoke all full access
           </Button>
           {inventory.desktop?.revoking && (

@@ -336,3 +336,23 @@ test('activation check can cancel a grant before persistence', async (t) => {
     true,
   )
 })
+
+test('the store binds queued enable to the approved hash and still permits unconditional revoke', async (t) => {
+  const f = await setup(t)
+  const a = f.source(true)
+  await f.store.install(a)
+  const b = f.source(true, { version: '2.0.0' })
+  await f.store.install(b)
+  await assert.rejects(
+    f.store.setEnabled('host-smoke', true, () => {}, true, a.hash),
+    /changed.*confirmation/i,
+  )
+  const [record] = await f.store.list()
+  assert.equal(record.hash, b.hash)
+  assert.equal(record.enabled, false)
+  ungranted(record)
+  await f.store.setEnabled('host-smoke', true, () => {}, true, b.hash)
+  ungranted(
+    await f.store.setEnabled('host-smoke', false, () => {}, false, a.hash),
+  )
+})

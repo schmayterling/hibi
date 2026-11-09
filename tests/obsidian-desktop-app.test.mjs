@@ -693,6 +693,39 @@ test('trusted workspace pauses a portable peer until its own native full-access 
     },
     { folder: peer.folder },
   ])
+  const hibiPeer = join(fixture.overlay, 'installed-addons', 'installed-peer')
+  await mkdir(hibiPeer, { recursive: true })
+  await writeFile(
+    join(hibiPeer, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'installed-peer',
+      name: 'Installed peer',
+      authors: [{ displayName: 'Fixture author' }],
+      description: 'A renderer fixture held in trusted mode.',
+      kind: 'extension',
+      apiVersion: 3,
+      version: '1.0.0',
+      capabilities: [],
+      startup: 'background',
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(hibiPeer, 'index.js'),
+    'window.__hibiInstalledPeerRuns = (window.__hibiInstalledPeerRuns || 0) + 1; export default () => ({ start(context) { window.__hibiInstalledPeerStarted = true; context.commands.register({id:"peer",label:"Installed peer",run(){}}); } });',
+  )
+  await writeFile(
+    join(hibiPeer, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(fixture.overlay, 'addons.json'),
+    JSON.stringify({ obsidian: true, 'installed-peer': true }),
+  )
   const app = await electron.launch({
     args: [resolve('.'), '--user-data-dir=' + fixture.overlay],
   })
@@ -723,6 +756,17 @@ test('trusted workspace pauses a portable peer until its own native full-access 
   )
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  const hibiRow = page.locator('[data-setting-id="addon-installed-peer"]')
+  await hibiRow
+    .getByText(
+      'Paused while full computer access is on. Turn off full access to use this addon, or disable it.',
+      { exact: true },
+    )
+    .waitFor()
+  assert.equal(
+    await page.evaluate(() => window.__hibiInstalledPeerRuns),
+    undefined,
+  )
   const row = page.locator(
     '[data-setting-id="installed-obsidian-host-portable-peer"]',
   )
@@ -790,13 +834,20 @@ test('trusted workspace pauses a portable peer until its own native full-access 
   })
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   const sandbox = app.waitForEvent('window')
+  assert.equal(
+    await page.evaluate(() => window.__hibiInstalledPeerRuns),
+    undefined,
+  )
   await page
-    .getByRole('button', { name: 'Revoke all full access', exact: true })
+    .locator('[data-setting-id="addon-installed-peer"]')
+    .getByRole('button', { name: 'Turn off full computer access', exact: true })
     .click()
   page = await sandbox
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => !window.hibiObsidianDesktop)
+  await page.waitForFunction(() => window.__hibiInstalledPeerStarted === true)
+  assert.equal(await page.evaluate(() => window.__hibiInstalledPeerRuns), 1)
   assert.equal(
     await page.evaluate(() => typeof window.__hibiPortablePeer),
     'undefined',

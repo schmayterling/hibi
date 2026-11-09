@@ -3422,6 +3422,9 @@
     "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
+  "d9afd578ebc7": [
+    "src/renderer/src/addon-registry.ts"
+  ],
   "73581a21f0ae": [
     "src/shared/addon-manifest.ts"
   ],
@@ -4940,6 +4943,9 @@
   ],
   "858e4ba7a29f": [
     "src/renderer/src/History.tsx"
+  ],
+  "63c81b2bdfba": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "a4f17dfc576b": [
     "src/addons/vim/engine.ts"
@@ -7608,6 +7614,10 @@
   "bb25a9076028": [
     "src/addons/obsidian/native.ts"
   ],
+  "63d1b23d9b13": [
+    "src/addons/obsidian/native.ts",
+    "src/addons/obsidian/store.ts"
+  ],
   "4ec49438f659": [
     "src/addons/obsidian/desktop-native.ts",
     "src/addons/obsidian/native.ts"
@@ -7915,6 +7925,9 @@
   ],
   "7d0720fee734": [
     "src/addons/obsidian-themes/Appearance.tsx"
+  ],
+  "f723ae31e385": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "7db7504e1c2f": [
     "src/addons/documentation/saved-options.ts"

@@ -494,11 +494,13 @@ export default {
       if (typeof enabled !== 'boolean')
         throw new Error('Choose whether to enable this plugin.')
       let fullAccess = false
+      let approvedHash: string | undefined
       if (enabled) {
         const plugin = (await place.store.list()).find(
           (entry) => entry.manifest.id === id,
         )
         if (!plugin) throw new Error('Choose an installed Obsidian plugin.')
+        approvedHash = plugin.hash
         if (
           plugin.manifest.isDesktopOnly ||
           (input as { fullAccess?: unknown }).fullAccess === true
@@ -518,7 +520,7 @@ export default {
                 (plugin.source ? ' (' + plugin.source.repo + ')' : '') +
                 '\nPackage SHA-256: ' +
                 plugin.hash +
-                '\n\nThis plugin can read and write any file and run programs. Hibi itself runs in a less isolated workspace. Every enabled plugin in that workspace must have full computer access; other plugins are paused. Unsafe scripts in Hibi’s interface can also gain computer access. Only grant this to code you trust. Disabling it replaces the workspace window; programs it already launched may keep running.',
+                '\n\nThis plugin can read and write any file and run programs. Hibi itself runs in a less isolated workspace. Every enabled plugin in that workspace must have full computer access; other plugins are paused. Other installed Hibi addons are paused until full access is off; bundled addons keep working. Unsafe scripts in Hibi’s interface can also gain computer access. Only grant this to code you trust. Disabling it replaces the workspace window; programs it already launched may keep running.',
               buttons: ['Cancel', 'Grant full access and enable'],
               defaultId: 0,
               cancelId: 0,
@@ -544,11 +546,20 @@ export default {
         }
       }
       place.check()
+      if (
+        enabled &&
+        (await place.store.list()).find((plugin) => plugin.manifest.id === id)
+          ?.hash !== approvedHash
+      )
+        throw new Error(
+          'This plugin changed while confirmation was open. Review it again.',
+        )
       const result = await place.store.setEnabled(
         id,
         enabled,
         place.check,
         fullAccess,
+        approvedHash,
       )
       desktopAccessChanged(id, result.fullAccess)
       return result

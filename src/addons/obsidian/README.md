@@ -70,7 +70,9 @@ and write any file and run programs. Hibi switches to a less isolated workspace
 while these plugins are enabled. Real Node.js and Electron modules, including
 Electron remote, share the app's DOM. CodeMirror and Lezer stay shared with
 Hibi's editor. In trusted mode, Hibi pauses enabled plugins without their own
-full-access grant. Grant access or disable them from their Installed rows.
+full-access grant. Hibi also pauses other installed addons’ renderer code;
+only bundled addons stay active. Turn off full access or disable paused addons
+from their Installed rows.
 The renderer shares this realm: code injected into Hibi's interface can gain
 computer access too (renderer XSS becomes remote code execution). The regular
 sandboxed workspace keeps its restricted module shim.

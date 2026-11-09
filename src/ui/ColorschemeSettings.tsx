@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { Select, SettingRow } from './Controls'
 import type { ColorschemeStore } from './colorschemes'
 import './colorschemes.css'
+import { colorschemeGroups as groups } from './colorscheme-groups'
 
 export function ColorschemeSettings({
   store,
@@ -73,13 +74,22 @@ export function ColorschemeSettings({
                     store.set({ [mode]: event.target.value })
                   }
                 >
-                  {schemes
-                    .filter((scheme) => scheme.appearance === mode)
-                    .map((scheme) => (
+                  {groups(
+                    schemes.filter((scheme) => scheme.appearance === mode),
+                  ).map(([group, list]) => {
+                    const options = list.map((scheme) => (
                       <option key={scheme.id} value={scheme.id}>
                         {scheme.name}
                       </option>
-                    ))}
+                    ))
+                    return group ? (
+                      <optgroup key={group} label={group}>
+                        {options}
+                      </optgroup>
+                    ) : (
+                      options
+                    )
+                  })}
                 </Select>
               </div>
             </SettingRow>

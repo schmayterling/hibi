@@ -6,62 +6,83 @@ import type { NativeAddon, NativeAddonContext } from '../api'
 import { communityScreenshot, installCommunityTheme } from './community'
 import type { DroppedRule } from './sanitize'
 import {
-  checkSnippet,
   checkTheme,
   configPath,
   copiedSettings,
+  type GlobalSelection,
+  installedSnippets,
   installedThemes,
   installSnippet,
   installTheme,
-  pruneCopies,
-  readAppearance,
-  readSelection,
+  readGlobal,
   readVault,
+  removeSnippet,
   removeTheme,
-  type Selection,
-  type StoredSelection,
   snippetCss,
-  snippetHash,
   styleValues,
   themeCss,
-  themeHash,
   withCopies,
-  writeSelection,
+  writeGlobal,
 } from './store'
 import { styleSettingsCss } from './style-settings'
 
-const data = () => app.getPath('userData')
-const root = () => join(data(), 'obsidian-themes')
+// Installed themes and snippets live in Hibi's data and work in any
+// workspace, or none. An open vault's own themes are only suggestions.
+const root = () => join(app.getPath('userData'), 'obsidian-themes')
 /** `--disable-obsidian-themes` starts Hibi without any theme or snippet. */
 const disabled = () =>
   process.argv.includes('--disable-obsidian-themes') ||
   process.env.HIBI_DISABLE_OBSIDIAN_THEMES === '1'
-const vaultName = (value: string) => {
-  if (!/^[^/\\]{1,200}$/.test(value) || value === '.' || value === '..')
+const vaultName = (value: unknown) => {
+  if (
+    typeof value !== 'string' ||
+    !/^[^/\\]{1,200}$/.test(value) ||
+    value === '.' ||
+    value === '..'
+  )
     throw new Error('Choose a theme from this vault.')
   return value
 }
-async function vaultThemeFolder(vault: string, name: string) {
+async function vaultThemeFolder(vault: string, name: unknown) {
   const folder = await configPath(vault, 'themes', vaultName(name))
-  if (!folder) throw new Error('This vault has no Obsidian settings folder.')
+  if (!folder) throw new Error('This folder has no Obsidian settings folder.')
   return folder
 }
-// Style Settings sections of a kept theme and its snippets, in that order.
-async function sectionsFor(selection: StoredSelection) {
-  return [
-    ...(selection.theme
-      ? await copiedSettings(root(), 'theme', selection.theme)
-      : []),
-    ...(
-      await Promise.all(
-        selection.snippets.map((name) => {
-          const hash = selection.snippetHashes[name]
-          return hash ? copiedSettings(root(), 'snippet', hash) : []
-        }),
+const hashes = (value: unknown) =>
+  Array.isArray(value)
+    ? value.filter(
+        (hash): hash is string =>
+          typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash),
       )
-    ).flat(),
-  ]
+    : []
+const names = (value: unknown) =>
+  Array.isArray(value)
+    ? value.filter((name): name is string => typeof name === 'string')
+    : []
+// Hibi's main-process fetch. In tests (`--hibi-test`, unpackaged) a local
+// fixture server can stand in for GitHub: official URLs still pass every
+// check, then go to `<server>/<hostname><pathname>`, as for community plugins.
+const communityFetch: typeof fetch = (input, init) => {
+  const override =
+    !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
+      ? process.env.HIBI_TEST_OBSIDIAN_COMMUNITY_URL
+      : undefined
+  if (!override) return manualFetch(input, init)
+  const base = new URL(override)
+  if (
+    base.protocol !== 'http:' ||
+    !['127.0.0.1', 'localhost'].includes(base.hostname)
+  )
+    throw new Error('Invalid community fixture server.')
+  const target = new URL(String(input))
+  return manualFetch(
+    new URL(`/${target.hostname}${target.pathname}${target.search}`, base),
+    init,
+  )
 }
+const themeOf = (input: unknown) =>
+  (input as { theme?: unknown } | null)?.theme ?? null
+
 // Community downloads in flight, by the caller's request id, for cancelInstall.
 const requests = new Map<string, AbortController>()
 async function tracked<T>(
@@ -81,90 +102,49 @@ async function tracked<T>(
     requests.delete(id)
   }
 }
-const strings = (value: unknown) =>
-  Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : []
-
-async function state(context: NativeAddonContext) {
+// What the open folder's own Obsidian settings use, offered but never forced.
+async function suggestion(context: NativeAddonContext) {
   const vault = context.workspace.directory()
-  const installed = await installedThemes(root())
-  if (!vault)
-    return { disabled: disabled(), vault: null, installed, selection: null }
+  if (!vault) return null
   const found = await readVault(vault)
-  const stored = await readSelection(data(), vault)
-  let selection: Selection & { preselected: boolean }
-  const styleSettings = stored ? await sectionsFor(stored) : []
-  if (stored) selection = { ...stored, preselected: false }
-  else {
-    // Start from what the vault uses in Obsidian.
-    // Obsidian names the theme's folder; themes added by hand may differ.
-    const wanted = found.appearance.cssTheme
-    const theme =
-      found.themes.find((item) => item.name === wanted) ??
-      found.themes.find((item) => item.manifest.name === wanted)
-    const copy = theme && installed.find((item) => item.hash === theme.hash)?.id
-    selection = {
-      theme: copy ?? (theme ? `vault:${theme.name}` : null),
+  if (!found.themes.length && !found.snippets.length) return null
+  const themes = await installedThemes(root())
+  const snippets = await installedSnippets(root())
+  const wanted = found.appearance.cssTheme
+  const theme =
+    found.themes.find((item) => item.name === wanted) ??
+    found.themes.find((item) => item.manifest.name === wanted)
+  return {
+    appearance: found.appearance,
+    themes: found.themes.map((item) => ({
+      ...item,
+      copy: themes.find((copy) => copy.hash === item.hash)?.id ?? null,
+    })),
+    snippets: found.snippets.map((item) => ({
+      ...item,
+      copy: snippets.find((copy) => copy.hash === item.hash)?.hash ?? null,
+    })),
+    suggested: {
+      theme: theme?.name ?? null,
       snippets: found.appearance.enabledCssSnippets.filter((name) =>
         found.snippets.some((snippet) => snippet.name === name),
       ),
-      preselected: true,
-    }
+    },
   }
+}
+
+async function state(context: NativeAddonContext) {
   return {
     disabled: disabled(),
-    vault: found,
-    installed,
-    selection,
-    styleSettings,
+    themes: await installedThemes(root()),
+    snippets: await installedSnippets(root()),
+    selection: await readGlobal(root()),
+    vault: await suggestion(context).catch(() => null),
   }
 }
 
-// When Obsidian (or anything else) has changed a kept vault theme or snippet,
-// copy it again. Only the kept files are read; the vault is never written.
-async function recopy(
-  vault: string,
-  stored: StoredSelection,
-  context: NativeAddonContext,
-): Promise<StoredSelection> {
-  let theme = stored.theme
-  const snippetHashes = { ...stored.snippetHashes }
-  let changed = false
-  const record = theme
-    ? (await installedThemes(root())).find((item) => item.id === theme)
-    : undefined
-  if (record?.source === 'vault') {
-    try {
-      const folder = await vaultThemeFolder(
-        vault,
-        record.folder ?? record.manifest.name,
-      )
-      if ((await themeHash(folder)) !== record.hash) {
-        theme = (await installTheme(root(), folder, 'vault')).id
-        changed = true
-      }
-    } catch {
-      /* A theme gone from the vault keeps its last copy. */
-    }
-  }
-  for (const name of stored.snippets)
-    try {
-      if ((await snippetHash(vault, name)) !== snippetHashes[name]) {
-        snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
-        changed = true
-      }
-    } catch {
-      /* A snippet gone from the vault keeps its last copy. */
-    }
-  if (!changed || !context.isCurrent()) return stored
-  const next = { ...stored, theme, snippetHashes }
-  await writeSelection(data(), vault, next)
-  await pruneCopies(root(), data())
-  return next
-}
-
-// Checked CSS for a theme reference: an installed ID or `vault:<name>`.
+// Checked CSS for a theme: an installed ID, or `vault:<name>` to preview one
+// from the open folder's Obsidian settings without copying it.
 async function cssFor(
   context: NativeAddonContext,
   theme: unknown,
@@ -179,69 +159,78 @@ async function cssFor(
           ?.dropped ?? [],
     }
   const vault = context.workspace.directory()
-  if (!vault) throw new Error('Open an Obsidian vault first.')
+  if (!vault) throw new Error('Open the folder with this theme first.')
   const { result } = await checkTheme(
     await vaultThemeFolder(vault, theme.slice(6)),
   )
   return { css: result.css, dropped: result.dropped }
 }
 
+// A theme with the turned-on snippets and the Style Settings values.
+async function compose(theme: unknown, selection: GlobalSelection) {
+  const sections = [
+    ...(typeof theme === 'string' && !theme.startsWith('vault:')
+      ? await copiedSettings(root(), 'theme', theme)
+      : []),
+    ...(
+      await Promise.all(
+        selection.snippets.map((hash) =>
+          copiedSettings(root(), 'snippet', hash),
+        ),
+      )
+    ).flat(),
+  ]
+  const parts: string[] = []
+  for (const hash of selection.snippets)
+    parts.push(await snippetCss(root(), hash).catch(() => ''))
+  const style = styleSettingsCss(sections, selection.styleValues)
+  parts.push(style.css)
+  return {
+    css: parts.join('\n'),
+    classes: sections.length ? ['css-settings-manager', ...style.classes] : [],
+  }
+}
+
 export default {
   id: 'obsidian-themes',
   queries: {
     state: async (_input, context) => state(context),
-    /** The CSS to apply for this vault's saved choices. */
-    async active(_input, context) {
-      const vault = context.workspace.directory()
-      if (disabled() || !vault) return { disabled: disabled(), css: null }
-      const kept = await readSelection(data(), vault)
-      if (!kept) return { disabled: false, css: null }
-      const stored = await withCopies(() => recopy(vault, kept, context))
-      const parts = [
-        stored.theme
-          ? await themeCss(root(), stored.theme).catch(() => '')
-          : '',
-      ]
-      for (const name of stored.snippets) {
-        const hash = stored.snippetHashes[name]
-        if (hash) parts.push(await snippetCss(root(), hash).catch(() => ''))
-      }
-      const settings = await sectionsFor(stored)
-      const style = styleSettingsCss(settings, stored.styleValues ?? {})
-      parts.push(style.css)
+    /** The CSS for a chosen theme (from Hibi's colorscheme choice) plus the turned-on snippets. */
+    async active(input) {
+      if (disabled()) return { disabled: true, css: null, classes: [] }
+      const theme = themeOf(input)
+      const extras = await compose(theme, await readGlobal(root()))
+      const css =
+        (typeof theme === 'string'
+          ? await themeCss(root(), theme).catch(() => '')
+          : '') +
+        '\n' +
+        extras.css
       return {
         disabled: false,
-        // Nothing kept is no theme at all, not an empty one.
-        css: parts.join('\n').trim() || null,
-        classes: settings.length
-          ? ['css-settings-manager', ...style.classes]
-          : [],
-        appearance: await readAppearance(vault),
+        css: css.trim() ? css : null,
+        classes: extras.classes,
       }
     },
     /** CSS for trying a theme and snippets before keeping them. Copies nothing. */
     async preview(input, context) {
-      const vault = context.workspace.directory()
       const request = (input ?? {}) as { theme?: unknown; snippets?: unknown }
+      const selection = await readGlobal(root())
+      const snippets =
+        request.snippets === undefined
+          ? selection.snippets
+          : hashes(request.snippets)
       const theme = await cssFor(context, request.theme)
-      const parts = [theme.css]
-      const dropped = [...theme.dropped]
-      if (vault)
-        for (const name of strings(request.snippets)) {
-          const { result } = await checkSnippet(vault, name)
-          parts.push(result.css)
-          dropped.push(...result.dropped)
-        }
+      const extras = await compose(request.theme, { ...selection, snippets })
       return {
-        css: parts.join('\n'),
-        dropped,
-        appearance: vault ? await readAppearance(vault) : {},
+        css: `${theme.css}\n${extras.css}`,
+        classes: extras.classes,
+        dropped: theme.dropped,
       }
     },
   },
-  // Community downloads write only Hibi's own data, and run beside file
-  // operations: on the invoke channel a download would hold every file
-  // operation and its cancel would wait behind it.
+  // Everything here touches only Hibi's data (reading the open folder at
+  // most), so it runs beside file operations instead of waiting for them.
   profileMethods: {
     /** Download a theme from Obsidian's community directory into Hibi's data. Never applies it. */
     async installRepo(input) {
@@ -250,7 +239,7 @@ export default {
         installCommunityTheme(
           root(),
           { repo: request.repo, name: request.name, branch: request.branch },
-          { fetch: manualFetch, signal },
+          { fetch: communityFetch, signal },
         ),
       )
     },
@@ -260,7 +249,7 @@ export default {
       return tracked(input, (signal) =>
         communityScreenshot(
           { repo: request.repo, path: request.path, branch: request.branch },
-          { fetch: manualFetch, signal },
+          { fetch: communityFetch, signal },
         ),
       )
     },
@@ -270,62 +259,84 @@ export default {
       controller?.abort()
       return { cancelled: !!controller }
     },
-  },
-  methods: {
-    /** Keep a theme and snippets for this vault, copying them into Hibi's data. */
-    async select(input, context) {
+    /** Turn snippets on or off for all of Hibi. */
+    async setSnippets(input, context) {
+      const installed = new Set(
+        (await installedSnippets(root())).map((item) => item.hash),
+      )
+      await withCopies(async () => {
+        const selection = await readGlobal(root())
+        await writeGlobal(root(), {
+          ...selection,
+          snippets: hashes(
+            (input as { snippets?: unknown } | null)?.snippets,
+          ).filter((hash) => installed.has(hash)),
+        })
+      })
+      return state(context)
+    },
+    /** Save Style Settings values for the themes and snippets. */
+    async setStyleValues(input, context) {
+      await withCopies(async () => {
+        const selection = await readGlobal(root())
+        await writeGlobal(root(), {
+          ...selection,
+          styleValues: styleValues(
+            (input as { values?: unknown } | null)?.values,
+          ),
+        })
+      })
+      return state(context)
+    },
+    /** Copy the open folder's Obsidian theme and snippets into Hibi's data, turning the snippets on. */
+    async adoptVault(input, context) {
       const vault = context.workspace.directory()
-      if (!vault) throw new Error('Open an Obsidian vault first.')
+      if (!vault) throw new Error('Open the folder with this theme first.')
       const request = (input ?? {}) as { theme?: unknown; snippets?: unknown }
-      const kept = await withCopies(async () => {
-        let theme: string | null = null
-        if (typeof request.theme === 'string') {
-          theme = request.theme.startsWith('vault:')
-            ? (
+      const copied = await withCopies(async () => {
+        const theme =
+          request.theme === null || request.theme === undefined
+            ? null
+            : (
                 await installTheme(
                   root(),
-                  await vaultThemeFolder(vault, request.theme.slice(6)),
+                  await vaultThemeFolder(vault, request.theme),
                   'vault',
                 )
               ).id
-            : request.theme
-          await themeCss(root(), theme)
-        }
-        const snippets = strings(request.snippets)
-        const snippetHashes: Record<string, string> = {}
-        for (const name of snippets)
-          snippetHashes[name] = (await installSnippet(vault, root(), name)).hash
-        if (!context.isCurrent()) return false
-        // Options chosen earlier stay with the vault when the theme changes.
-        const styleValues =
-          (await readSelection(data(), vault))?.styleValues ?? {}
-        await writeSelection(data(), vault, {
-          theme,
-          snippets,
-          snippetHashes,
-          styleValues,
+        const added: string[] = []
+        for (const name of names(request.snippets))
+          added.push((await installSnippet(vault, root(), name)).hash)
+        const selection = await readGlobal(root())
+        await writeGlobal(root(), {
+          ...selection,
+          snippets: [...new Set([...selection.snippets, ...added])],
         })
-        await pruneCopies(root(), data())
-        return true
+        return theme
       })
-      if (!kept) return null
+      return { theme: copied, state: await state(context) }
+    },
+    async remove(input, context) {
+      await withCopies(() =>
+        removeTheme(root(), (input as { id?: unknown } | null)?.id),
+      )
       return state(context)
     },
-    /** Save Style Settings values for this vault's kept theme and snippets. */
-    async setStyleValues(input, context) {
-      const vault = context.workspace.directory()
-      if (!vault) throw new Error('Open an Obsidian vault first.')
-      const values = styleValues((input as { values?: unknown } | null)?.values)
-      const saved = await withCopies(async () => {
-        const stored = await readSelection(data(), vault)
-        if (!stored) throw new Error('Apply a theme first.')
-        if (!context.isCurrent()) return false
-        await writeSelection(data(), vault, { ...stored, styleValues: values })
-        return true
+    async removeSnippet(input, context) {
+      const hash = (input as { hash?: unknown } | null)?.hash
+      await withCopies(async () => {
+        await removeSnippet(root(), hash)
+        const selection = await readGlobal(root())
+        await writeGlobal(root(), {
+          ...selection,
+          snippets: selection.snippets.filter((item) => item !== hash),
+        })
       })
-      return saved ? state(context) : null
+      return state(context)
     },
-    /** Add a theme from a folder outside the vault. */
+  },
+  methods: {
+    /** Add a theme from any folder. The dialog makes this a file operation. */
     async addFolder(_input, context) {
       const options = {
         title: 'Choose an Obsidian theme folder',
@@ -337,14 +348,10 @@ export default {
         : runFileDialog(() => dialog.showOpenDialog(options)))
       const folder = selection.filePaths[0]
       if (selection.canceled || !folder) return null
-      await withCopies(() => installTheme(root(), folder, 'folder'))
-      return state(context)
-    },
-    async remove(input, context) {
-      await withCopies(() =>
-        removeTheme(root(), (input as { id?: unknown } | null)?.id),
+      const theme = await withCopies(() =>
+        installTheme(root(), folder, 'folder'),
       )
-      return state(context)
+      return { theme: theme.id, state: await state(context) }
     },
   },
 } satisfies NativeAddon

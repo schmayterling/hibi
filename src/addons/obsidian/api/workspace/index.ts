@@ -93,7 +93,7 @@ export class WorkspaceLeaf {
     return this.customView ?? this.workspace.viewFor(this)
   }
   async openFile(file: TFile) {
-    this.workspace.assertActive()
+    this.workspace.assertActive(true)
     if (this.customView) throw new Error('Open notes in an editor leaf.')
     const active = this.workspace.context.hibi.editorViews.getActive()
     if (this.target() && active?.viewId !== this.target()?.viewId)
@@ -164,6 +164,14 @@ export class Workspace extends Events {
     this.app = context.app
   }
   async start() {
+    this.context.register(() => {
+      this.stopped = true
+      for (const leaf of [...this.panels.keys()]) this.closeCustom(leaf)
+    })
+    if (this.app.vault.target === null) {
+      this.layoutReady = true
+      return
+    }
     await this.refresh()
     const refresh = () => {
       void this.refresh().catch(reportError)
@@ -177,15 +185,11 @@ export class Workspace extends Events {
     this.context.register(() =>
       globalThis.removeEventListener('beforeunload', quit),
     )
-    this.context.register(() => {
-      this.stopped = true
-      for (const leaf of [...this.panels.keys()]) this.closeCustom(leaf)
-    })
     this.layoutReady = true
   }
   refresh() {
     const result = this.queued.then(async () => {
-      if (this.stopped) return
+      if (this.stopped || this.app.vault.target === null) return
       const info = await this.app.vault.info()
       if (this.stopped) return
       this.activePath = info.activePath
@@ -225,6 +229,9 @@ export class Workspace extends Events {
     this.queued = result.catch(() => {})
     return result
   }
+  override trigger(name: string, ...data: unknown[]) {
+    if (this.app.vault.target !== null) super.trigger(name, ...data)
+  }
   get activeLeaf() {
     const target = this.context.hibi.editorViews.getActive()
     return target ? (this.leaves.get(target.viewId) ?? null) : null
@@ -232,8 +239,10 @@ export class Workspace extends Events {
   getActiveLeaf() {
     return this.activeLeaf
   }
-  assertActive() {
+  assertActive(requireFolder = false) {
     if (this.stopped) throw new Error('This workspace API has stopped.')
+    if (requireFolder && this.app.vault.target === null)
+      throw new Error('Open a folder first.')
   }
   getActiveFile() {
     return (
@@ -310,6 +319,7 @@ export class Workspace extends Events {
     return result
   }
   async openLinkText(linktext: string, sourcePath: string, newLeaf = false) {
+    this.assertActive(true)
     const file = this.app.metadataCache.getFirstLinkpathDest(
       linktext,
       sourcePath,

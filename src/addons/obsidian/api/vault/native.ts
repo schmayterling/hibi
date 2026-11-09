@@ -59,9 +59,8 @@ export function createVaultNative(
     const data = input as Record<string, unknown>
     const root = context.workspace.directory()
     const target = currentWorkspaceTarget()
+    if (!root || !target) throw new Error('Open a folder first.')
     if (
-      !root ||
-      !target ||
       data.vaultId !== context.workspace.id() ||
       !isCurrentWorkspaceTarget(data.target)
     )

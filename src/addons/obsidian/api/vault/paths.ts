@@ -26,5 +26,7 @@ export function vaultPath(
     throw new Error(
       'Plugin access to the vault configuration folder is unavailable.',
     )
+  if (parts.some((part) => part.startsWith('.')))
+    throw new Error('Choose a path inside this vault.')
   return value
 }

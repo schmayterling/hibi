@@ -344,3 +344,26 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   )
   await harness.close()
 })
+
+unit(
+  'the theme picker groups colorschemes under valid headings only',
+  async () => {
+    const { colorschemeGroups } = await import(
+      '../src/ui/colorscheme-groups.ts'
+    )
+    assert.deepEqual(
+      colorschemeGroups([
+        { id: 'a' },
+        { id: 'b', group: 'Obsidian themes' },
+        { id: 'c', group: '' },
+        { id: 'd', group: 'x'.repeat(61) },
+        { id: 'e', group: 42 },
+        { id: 'f', group: 'Obsidian themes' },
+      ]).map(([group, list]) => [group, list.map((item) => item.id)]),
+      [
+        ['', ['a', 'c', 'd', 'e']],
+        ['Obsidian themes', ['b', 'f']],
+      ],
+    )
+  },
+)

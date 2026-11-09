@@ -42,8 +42,17 @@ test.after(async () => {
   await rm(cacheRoot, { recursive: true, force: true })
 })
 
-async function environment(t) {
+async function environment(t, { plain = false } = {}) {
   const fixture = await fixtureVault(t, 'vault-api')
+  if (plain) {
+    const stored = join(fixture.root, 'stored-config')
+    await rename(join(fixture.vault, '.obsidian'), stored)
+    t.after(() =>
+      rename(stored, join(fixture.vault, '.obsidian')).catch((error) => {
+        if (error.code !== 'ENOENT') throw error
+      }),
+    )
+  }
   const cleanups = []
   const calls = { updates: 0, creates: 0, saves: 0, lists: 0 }
   const state = {
@@ -572,6 +581,44 @@ test('frontmatter pair patches support additions and deletions without rewriting
       assert.ok(after.includes("keep: 'quoted'"), yaml)
       assert.ok(after.endsWith('---\nbody  \r\n'), yaml)
     }
+})
+
+test('plain folder exposes its tree and supports note edits without creating configuration', async (t) => {
+  const env = await environment(t, { plain: true })
+  assert.equal(await env.vault.adapter.exists('.obsidian'), false)
+  assert.equal(env.vault.getMarkdownFiles()[0].path, 'untouched.md')
+  assert.deepEqual((await readdir(env.fixture.vault)).sort(), ['untouched.md'])
+  const before = await readFile(join(env.fixture.vault, 'untouched.md'))
+  await env.vault.createFolder('notes')
+  const file = await env.vault.create('notes/note.md', 'body\r\n')
+  await env.context.app.fileManager.processFrontMatter(file, (props) => {
+    props.title = 'plain'
+  })
+  assert.equal(
+    await env.vault.read(file),
+    '---\r\ntitle: plain\r\n---\r\n\r\nbody\r\n',
+  )
+  await env.vault.rename(file, 'notes/renamed.md')
+  assert.equal(env.vault.getFileByPath('notes/renamed.md'), file)
+  for (const path of [
+    '.obsidian/app.json',
+    '.obsidian-backup/app.json',
+    '.tool/note.md',
+    'notes/.secret.md',
+  ]) {
+    await assert.rejects(env.vault.adapter.write(path, 'blocked'))
+    await assert.rejects(env.vault.createFolder(path))
+    assert.deepEqual(await readdir(join(env.fixture.vault, 'notes')), [
+      'renamed.md',
+    ])
+  }
+  await env.vault.delete(file)
+  await env.vault.delete(env.vault.getFolderByPath('notes'))
+  assert.deepEqual(await readdir(env.fixture.vault), ['untouched.md'])
+  assert.deepEqual(
+    await readFile(join(env.fixture.vault, 'untouched.md')),
+    before,
+  )
 })
 
 test('adapter existence treats protected paths as unavailable', async (t) => {

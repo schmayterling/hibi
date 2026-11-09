@@ -42,6 +42,8 @@ export type Colorscheme = {
   appearance: 'light' | 'dark'
   author: string
   license: { name: string; text: string; source?: string }
+  /** Heading the theme picker lists the colorscheme under; the picker checks it. */
+  group?: string
   colors: ColorschemeColors
 }
 export type ColorschemeInput = Omit<Colorscheme, 'colors'> & {

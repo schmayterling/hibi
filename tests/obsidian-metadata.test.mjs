@@ -848,9 +848,9 @@ test('native metadata query rejects config paths, symlinks and changed capture',
   await rename(standardConfig, customConfig)
   await writeFile(join(customConfig, 'app.json'), '{}')
   await writeFile(join(customConfig, 'appearance.json'), '{}')
-  await assert.rejects(
-    query({ ...input, path: '.profile/plugins/metadata-api/main.js' }),
-    /configuration folder/,
+  assert.equal(
+    await query({ ...input, path: '.profile/plugins/metadata-api/main.js' }),
+    null,
   )
   await unlink(join(customConfig, 'app.json'))
   await unlink(join(customConfig, 'appearance.json'))
@@ -860,5 +860,15 @@ test('native metadata query rejects config paths, symlinks and changed capture',
   assert.equal(await query(input), null)
   state.current = false
   assert.equal(await query(input), null)
+  state.current = true
+  state.onRead = null
+  const stored = join(fixture.root, 'stored-config')
+  await rename(standardConfig, stored)
+  const beforePlainRead = state.reads
+  assert.equal((await query(input))?.path, 'untouched.md')
+  assert.equal(state.reads, beforePlainRead + 1)
+  for (const path of ['.obsidian-old/app.json', '.tool/note.md'])
+    assert.equal(await query({ ...input, path }), null)
+  await rename(stored, standardConfig)
   await fixture.assertUnchanged()
 })

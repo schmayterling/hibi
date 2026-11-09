@@ -12,6 +12,8 @@ sequence. It checks the captured vault, configuration folders, symlinks, and
 activation before and after work. The parent-owned `workspaceMetadataFile`
 helper must retain the normal main-process file confinement checks.
 
+Without an open folder, the contribution exposes an empty cache and registers no document, workspace or syntax subscriptions. Plain folders use the same bounded metadata worker without requiring Obsidian configuration. The host recreates the cache when the captured folder changes.
+
 ## Loading and events
 
 `getFileCache(file)` and `getCache(path)` are synchronous. An uncached request

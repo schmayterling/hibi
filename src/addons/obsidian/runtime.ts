@@ -6,6 +6,7 @@ import { Keymap, Scope } from './api/core/keymap'
 import type { Plugin } from './api/core/plugin'
 import {
   createObsidianContributions,
+  pluginResourcePrefix,
   requireObsidianHostModule,
 } from './api/registry'
 import type {
@@ -108,6 +109,7 @@ export class ObsidianHost {
   private contributions: ApiContribution[] = []
   private stopped = false
   private pending: Promise<void> = Promise.resolve()
+  private loading = new Map<string, Component>()
 
   constructor(
     readonly hibi: AddonContext,
@@ -163,7 +165,7 @@ export class ObsidianHost {
       if (this.stopped) return
       const installed = await this.hibi.native.query<InstalledPlugin[]>(
         'list',
-        { vaultId: this.vaultId },
+        {},
       )
       if (this.stopped) return
       const desired = new Map(
@@ -178,8 +180,7 @@ export class ObsidianHost {
         if (this.stopped) return
         if (!this.plugins.has(plugin.manifest.id)) {
           try {
-            await this.load(plugin)
-            this.errors.delete(plugin.manifest.id)
+            if (await this.load(plugin)) this.errors.delete(plugin.manifest.id)
           } catch (error) {
             if (!this.stopped)
               this.errors.set(
@@ -197,23 +198,18 @@ export class ObsidianHost {
     return run
   }
 
-  private async load(descriptor: InstalledPlugin): Promise<void> {
+  private async load(descriptor: InstalledPlugin): Promise<boolean> {
     const owner = new Component()
     this.owner.addChild(owner)
     const { manifest, hash } = descriptor
-    const identity = `${this.vaultId}:${manifest.id}:${hash}`
-    const base = `app://hibi/obsidian-plugins/${this.vaultId}/${manifest.id}/${hash}`
+    this.loading.set(manifest.id, owner)
+    const identity = `global:${manifest.id}:${hash}`
+    const base = `app://hibi/obsidian-plugins/global/${manifest.id}/${hash}`
     try {
       // Host resource IDs stay stable across package upgrades without exposing native paths.
-      const digest = await crypto.subtle.digest(
-        'SHA-256',
-        new TextEncoder().encode(manifest.id),
-      )
+      const namespace = await pluginResourcePrefix(manifest.id)
       if (this.stopped || owner.isUnloaded)
         throw new Error('This plugin host has stopped.')
-      const namespace = [...new Uint8Array(digest).slice(0, 20)]
-        .map((byte) => byte.toString(16).padStart(2, '0'))
-        .join('')
       const api = createCoreApi(
         {
           hibi: this.hibi,
@@ -221,7 +217,7 @@ export class ObsidianHost {
           vaultId: this.vaultId,
           contributions: this.contributions,
           isCurrent: () => !this.stopped && !owner.isUnloaded,
-          idPrefix: `p${namespace}`,
+          idPrefix: namespace,
         },
         this.app,
         manifest,
@@ -254,24 +250,31 @@ export class ObsidianHost {
       for (const contribution of this.contributions)
         contribution.extendPlugin?.(plugin)
       await owner.loadAsync()
-      if (this.stopped) throw new Error('This plugin host has stopped.')
+      if (this.stopped || owner.isUnloaded)
+        throw new Error('This plugin host has stopped.')
       this.plugins.set(manifest.id, { plugin, owner, hash })
+      return true
     } catch (error) {
       try {
         owner.unload()
       } finally {
         this.owner.removeChild(owner)
       }
+      if (this.loading.get(manifest.id) !== owner) return false
       throw error
+    } finally {
+      if (this.loading.get(manifest.id) === owner)
+        this.loading.delete(manifest.id)
     }
   }
 
   unload(id: string): void {
-    const loaded = this.plugins.get(id)
-    if (!loaded) return
+    const owner = this.plugins.get(id)?.owner ?? this.loading.get(id)
+    if (!owner) return
     this.plugins.delete(id)
+    this.loading.delete(id)
     try {
-      this.owner.removeChild(loaded.owner)
+      this.owner.removeChild(owner)
     } catch (error) {
       let message = errorMessage(error)
       try {
@@ -297,7 +300,8 @@ export class ObsidianHost {
   stop(): void {
     if (this.stopped) return
     this.stopped = true
-    this.plugins.clear()
+    for (const id of new Set([...this.plugins.keys(), ...this.loading.keys()]))
+      this.unload(id)
     this.owner.unload()
   }
 }

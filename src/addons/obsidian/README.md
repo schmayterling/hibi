@@ -1,63 +1,74 @@
 # Obsidian plugins
 
-This built-in addon is off by default. Enable **Obsidian plugins** in Settings →
-Addons, then open its settings page with a vault folder open.
+Browse **Settings → Addon Manager → Obsidian community** for plugins and themes,
+even while the compatibility addons are off. The row's **Turn on Obsidian
+plugins** or **Turn on Obsidian themes** action enables the matching addon.
+Installations work without an open folder and do not enable plugins or apply
+themes.
 
-You can browse the official Obsidian community directory in Settings → Addon
-Manager → **Browse community plugins and themes**, even when both compatibility
-addons are off. Search by name, author, description, or repository, and sort by
-downloads, name, or update date. The Themes tab uses the Obsidian themes addon;
-turn it on before installing a theme. Theme installs do not apply themselves.
+Search by name, author, description, or repository. Filter All, Plugins, or
+Themes, and sort by downloads, name, or update date. Open a package's name for
+its README, latest release, minimum Obsidian version, and compatibility limits.
+README images do not load automatically. Validated directory lists are cached
+with ETags for offline visits; **Refresh** checks for newer lists.
 
-Open **Details** to read a repository's README and check its latest release,
-minimum Obsidian version, or desktop-only restriction. README images do not
-load automatically. The directory caches validated lists with ETags for later
-offline visits; **Refresh community directory** checks for newer lists.
+Installed plugins and themes appear in **Addon Manager → Installed**. The
+**Obsidian** filter shows them together. Plugin rows provide enable/disable,
+settings when available, update, and removal. Each enabled plugin's settings
+also appear in the **Addon settings** sidebar. Commands, ribbon actions, and
+status items use Hibi's normal command palette, toolbar, and status area.
 
-Community plugin installs download release assets in the main process, then use
-the same validation and trust confirmation as folder installs. The confirmation
-names the author, repository, release, and package hash. Hibi records the source
-and individual file hashes. A changed latest release is shown when you open
-Details for an installed plugin. Updating keeps its overlay settings and starts
-the replacement disabled. You can cancel a download before confirming trust.
+Theme rows offer **Preview**, **Apply**, update, and removal. A successful
+community theme install also offers Preview immediately. Theme choices appear
+in Appearance alongside Hibi's other colorschemes. Installed snippets have
+their own toggles. Installing a theme never applies it.
 
-Choose **Install from folder** to select a plugin package. You can also install
-a separate copy of a plugin found in the vault's `.obsidian/plugins` folder.
-Review the package name, description, and hash before confirming trust. Each
-copy starts disabled. Enabling it requires another trust confirmation.
+Community plugins download release assets in the main process, then use the
+same validation and trust confirmation as folder installs. The confirmation
+names the author, repository, release, and package hash. Hibi records the
+source and individual file hashes. Open Update to check the latest release;
+an update keeps global plugin data and starts disabled. Downloads can be
+cancelled before trust confirmation.
 
-Plugins execute in Hibi's renderer. They can read or change notes and the
-interface, and broken code can freeze the app. This is not a sandbox. Install
-only code you trust. You can disable this addon to stop all hosted plugins.
+Use **Install Obsidian plugin from folder** in Installed to select a package.
+Plugins found in an open vault are optional install suggestions. Review the
+name, description, and hash before confirming trust. Enabling a plugin asks
+for trust again.
 
-Hibi stores content-addressed plugin copies and state in its own app data,
-separately for each canonical vault. Plugin data is seeded once from the
-vault's original `data.json` when available. Later settings changes stay in
-Hibi's overlay. Hibi never writes back to `.obsidian`. Removing a disabled
-plugin keeps its overlay data and package copies for reinstall.
+Plugins run in Hibi's renderer and can read or change notes and the interface.
+Broken code can freeze the app. Install only code you trust. Turning off the
+Obsidian plugins addon stops all hosted plugins.
 
-Portable CommonJS packages must have a valid `manifest.json` and `main.js`.
-An optional `styles.css` is supported. Files must be regular UTF-8 files;
-symlinks and oversized assets are refused. Limits are 64 KiB for the manifest,
-5 MiB for JavaScript, and 1 MiB each for styles and data. CSS imports and
-resource URLs are refused. Other package assets and relative imports are not
-supported.
+Plugin copies, enabled state, and data live globally in Hibi's app data. They
+work in any open folder, including ordinary folders, and their interface and
+settings can load without a folder. File operations require an open folder.
+When a plugin has no global data, **Use this vault's settings** offers a
+one-time read-only copy of its original data. Hibi never writes back to
+`.obsidian`. Existing per-vault Hibi installations are copied into the global
+store once, disabled; existing global packages and data take precedence. The
+original copies remain untouched. Removing a plugin retains its data for
+reinstallation.
+
+Portable CommonJS packages require `manifest.json` and `main.js`, with optional
+`styles.css`. Files must be regular UTF-8 files. Symlinks and oversized assets
+are refused: 64 KiB for manifests, 5 MiB for JavaScript, and 1 MiB each for styles
+and data. CSS imports and resource URLs are refused. Other assets and relative
+imports are unsupported.
 
 The host provides lifecycle, commands, ribbon/status items, settings controls,
-notices, modals, menus, basic keymaps, icons, YAML, and path/debounce helpers.
-Status items show text and support clicks; custom status markup is not rendered.
-Service lanes provide vault, metadata, workspace, and editor APIs through the
-registry described in [API integration](api/README.md).
+notices, modals, menus, keymaps, icons, YAML, and path/debounce helpers. Notices,
+dialogs, and menus use Hibi's shared UI. Status items show text and support
+clicks; custom status markup is not rendered. See [API integration](api/README.md)
+for vault, metadata, workspace, and editor APIs.
 
 Desktop-only packages, Node.js, Electron, and undeclared module imports are
-refused. The editor lane shares Hibi's actual CodeMirror and Lezer modules.
+refused. CodeMirror and Lezer modules are shared with Hibi's editor.
 `requestUrl` supports HTTPS GET without custom headers or a body, through
-Hibi's main-process network consent and address/size policy. Protocol handlers
-are refused. Moment is not a dependency and is not exported; the date-format
-control previews basic numeric date/time tokens.
+Hibi's main-process network policy. Protocol handlers are refused. Moment is
+not a dependency and is not exported; date-format controls preview basic
+numeric date/time tokens.
 
-DOM helpers are available while at least one plugin is loaded. The last plugin
-unload restores the original prototype descriptors. Registered commands,
-settings, listeners, intervals, pending debounces, UI nodes, and styles are
-removed on unload. Plugins must register cleanup for resources they create
-outside these APIs.
+DOM helpers exist only while plugins are loaded; the last unload restores the
+original prototype descriptors. Registered commands, settings, listeners,
+intervals, pending debounces, UI nodes, and styles are removed on unload.
+Plugins must register cleanup for resources they create outside these APIs.

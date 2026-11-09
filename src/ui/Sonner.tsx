@@ -200,7 +200,7 @@ export function Sonner() {
               role={item.variant === 'error' ? 'alert' : 'status'}
               aria-atomic="true"
             >
-              <span>{message}</span>
+              {item.content ?? <span>{message}</span>}
               {item.description && <p>{sentenceCase(item.description)}</p>}
               {item.action && (
                 <Button

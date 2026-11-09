@@ -105,7 +105,7 @@ export function parseCommunityEntries(
 
 export function filterCommunityEntries(
   entries: readonly CommunityEntry[],
-  kind: CommunityEntry['kind'],
+  kind: CommunityEntry['kind'] | null,
   query: string,
   sort: 'downloads' | 'name' | 'updated',
 ) {
@@ -113,7 +113,7 @@ export function filterCommunityEntries(
   return entries
     .filter(
       (entry) =>
-        entry.kind === kind &&
+        (!kind || entry.kind === kind) &&
         [entry.id, entry.name, entry.author, entry.description, entry.repo]
           .join(' ')
           .toLocaleLowerCase()

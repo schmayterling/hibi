@@ -287,7 +287,11 @@ export class CommunityService {
       throw new Error('This repository has no installable latest release.')
     const assets: Record<string, string> = {}
     for (const asset of value.assets) {
-      if (!['manifest.json', 'main.js', 'styles.css'].includes(asset.name))
+      if (
+        !['manifest.json', 'main.js', 'styles.css', 'theme.css'].includes(
+          asset.name,
+        )
+      )
         continue
       const target = new URL(asset.browser_download_url)
       if (
@@ -371,7 +375,44 @@ export class CommunityService {
       signal.throwIfAborted()
       result.error = errorMessage(error)
     }
-    if (entry.kind === 'theme') return result
+    if (entry.kind === 'theme') {
+      try {
+        const release = await this.latest(entry.repo, signal)
+        if (release.assets['theme.css']) result.release = release.tag
+      } catch (error) {
+        signal.throwIfAborted()
+        if (!(error instanceof CommunityHttpError && error.status === 404))
+          result.error = [result.error, errorMessage(error)]
+            .filter(Boolean)
+            .join(' ')
+      }
+      if (!result.release) {
+        try {
+          const response = await fetchCommunityFile(
+            'https://api.github.com/repos/' +
+              entry.repo +
+              '/commits/' +
+              encodeURIComponent(entry.branch ?? 'HEAD'),
+            64 * 1024,
+            signal,
+            this.fetch,
+          )
+          const text = decode(response.bytes)
+          const sha = text.trim().startsWith('{')
+            ? JSON.parse(text).sha
+            : text.trim()
+          if (typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha))
+            throw new Error('The theme repository returned an invalid version.')
+          result.release = sha
+        } catch (error) {
+          signal.throwIfAborted()
+          result.error = [result.error, errorMessage(error)]
+            .filter(Boolean)
+            .join(' ')
+        }
+      }
+      return result
+    }
     try {
       const release = await this.latest(entry.repo, signal)
       result.release = release.tag

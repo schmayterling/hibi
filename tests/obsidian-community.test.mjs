@@ -263,6 +263,25 @@ test('details fetch README only on demand and report desktop restrictions and mi
     new AbortController().signal,
   )
   assert.match(desktop.unsupported, /Desktop-only/)
+  const theme = entries.find((entry) => entry.kind === 'theme')
+  assert.equal(
+    (await service.details(theme, new AbortController().signal)).release,
+    '1.0.0',
+  )
+  const branch = new CommunityService(
+    join(vault.overlay, 'branch-directory'),
+    async (url, init) => {
+      if (String(url).endsWith('/releases/latest'))
+        return new Response('Not found', { status: 404 })
+      if (String(url).includes('/commits/'))
+        return Response.json({ sha: 'd'.repeat(40) })
+      return transport.fetch(url, init)
+    },
+  )
+  assert.equal(
+    (await branch.details(theme, new AbortController().signal)).release,
+    'd'.repeat(40),
+  )
 })
 
 test('README API fallback stays in the selected repository and refuses forged download URLs', async (t) => {

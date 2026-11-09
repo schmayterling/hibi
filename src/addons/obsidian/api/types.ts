@@ -44,7 +44,7 @@ export interface PluginInstance extends Component {
 export interface ApiContext {
   app: App
   hibi: AddonContext
-  /** Own every service listener/registration for this vault's lifetime. */
+  /** Own every service listener/registration for this folder's captured lifetime. */
   register: (dispose: Dispose) => void
 }
 

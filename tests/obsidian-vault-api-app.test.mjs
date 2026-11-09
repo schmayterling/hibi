@@ -63,7 +63,7 @@ test('handwritten vault plugin runs through real native handlers and preserves p
   await page
     .getByRole('checkbox', { name: 'Obsidian plugins', exact: true })
     .click()
-  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.getByRole('button', { name: 'Install copy', exact: true }).click()
   await page
     .getByRole('checkbox', { name: 'Enable Vault API fixture', exact: true })
@@ -87,12 +87,7 @@ test('handwritten vault plugin runs through real native handlers and preserves p
   )
   const result = JSON.parse(
     await readFile(
-      join(
-        fixture.overlay,
-        'obsidian/vaults',
-        vaultId,
-        'state/vault-api/data.json',
-      ),
+      join(fixture.overlay, 'obsidian/global', 'state/vault-api/data.json'),
       'utf8',
     ),
   )

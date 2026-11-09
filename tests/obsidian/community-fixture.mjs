@@ -64,6 +64,12 @@ export async function communityFixture(t) {
     if (url.hostname === 'api.github.com') {
       const release = JSON.parse(files.get('release.json'))
       release.tag_name = fixture.version
+      if (repo === 'fixture/theme')
+        release.assets = ['manifest.json', 'theme.css'].map((name) => ({
+          name,
+          browser_download_url:
+            'https://github.com/fixture/theme/releases/download/1.0.0/' + name,
+        }))
       release.assets = release.assets.map((asset) => ({
         ...asset,
         browser_download_url: asset.browser_download_url
@@ -85,6 +91,16 @@ export async function communityFixture(t) {
             name,
         },
       })
+    if (repo === 'fixture/theme' && name === 'manifest.json')
+      return Response.json({
+        name: 'Fixture theme',
+        version: fixture.version,
+        author: 'Fixture author',
+      })
+    if (repo === 'fixture/theme' && name === 'theme.css')
+      return new Response(
+        '.theme-light { --background-primary: #f0f0f0; --text-normal: #202020; } .theme-dark { --background-primary: #202020; --text-normal: #f0f0f0; }',
+      )
     if (name === 'manifest.json')
       return Response.json({
         ...plugin.manifest,

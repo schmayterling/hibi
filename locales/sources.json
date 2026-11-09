@@ -165,6 +165,9 @@
   "51fe2f480ed9": [
     "src/renderer/src/WorkspaceSidebar.tsx"
   ],
+  "92340695899b": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "6934e9d2bb61": [
     "src/renderer/src/ModalEditingSettings.tsx"
   ],
@@ -243,7 +246,7 @@
     "src/main/addon-inventory.ts"
   ],
   "52430b76a039": [
-    "src/renderer/src/AddonSettings.tsx"
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "4b392ad897a3": [
     "src/renderer/src/AddonHotkeySettings.tsx"
@@ -294,9 +297,6 @@
   ],
   "005b5710be48": [
     "src/renderer/src/Introduction.tsx"
-  ],
-  "6265d8064bce": [
-    "src/renderer/src/AddonGarden.tsx"
   ],
   "7e778f24c85b": [
     "src/renderer/src/DependencySettings.tsx"
@@ -449,6 +449,7 @@
   "31e392d1c037": [
     "src/addons/math/engine.ts",
     "src/addons/mermaid/BlockContent.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/addons/typst/BlockContent.tsx"
   ],
   "a1e57e3c2176": [
@@ -593,14 +594,8 @@
   "9711da7f3cd9": [
     "src/addons/import-notion/hibi-addon.json"
   ],
-  "1ab79ec74a09": [
-    "src/renderer/src/AddonSettings.tsx"
-  ],
   "bacfd35540a3": [
     "src/addons/tags/index.tsx"
-  ],
-  "889c99e3c86f": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "e9347ce3c607": [
     "src/addons/tags/index.tsx"
@@ -632,6 +627,9 @@
   "1bce26d66adc": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "5df82a28775b": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "b73a5e2ca645": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -642,6 +640,7 @@
     "src/addons/dictionary/PackSettings.tsx",
     "src/addons/frontmatter/Properties.tsx",
     "src/addons/mermaid/BlockContent.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/addons/obsidian/native.ts",
     "src/addons/quick-note/CaptureWindow.tsx",
     "src/addons/typst/BlockContent.tsx",
@@ -658,9 +657,6 @@
   ],
   "8fa63eb3c5e1": [
     "src/renderer/src/HotkeyRow.tsx"
-  ],
-  "44907a7a62da": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "cb141fb6cd63": [
     "src/renderer/src/HotkeyRow.tsx"
@@ -1728,9 +1724,6 @@
   "841f66a926a7": [
     "src/shared/document-journal.ts"
   ],
-  "7bab60b7ad0a": [
-    "src/renderer/src/AddonGarden.tsx"
-  ],
   "3b1ba9efa803": [
     "src/renderer/src/RecoverySettings.tsx"
   ],
@@ -1890,6 +1883,9 @@
   "526e0087cc3f": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "3afea8cc5598": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "eb9fec1c13d6": [
     "src/addons/obsidian/package.ts"
   ],
@@ -1904,9 +1900,6 @@
   ],
   "8f70f6e47c2b": [
     "src/main/workspace-actions.ts"
-  ],
-  "45989de49fb7": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "7ebe6d8acd59": [
     "src/renderer/src/FlavorPicker.tsx"
@@ -2422,9 +2415,6 @@
   "297f8ade1919": [
     "src/main/workspace-settings.ts"
   ],
-  "3fbe651d4821": [
-    "src/addons/obsidian/Panel.tsx"
-  ],
   "65431e454a90": [
     "src/renderer/src/AddonSettings.tsx"
   ],
@@ -2664,10 +2654,10 @@
     "src/addons/dictionary/packs.ts"
   ],
   "379c501e44a3": [
-    "src/renderer/src/AddonSettings.tsx"
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "3a3d172da3a6": [
-    "src/renderer/src/AddonSettings.tsx"
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "9353a6f13073": [
     "src/renderer/src/HotkeySettings.tsx"
@@ -2789,6 +2779,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "74ccd4330384": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/addons/quick-note/Settings.tsx",
     "src/renderer/src/ImportDialog.tsx"
   ],
@@ -2816,9 +2807,6 @@
   ],
   "f1c65e14817e": [
     "src/main/index.ts"
-  ],
-  "74ea5f3b9cfb": [
-    "src/addons/obsidian/Panel.tsx"
   ],
   "49e2a56e89a9": [
     "src/addons/diagnostics/Settings.tsx"
@@ -3000,17 +2988,11 @@
   "d40777b675fa": [
     "src/renderer/src/AddonSettings.tsx"
   ],
-  "83bde05a6f7d": [
-    "src/renderer/src/AddonGarden.tsx"
-  ],
   "b30aab4cb471": [
     "src/renderer/src/Introduction.tsx"
   ],
   "7318721213b3": [
     "src/ui/ColorschemeSettings.tsx"
-  ],
-  "4ca29a0cc249": [
-    "src/addons/obsidian/Panel.tsx"
   ],
   "4007a6db64a2": [
     "src/renderer/src/HibiSettings.tsx"
@@ -3135,6 +3117,9 @@
   ],
   "352f68dafab4": [
     "src/main/document.ts"
+  ],
+  "ca6ba8a3a486": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "33ffe414fe4e": [
     "src/addons/_shared/import-worker-client.ts"
@@ -3297,6 +3282,12 @@
   "f6609775d119": [
     "src/addons/obsidian/native.ts"
   ],
+  "35f8d000f93b": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "53f39f0db21a": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "69061a836c36": [
     "src/addons/typst/compiler.ts"
   ],
@@ -3322,19 +3313,13 @@
     "src/addons/dictionary/index.tsx"
   ],
   "457d1b157934": [
-    "src/addons/obsidian/Panel.tsx"
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "c7d5009dc83d": [
     "src/renderer/src/AddonSettings.tsx"
   ],
-  "2958f87aad6d": [
-    "src/addons/obsidian/Panel.tsx"
-  ],
   "bc2ef03180e4": [
     "src/addons/dictionary/index.tsx"
-  ],
-  "ad2cce847bea": [
-    "src/addons/obsidian/Panel.tsx"
   ],
   "f6e17928a426": [
     "src/addons/dictionary/PackSettings.tsx"
@@ -3374,6 +3359,7 @@
     "src/main/dependencies.ts"
   ],
   "f8b32f4e92bd": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
@@ -3382,6 +3368,9 @@
   ],
   "08b480ad47e2": [
     "src/renderer/src/DependencySettings.tsx"
+  ],
+  "e683de7b7484": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "f99d5978e568": [
     "src/renderer/src/AddonInstallChooser.tsx"
@@ -3593,6 +3582,9 @@
   "3469ef6cdad3": [
     "src/addons/obsidian/api/core/icons.ts"
   ],
+  "b116bc23cea8": [
+    "src/addons/obsidian/store.ts"
+  ],
   "99630a13ddb8": [
     "src/main/recovery-journal.ts"
   ],
@@ -3667,6 +3659,9 @@
   ],
   "45f6b281a9a1": [
     "src/main/undo-history.ts"
+  ],
+  "50c57e1ceb20": [
+    "src/addons/obsidian/store.ts"
   ],
   "1342cffa70a6": [
     "src/addons/obsidian/api/vault/native.ts"
@@ -3826,11 +3821,7 @@
   "8a6bdb6b18da": [
     "src/addons/diagnostics/Settings.tsx"
   ],
-  "0849033411ce": [
-    "src/renderer/src/AddonGarden.tsx"
-  ],
   "97c2e8aeeafb": [
-    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "7e11e029a961": [
@@ -3856,6 +3847,7 @@
     "src/renderer/src/History.tsx"
   ],
   "fafb1d3907fe": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonReadme.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
@@ -4244,7 +4236,7 @@
     "src/addons/graph/Panel.tsx"
   ],
   "14e1a5e07d2c": [
-    "src/renderer/src/AddonSettings.tsx"
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "455077f13e0d": [
     "src/renderer/src/DependencySettings.tsx"
@@ -4284,9 +4276,6 @@
   ],
   "633975ad88f7": [
     "src/renderer/src/CommandPalette.tsx"
-  ],
-  "8049eb935fed": [
-    "src/addons/obsidian/Panel.tsx"
   ],
   "92a350272aa9": [
     "src/renderer/src/StartupPlaceholder.tsx"
@@ -4413,12 +4402,9 @@
     "src/addons/obsidian/api/registry.ts"
   ],
   "695ef53b5dd0": [
-    "src/renderer/src/AddonSettings.tsx"
-  ],
-  "98c62c72c2f5": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
-  "2cac78b1ff77": [
+  "98c62c72c2f5": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "4e304a5409d2": [
@@ -4430,12 +4416,20 @@
   "fa198eabd6f6": [
     "src/addons/obsidian/api/registry.ts"
   ],
+  "5fcfc77a7d92": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "f35944c23de5": [
-    "src/addons/obsidian/hibi-addon.json",
-    "src/addons/obsidian/host.tsx"
+    "src/addons/obsidian/hibi-addon.json"
   ],
   "c3b8aa97bc00": [
     "src/addons/obsidian/api/core/plugin.tsx"
+  ],
+  "44bc77c840cf": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "b3a91d2900d8": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "ef689c55e627": [
     "src/addons/obsidian-themes/Appearance.tsx",
@@ -4569,12 +4563,6 @@
   ],
   "7693e6fba57c": [
     "src/addons/graph/Panel.tsx"
-  ],
-  "cc9f5ee62050": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
-  ],
-  "eb7765f482ac": [
-    "src/addons/obsidian/Panel.tsx"
   ],
   "84040f5486e6": [
     "src/renderer/src/addon-storage.ts"
@@ -4897,6 +4885,9 @@
   "36be30dddfe1": [
     "src/addons/keybeats/hibi-addon.json"
   ],
+  "ab1173eed1d4": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "8839e805f979": [
     "src/addons/obsidian/package.ts"
   ],
@@ -4942,6 +4933,9 @@
   "1ef7faee108d": [
     "src/addons/obsidian/store.ts"
   ],
+  "4d5e5cbec56a": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "77deabe238de": [
     "src/renderer/src/History.tsx"
   ],
@@ -4976,6 +4970,7 @@
     "src/renderer/src/HotkeyRow.tsx"
   ],
   "324b134f57c7": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/NotificationSettings.tsx",
     "src/renderer/src/RecoveryScreen.tsx"
   ],
@@ -5214,14 +5209,11 @@
     "src/shared/source-references.ts"
   ],
   "0e9161011702": [
-    "src/addons/obsidian/Panel.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "903ae9ad0d9f": [
     "src/addons/git/Panel.tsx"
-  ],
-  "e3514af91da0": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "e2b488cb6e0d": [
     "src/renderer/src/WorkspaceSidebar.tsx"
@@ -5232,9 +5224,6 @@
   "306960dcad4c": [
     "src/renderer/src/WorkspaceSidebar.tsx",
     "src/renderer/src/main.tsx"
-  ],
-  "ce1d62a8f785": [
-    "src/renderer/src/AddonGarden.tsx"
   ],
   "1651031bf58d": [
     "src/addons/mcp-server/Settings.tsx"
@@ -5261,7 +5250,7 @@
   "c3812fc4acb8": [
     "src/addons/dictionary/CustomWords.tsx",
     "src/addons/obsidian-themes/Appearance.tsx",
-    "src/addons/obsidian/Panel.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/addons.ts",
     "src/renderer/src/formatted/link-controls.ts"
   ],
@@ -5280,6 +5269,12 @@
   "4953f8970948": [
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/formatted/link-controls.ts"
+  ],
+  "ab38d3c9d575": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "f68019cbe651": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "20b118351e19": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -5664,14 +5659,8 @@
   "af8d1197c93c": [
     "src/addons/math/PackageSettings.tsx"
   ],
-  "e665f01f95b1": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
-  ],
   "0a12d684f979": [
     "src/addons/documentation/ExportDialog.tsx"
-  ],
-  "91c3e71aa19f": [
-    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "00ff7398c308": [
     "src/renderer/src/CommandPalette.tsx"
@@ -5761,6 +5750,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "74a883a037bc": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/main/background.ts",
     "src/main/index.ts",
     "src/renderer/src/SettingsScreen.tsx",
@@ -5843,7 +5833,7 @@
   "d03262ba19b0": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
-  "88c42874d9a4": [
+  "f5c9bd131486": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "6fc9865f25c7": [
@@ -5922,13 +5912,14 @@
   "a708e074a112": [
     "src/renderer/src/main.tsx"
   ],
-  "26f089953e84": [
+  "30139ec15779": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "564484f13e2f": [
     "src/addons/keybeats/engine.ts"
   ],
   "0e570ca6fabe": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/ImportDialog.tsx"
   ],
@@ -6789,6 +6780,9 @@
   "cf9108c9789b": [
     "src/addons/mcp-server/tools.ts"
   ],
+  "945fe4087cdd": [
+    "src/addons/obsidian/native.ts"
+  ],
   "11b12c51e717": [
     "src/addons/obsidian/community-native.ts"
   ],
@@ -6925,6 +6919,9 @@
   "6ed02132319f": [
     "src/main/sideload.ts"
   ],
+  "c7c19013dca0": [
+    "src/addons/obsidian/community.ts"
+  ],
   "2c9095034e70": [
     "src/shared/updates.ts"
   ],
@@ -7020,6 +7017,9 @@
   ],
   "ea84903d5e12": [
     "src/renderer/src/addons.ts"
+  ],
+  "efb52e7172b7": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "ce3f6b624545": [
     "src/shared/addon-manifest.ts"
@@ -7413,6 +7413,9 @@
   "f25351b3d4a1": [
     "src/renderer/src/recovery-offer.tsx"
   ],
+  "025cde406fb0": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "726915b074e5": [
     "src/main/addon-trust-crypto.ts"
   ],
@@ -7436,6 +7439,9 @@
   ],
   "7026bfea8279": [
     "src/main/workspace-files.ts"
+  ],
+  "1cadce47c6a7": [
+    "src/addons/obsidian/store.ts"
   ],
   "bb25a9076028": [
     "src/addons/obsidian/native.ts"
@@ -7539,6 +7545,9 @@
   "86ea554aa48a": [
     "src/main/updates.ts"
   ],
+  "fa1c806c8e0f": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "ba0a8e585f34": [
     "src/addons/obsidian/api/vault/index.ts"
   ],
@@ -7551,6 +7560,9 @@
   ],
   "a7bcb47b5203": [
     "src/addons/obsidian-themes/store.ts"
+  ],
+  "2a6db20582d4": [
+    "src/addons/obsidian/store.ts"
   ],
   "19ce16760ea7": [
     "src/addons/obsidian/api/vault/native.ts"
@@ -7718,10 +7730,16 @@
     "src/addons/dictionary/custom-word-storage.ts",
     "src/addons/dictionary/custom-words.ts"
   ],
-  "088e428fd789": [
+  "095f6d6a88b9": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
-  "6419bd1e8562": [
+  "e900f2f4b5cb": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "161a61ddf354": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "56001ac21a03": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "9a928ba210da": [
@@ -7849,7 +7867,6 @@
     "src/renderer/src/AddonSettings.tsx"
   ],
   "f981cf355235": [
-    "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "7786cacd2ef2": [
@@ -7940,6 +7957,7 @@
   ],
   "c1c1009d3f37": [
     "src/addons/dictionary/PackSettings.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "d4fc42307306": [
@@ -8066,6 +8084,12 @@
     "src/renderer/src/Introduction.tsx",
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "6ca00d36d879": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
+  "c0a58557c123": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
+  ],
   "d6fddbaac71e": [
     "src/addons/obsidian/api/metadata/index.ts"
   ],
@@ -8103,6 +8127,7 @@
     "src/main/index.ts"
   ],
   "1c889cdc10dc": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "c71ba099f440": [
@@ -8187,7 +8212,8 @@
     "src/addons/git/Panel.tsx"
   ],
   "5474eef8d0f1": [
-    "src/addons/git/Panel.tsx"
+    "src/addons/git/Panel.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "87bb59ba2f92": [
     "src/addons/quick-note/Settings.tsx",
@@ -8546,6 +8572,7 @@
     "src/main/index.ts"
   ],
   "4c94485e0c21": [
+    "src/addons/obsidian/CommunityBrowser.tsx",
     "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
@@ -8652,9 +8679,6 @@
   "78d5525c7d41": [
     "src/renderer/src/FormatsSettings.tsx",
     "src/renderer/src/main.tsx"
-  ],
-  "d6691ac93edb": [
-    "src/renderer/src/AddonGarden.tsx"
   ],
   "a10bf03bcf08": [
     "src/renderer/src/DependencySettings.tsx"

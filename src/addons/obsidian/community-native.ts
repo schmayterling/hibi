@@ -73,6 +73,17 @@ export async function communityAction(
   signal?: AbortSignal,
 ) {
   if (action === 'cancel') return cancelCommunityRequest(input)
+  if (action === 'installed') {
+    const [{ obsidianGlobalStore }, { themeInventory }] = await Promise.all([
+      import('./native'),
+      import('../obsidian-themes/inventory'),
+    ])
+    const [{ store }, themes] = await Promise.all([
+      obsidianGlobalStore(),
+      themeInventory(app.getPath('userData')),
+    ])
+    return { plugins: await store.list(), ...themes }
+  }
   const data = input as { id?: unknown; kind?: unknown; refresh?: unknown }
   return communityTask(
     input,

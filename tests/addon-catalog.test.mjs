@@ -40,7 +40,7 @@ const stable = (value) =>
         )
       : value
 
-test('all 42 compiled manifests retain their frozen normalized metadata', async () => {
+test('all 43 compiled manifests retain their frozen normalized metadata', async () => {
   const expected = JSON.parse(
     await readFile(
       fileURLToPath(
@@ -49,7 +49,7 @@ test('all 42 compiled manifests retain their frozen normalized metadata', async 
       'utf8',
     ),
   )
-  assert.equal(builtins.length, 42)
+  assert.equal(builtins.length, 43)
   for (const { manifest, directory } of builtins) {
     assert.equal(basename(directory), manifest.id)
     assert.equal(
@@ -66,11 +66,13 @@ test('all builtin author records retain shared identifiers, order, and port role
   const { authors } = await server.ssrLoadModule('/src/addons/authors.ts')
   for (const { manifest } of builtins) {
     const expected =
-      manifest.id === 'vim'
-        ? [authors.may, authors.angelo]
-        : manifest.id === 'keybeats'
-          ? [{ ...authors.may, role: 'Hibi port' }]
-          : [authors.may]
+      manifest.id === 'obsidian'
+        ? undefined
+        : manifest.id === 'vim'
+          ? [authors.may, authors.angelo]
+          : manifest.id === 'keybeats'
+            ? [{ ...authors.may, role: 'Hibi port' }]
+            : [authors.may]
     assert.deepEqual(manifest.authors, expected, manifest.id)
   }
 })
@@ -179,6 +181,7 @@ test('all builtins declare bounded json and preserve the renderer and native ent
     'mdx',
     'mediawiki',
     'mermaid',
+    'obsidian',
     'obsidian-themes',
     'org',
     'quarto',

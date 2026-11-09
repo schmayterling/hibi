@@ -758,6 +758,9 @@
   "2f75b64ac916": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "c7f937836f5d": [
+    "src/addons/obsidian-themes/Gallery.tsx"
+  ],
   "1a9f084bf2db": [
     "src/main/document.ts"
   ],
@@ -3704,6 +3707,9 @@
   "b43ab3ba74ce": [
     "src/addons/mcp-server/hibi-addon.json"
   ],
+  "c011d6097bfb": [
+    "src/addons/obsidian-themes/Gallery.tsx"
+  ],
   "dbcd5e7bb7a0": [
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
@@ -4165,6 +4171,9 @@
   ],
   "906579302758": [
     "src/main/addon-install-candidates.ts"
+  ],
+  "fb0189b6df8d": [
+    "src/addons/obsidian-themes/Gallery.tsx"
   ],
   "56db8832782f": [
     "src/addons/graph/Panel.tsx"
@@ -6859,6 +6868,9 @@
   "ce3f6b624545": [
     "src/shared/addon-manifest.ts"
   ],
+  "43ae3265b99f": [
+    "src/addons/obsidian-themes/Gallery.tsx"
+  ],
   "639c7236d1d5": [
     "src/addons/obsidian-themes/Settings.tsx"
   ],
@@ -8487,6 +8499,9 @@
   ],
   "da55d16fc16f": [
     "src/addons/text-extras/flavor-info.ts"
+  ],
+  "18aa21ae42db": [
+    "src/addons/obsidian-themes/Gallery.tsx"
   ],
   "3ca172ad5570": [
     "src/addons/diagnostics/Settings.tsx"

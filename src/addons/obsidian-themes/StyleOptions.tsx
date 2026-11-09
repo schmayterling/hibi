@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Select, SettingRow, Slider, TextInput, Toggle } from '../ui'
 import {
   type StyleSection,
@@ -19,11 +19,15 @@ export function StyleOptions({
   disabled: boolean
   onChange: (values: StyleValues) => void
 }) {
+  // Controls change at once; the saved values replace them when they arrive.
+  const [shown, setShown] = useState(values)
+  useEffect(() => setShown(values), [values])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const set = (key: string, value: string | number | boolean | undefined) => {
-    const next = { ...values }
+    const next = { ...shown }
     if (value === undefined) delete next[key]
     else next[key] = value
+    setShown(next)
     onChange(next)
   }
   const row = (section: StyleSection, item: StyleSetting) => {
@@ -73,8 +77,8 @@ export function StyleOptions({
               id={control}
               disabled={disabled}
               checked={
-                typeof values[key] === 'boolean'
-                  ? (values[key] as boolean)
+                typeof shown[key] === 'boolean'
+                  ? (shown[key] as boolean)
                   : item.default
               }
               onChange={(event) => set(key, event.target.checked)}
@@ -88,7 +92,7 @@ export function StyleOptions({
             <Select
               id={control}
               disabled={disabled}
-              value={String(values[key] ?? item.default)}
+              value={String(shown[key] ?? item.default)}
               onChange={(event) => set(key, event.target.value)}
             >
               {item.type === 'class-select' && item.allowEmpty && (
@@ -105,9 +109,8 @@ export function StyleOptions({
       case 'variable-text':
         return (
           <SettingRow key={key} {...props}>
-            {text(
-              (values[key] as string | undefined) ?? item.default,
-              (draft) => set(key, draft === item.default ? undefined : draft),
+            {text((shown[key] as string | undefined) ?? item.default, (draft) =>
+              set(key, draft === item.default ? undefined : draft),
             )}
           </SettingRow>
         )
@@ -115,7 +118,7 @@ export function StyleOptions({
         return (
           <SettingRow key={key} {...props}>
             {text(
-              (values[key] as number | undefined) ?? item.default,
+              (shown[key] as number | undefined) ?? item.default,
               (draft) => {
                 const value = Number(draft)
                 set(key, draft && Number.isFinite(value) ? value : undefined)
@@ -133,7 +136,7 @@ export function StyleOptions({
               min={item.min}
               max={item.max}
               step={item.step}
-              value={(values[key] as number | undefined) ?? item.default}
+              value={(shown[key] as number | undefined) ?? item.default}
               onChange={(event) => set(key, Number(event.target.value))}
             />
           </SettingRow>
@@ -145,7 +148,7 @@ export function StyleOptions({
               id={control}
               type="color"
               disabled={disabled}
-              value={String(values[key] ?? item.default) || '#000000'}
+              value={String(shown[key] ?? item.default) || '#000000'}
               onChange={(event) => set(key, event.target.value)}
             />
           </SettingRow>
@@ -161,9 +164,8 @@ export function StyleOptions({
                 aria-label={`${item.title} (${mode})`}
                 disabled={disabled}
                 value={
-                  String(
-                    values[`${key}@@${mode}`] ?? item[`default-${mode}`],
-                  ) || '#000000'
+                  String(shown[`${key}@@${mode}`] ?? item[`default-${mode}`]) ||
+                  '#000000'
                 }
                 onChange={(event) => set(`${key}@@${mode}`, event.target.value)}
               />

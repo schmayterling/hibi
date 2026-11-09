@@ -318,8 +318,49 @@ export async function checkTheme(folder: string) {
 }
 
 /** Hash of a theme's CSS as it is now, without checking it. Reads only. */
+// Hashes of kept vault files by path, reused while size and time match, so
+// opening a vault doesn't read a 5 MB theme again.
+const hashes = new Map<string, { key: string; hash: string }>()
+/** Vault files read for hashing; tests check that unchanged files aren't read again. */
+export const hashReads = { count: 0 }
+async function fileHash(path: string, max: number) {
+  const info = await lstat(path)
+  if (!info.isFile()) throw new Error('not a regular file')
+  const key = `${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+  const known = hashes.get(path)
+  if (known?.key === key) return known.hash
+  hashReads.count++
+  const hash = sha256(await readRegular(path, max))
+  hashes.set(path, { key, hash })
+  return hash
+}
+
 export async function themeHash(folder: string) {
-  return sha256((await readThemeFolder(folder)).css)
+  const info = await lstat(folder)
+  if (info.isFile()) return fileHash(folder, MAX_THEME_BYTES)
+  try {
+    return await fileHash(join(folder, 'theme.css'), MAX_THEME_BYTES)
+  } catch {
+    return fileHash(join(folder, 'obsidian.css'), MAX_THEME_BYTES)
+  }
+}
+
+export async function snippetHash(vault: string, name: string) {
+  if (!/^[^/\\]{1,200}$/.test(name) || name.startsWith('.'))
+    throw new Error('Choose a snippet from this vault.')
+  const path = await configPath(vault, 'snippets', `${name}.css`)
+  if (!path) throw new Error('This vault has no Obsidian settings folder.')
+  return fileHash(path, MAX_SNIPPET_BYTES)
+}
+
+// Copying, saving a choice and pruning run one at a time, across windows
+// (the main process has one copy of this module), so a prune never removes
+// a copy that is about to be chosen.
+let copies: Promise<unknown> = Promise.resolve()
+export function withCopies<T>(task: () => Promise<T>): Promise<T> {
+  const result = copies.then(task, task)
+  copies = result.catch(() => undefined)
+  return result
 }
 
 /** Copy a theme folder into Hibi's data with its hash, manifest and checked CSS. */
@@ -635,11 +676,30 @@ export async function pruneCopies(root: string, data: string) {
     keep(value.previous)
   }
   const removed: string[] = []
-  for (const theme of await installedThemes(root))
-    if (theme.source === 'vault' && !themes.has(theme.id)) {
-      await rm(join(root, 'themes', theme.id), { recursive: true, force: true })
-      removed.push(`themes/${theme.id}`)
+  // Folders are removed by their own checked name, never by what a copy's
+  // record says.
+  for (const entry of await entries(join(root, 'themes'))) {
+    if (
+      !entry.isDirectory() ||
+      !/^[a-z0-9-]{1,60}$/.test(entry.name) ||
+      themes.has(entry.name)
+    )
+      continue
+    let source: unknown
+    try {
+      source = JSON.parse(
+        await readFile(
+          join(root, 'themes', entry.name, 'hibi-theme.json'),
+          'utf8',
+        ),
+      ).source
+    } catch {
+      continue
     }
+    if (source !== 'vault') continue
+    await rm(join(root, 'themes', entry.name), { recursive: true, force: true })
+    removed.push(`themes/${entry.name}`)
+  }
   for (const entry of await entries(join(root, 'snippets')))
     if (
       entry.isDirectory() &&

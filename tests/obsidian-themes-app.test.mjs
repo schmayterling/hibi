@@ -399,6 +399,52 @@ test('a kept vault theme or snippet changed in the vault is copied again on open
   assert.deepEqual(await snapshot(vault), before)
 })
 
+test('the settings page lists themes with their attribution and offers their options', {
+  timeout: 90000,
+}, async (t) => {
+  const { profile } = await themedVault(t)
+  const { page } = await launch(profile)
+  await select(page, { theme: 'vault:settings-garden', snippets: [] })
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page
+    .getByRole('main', { name: 'Settings' })
+    .getByText('Obsidian themes', { exact: true })
+    .first()
+    .click()
+  const gallery = page.getByRole('list', { name: 'Themes' })
+  const lantern = gallery
+    .getByRole('listitem')
+    .filter({ hasText: 'Paper Lantern' })
+  await lantern.waitFor()
+  await lantern.getByText('1.2.0', { exact: false }).waitFor()
+  await lantern.getByText('By Hibi fixtures · In this vault').waitFor()
+  await lantern.getByText('License', { exact: true }).click()
+  await lantern.getByText(/MIT License/).waitFor()
+  await gallery
+    .getByRole('listitem')
+    .filter({ hasText: 'Old Flat' })
+    .getByText(/No license file/)
+    .waitFor()
+  // The applied theme's Style Settings options are on the page.
+  const wide = page.getByRole('checkbox', { name: 'Wide lines' })
+  assert.equal(await wide.isChecked(), true)
+  await wide.uncheck()
+  await page.waitForFunction(
+    () => !document.body.classList.contains('garden-wide'),
+  )
+  // Choose sets the picker without applying anything.
+  await lantern.getByRole('button', { name: 'Choose' }).click()
+  assert.match(
+    await page.locator('#obsidian-theme').inputValue(),
+    /paper-lantern/,
+  )
+  assert.ok(
+    await page.evaluate(() =>
+      document.body.classList.contains('css-settings-manager'),
+    ),
+  )
+})
+
 test('--disable-obsidian-themes starts without the chosen theme', {
   timeout: 60000,
 }, async (t) => {

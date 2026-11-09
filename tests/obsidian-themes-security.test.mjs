@@ -171,11 +171,38 @@ async function launch(profile) {
   return { app, page }
 }
 
+// Use exactly this theme (`vault:<name>` from the open vault, or null) and
+// these vault snippets, as the Appearance controls would.
 const select = (page, selection) =>
-  page.evaluate(async (selection) => {
-    await window.hibi.invokeAddon('obsidian-themes', 'select', selection)
+  page.evaluate(async ({ theme, snippets }) => {
+    const call = (method, input) =>
+      window.hibi.invokeAddonProfile('obsidian-themes', method, input)
+    const adopted = await call('adoptVault', {
+      theme: theme ? theme.slice(6) : null,
+      snippets,
+    })
+    const hashes = snippets.map(
+      (name) =>
+        adopted.state.vault.snippets.find((item) => item.name === name).copy,
+    )
+    await call('setSnippets', { snippets: hashes })
     window.dispatchEvent(new Event('hibi:obsidian-themes-saved'))
+    window.dispatchEvent(
+      new CustomEvent('hibi:obsidian-themes-apply', {
+        detail: { theme: adopted.theme },
+      }),
+    )
   }, selection)
+// A vault snippet's copy in Hibi, without turning it on.
+const snippetHash = (page, name) =>
+  page.evaluate(async (name) => {
+    const call = (method, input) =>
+      window.hibi.invokeAddonProfile('obsidian-themes', method, input)
+    const before = await window.hibi.queryAddon('obsidian-themes', 'state')
+    const adopted = await call('adoptVault', { snippets: [name] })
+    await call('setSnippets', { snippets: before.selection.snippets })
+    return adopted.state.vault.snippets.find((item) => item.name === name).copy
+  }, name)
 const themeStyle = (page) =>
   page.evaluate(
     () =>
@@ -265,13 +292,14 @@ test('a theme cannot hide, cover, move or disable the way out', {
   })
   const { page } = await launch(profile)
   const shot = async (name) => {
+    const hash = await snippetHash(page, name)
     const preview = await page.evaluate(
-      (name) =>
+      (hash) =>
         window.hibi.queryAddon('obsidian-themes', 'preview', {
           theme: null,
-          snippets: [name],
+          snippets: [hash],
         }),
-      name,
+      hash,
     )
     await page.evaluate(
       (detail) =>
@@ -380,6 +408,8 @@ test('reset restores every computed style and snippets toggle independently', {
       ].slice(0, 600)) {
         if (
           element.closest('[data-obsidian-themes-safe]') ||
+          // Toasts come and go on their own timers.
+          element.closest('.sonner') ||
           element.tagName === 'STYLE'
         )
           continue
@@ -428,15 +458,7 @@ test('reset restores every computed style and snippets toggle independently', {
   )
   assert.deepEqual(await vars(), ['', '2'])
   // Turn off through the command, as a user would.
-  await page.evaluate(() =>
-    window.hibi.invokeAddon('obsidian-themes', 'select', {
-      theme: null,
-      snippets: [],
-    }),
-  )
-  await page.evaluate(() =>
-    window.dispatchEvent(new Event('hibi:obsidian-themes-saved')),
-  )
+  await select(page, { theme: null, snippets: [] })
   await page.waitForFunction(
     () =>
       ![...document.querySelectorAll('style')].some((s) =>
@@ -481,8 +503,7 @@ test('the Addons menu and a keyboard shortcut turn the theme off even when a the
   const item = await app.evaluate(({ Menu }) => {
     const find = (items) => {
       for (const item of items) {
-        if (item.label === 'Obsidian themes: turn off for this vault')
-          return item
+        if (item.label === 'Obsidian themes: turn off') return item
         const found = item.submenu && find(item.submenu.items)
         if (found) return found
       }
@@ -492,7 +513,7 @@ test('the Addons menu and a keyboard shortcut turn the theme off even when a the
     found?.click()
     return found?.label ?? null
   })
-  assert.equal(item, 'Obsidian themes: turn off for this vault')
+  assert.equal(item, 'Obsidian themes: turn off')
   await off()
   await on()
   await pressShortcut(

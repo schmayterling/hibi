@@ -6,7 +6,8 @@ import { bridgeCss, type VaultAppearance } from './bridge'
 const hostStyle = [
   'all: initial',
   'position: fixed',
-  'inset: auto 12px 12px auto',
+  // Bottom left: Hibi's own toasts take the bottom right, above other popovers.
+  'inset: auto auto 12px 12px',
   'margin: 0',
   'z-index: 2147483647',
   'display: block',

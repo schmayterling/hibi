@@ -14,6 +14,16 @@ import { clickMenu, pressShortcut } from './keyboard.mjs'
 const note =
   'See [docs](https://old.example "Keep title") here. Bare https://bare.example/path.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// Opening a link reaches main after the click returns: wait for the first open.
+const openedLinks = (app) =>
+  app.evaluate(
+    () =>
+      new Promise((resolve) => {
+        globalThis.linkOpened = () => resolve(globalThis.openedLinks)
+        if (globalThis.openedLinks.length) globalThis.linkOpened()
+      }),
+  )
+
 async function open(t, addons, { clock = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-link-controls-'))
   const file = join(root, 'note.md')
@@ -47,6 +57,7 @@ async function open(t, addons, { clock = false } = {}) {
     globalThis.openedLinks = []
     shell.openExternal = async (url) => {
       globalThis.openedLinks.push(url)
+      globalThis.linkOpened?.()
     }
   }, file)
   page.setDefaultTimeout(8000)
@@ -165,7 +176,7 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
   )
   await link.hover()
   await panel.getByRole('button', { name: 'Open link', exact: true }).click()
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
+  assert.deepEqual(await openedLinks(app), [
     'https://old.example/',
   ])
   await link.hover()
@@ -347,7 +358,7 @@ test('codemirror caret actions and context edit are keyboard reachable', {
   await page.waitForFunction(() =>
     document.activeElement?.closest('.rich-pane .cm-editor'),
   )
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
+  assert.deepEqual(await openedLinks(app), [
     'https://old.example/',
   ])
   await choose('Remove link')
@@ -715,7 +726,7 @@ test('codemirror link menu holds the editor actions of addons too', {
   await page.waitForFunction(() =>
     document.activeElement?.closest('.rich-pane .cm-editor'),
   )
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
+  assert.deepEqual(await openedLinks(app), [
     'https://old.example/',
   ])
   // Opened again, the menu and its actions keep their ids.
@@ -1070,7 +1081,7 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   // Last, as opening a link makes the app busy, which ends this read-only spell.
   await link.hover()
   await panel.getByRole('button', { name: 'Open link', exact: true }).click()
-  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
+  assert.deepEqual(await openedLinks(app), [
     'https://old.example/',
   ])
 })

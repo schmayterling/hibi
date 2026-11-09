@@ -335,7 +335,7 @@ export class ObsidianStore {
           pluginLimits['manifest.json'],
         ),
       ),
-    ) as InstalledPlugin
+    ) as InstalledPlugin & { fullAccessHash?: unknown }
     const manifest = parseObsidianManifest(value.manifest)
     if (
       manifest.id !== id ||
@@ -351,6 +351,11 @@ export class ObsidianStore {
       hash: value.hash,
       enabled: value.enabled,
       hasStyles: value.hasStyles,
+      ...(value.enabled &&
+      value.fullAccess === true &&
+      value.fullAccessHash === value.hash
+        ? { fullAccess: true }
+        : {}),
       ...(value.origin ? { origin: value.origin } : {}),
       ...(value.source
         ? { source: parseCommunityPluginSource(value.source) }
@@ -372,7 +377,9 @@ export class ObsidianStore {
     for (const entry of entries)
       if (entry.isDirectory() && validPluginId(entry.name)) {
         try {
-          result.push(await this.record(entry.name))
+          const record = await this.record(entry.name)
+          if (record.fullAccess) await this.readPackage(record)
+          result.push(record)
         } catch (error) {
           if (!missing(error)) throw error
         }
@@ -551,14 +558,30 @@ export class ObsidianStore {
     )
   }
 
-  setEnabled(id: string, enabled: boolean, check: () => void = () => {}) {
+  setEnabled(
+    id: string,
+    enabled: boolean,
+    check: () => void = () => {},
+    fullAccess = false,
+  ) {
     return this.mutate(async () => {
       const record = await this.record(id)
-      if (enabled) await this.readPackage(record)
+      if (enabled) {
+        const source = await this.readPackage(record)
+        if (source.manifest.isDesktopOnly && fullAccess !== true)
+          throw new Error(
+            'Desktop-only Obsidian plugins require explicit full computer access.',
+          )
+      }
       const next = { ...record, enabled }
+      delete next.fullAccess
+      if (enabled && fullAccess === true) next.fullAccess = true
       await atomicJson(
         join(await this.stateFolder(id), 'package.json'),
-        next,
+        {
+          ...next,
+          ...(next.fullAccess ? { fullAccessHash: record.hash } : {}),
+        },
         check,
       )
       return next
@@ -571,7 +594,7 @@ export class ObsidianStore {
     const source = await readObsidianPackage(path)
     if (
       source.hash !== record.hash ||
-      source.manifest.id !== record.manifest.id
+      !isDeepStrictEqual(source.manifest, record.manifest)
     )
       throw new Error(
         'The stored plugin hash does not match. Reinstall this plugin.',
@@ -581,8 +604,14 @@ export class ObsidianStore {
 
   async enabledPackage(id: string, hash: string) {
     const record = await this.record(id)
-    if (!record.enabled || record.hash !== hash)
-      throw new Error('This plugin is disabled or has been replaced.')
+    if (
+      !record.enabled ||
+      record.hash !== hash ||
+      (record.manifest.isDesktopOnly && !record.fullAccess)
+    )
+      throw new Error(
+        'This plugin is disabled, lacks full computer access or has been replaced.',
+      )
     return this.readPackage(record)
   }
 

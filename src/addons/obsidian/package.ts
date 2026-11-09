@@ -14,6 +14,7 @@ export interface InstalledPlugin {
   hash: string
   enabled: boolean
   hasStyles: boolean
+  fullAccess?: boolean
   origin?: 'folder' | 'vault' | 'community'
   source?: CommunityPluginSource
 }
@@ -95,10 +96,6 @@ export function parseObsidianManifest(value: unknown): PluginManifest {
     typeof data.isDesktopOnly !== 'boolean'
   )
     return invalid()
-  if (data.isDesktopOnly)
-    throw new Error(
-      'Desktop-only Obsidian plugins requiring Node.js or Electron are not supported.',
-    )
   return manifest
 }
 

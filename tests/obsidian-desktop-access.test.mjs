@@ -210,7 +210,7 @@ test('only enabled/hash-granted packages reach Node; revocation invalidates requ
   const accepted = ctx.event()
   ctx.listeners.get(channels.acquire)(accepted, 'desktop', hash)
   assert.equal(accepted.returnValue.source, 'module.exports = {}')
-  assert.match(accepted.returnValue.filename, /desktop\/a{64}\/main.js$/)
+  assert.match(accepted.returnValue.filename, /desktop[/\\]a{64}[/\\]main\.js$/)
   const previous = ctx.current()
   ctx.state.installed = [{ ...plugin(), enabled: false, fullAccess: false }]
   const done = ctx.settled()

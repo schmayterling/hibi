@@ -95,10 +95,17 @@ test('unreadable non-referrer names its file; invalid UTF-8 non-referrers do not
   assert.deepEqual(diffVault(before, await snapshotVault(root)), [])
   await chmod(join(root, 'bad.md'), 0o000)
   try {
-    await assert.rejects(
-      links.prepareObsidianLinkUpdates(root, 't.md', 'u.md'),
-      /bad\.md/,
+    // Windows modes only mark files read-only; they stay readable there.
+    if (
+      await readFile(join(root, 'bad.md')).then(
+        () => false,
+        () => true,
+      )
     )
+      await assert.rejects(
+        links.prepareObsidianLinkUpdates(root, 't.md', 'u.md'),
+        /bad\.md/,
+      )
   } finally {
     await chmod(join(root, 'bad.md'), 0o600)
   }

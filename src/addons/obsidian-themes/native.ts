@@ -1,7 +1,9 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
 import { runFileDialog } from '../../main/file-operation-dialog'
+import { manualFetch } from '../../main/manual-fetch'
 import type { NativeAddon, NativeAddonContext } from '../api'
+import { communityScreenshot, installCommunityTheme } from './community'
 import type { DroppedRule } from './sanitize'
 import {
   checkSnippet,
@@ -59,6 +61,25 @@ async function sectionsFor(selection: StoredSelection) {
       )
     ).flat(),
   ]
+}
+// Community downloads in flight, by the caller's request id, for cancelInstall.
+const requests = new Map<string, AbortController>()
+async function tracked<T>(
+  input: unknown,
+  run: (signal: AbortSignal) => Promise<T>,
+) {
+  const id = (input as { requestId?: unknown } | null)?.requestId
+  if (typeof id !== 'string' || !/^[\w-]{1,100}$/.test(id))
+    throw new Error('Each theme download needs its own request id.')
+  if (requests.has(id))
+    throw new Error('This theme download is already running.')
+  const controller = new AbortController()
+  requests.set(id, controller)
+  try {
+    return await run(controller.signal)
+  } finally {
+    requests.delete(id)
+  }
 }
 const strings = (value: unknown) =>
   Array.isArray(value)
@@ -216,6 +237,38 @@ export default {
         dropped,
         appearance: vault ? await readAppearance(vault) : {},
       }
+    },
+  },
+  // Community downloads write only Hibi's own data, and run beside file
+  // operations: on the invoke channel a download would hold every file
+  // operation and its cancel would wait behind it.
+  profileMethods: {
+    /** Download a theme from Obsidian's community directory into Hibi's data. Never applies it. */
+    async installRepo(input) {
+      const request = (input ?? {}) as Record<string, unknown>
+      return tracked(input, (signal) =>
+        installCommunityTheme(
+          root(),
+          { repo: request.repo, name: request.name, branch: request.branch },
+          { fetch: manualFetch, signal },
+        ),
+      )
+    },
+    /** Load a community theme's screenshot on demand, as a data URL. */
+    async screenshot(input) {
+      const request = (input ?? {}) as Record<string, unknown>
+      return tracked(input, (signal) =>
+        communityScreenshot(
+          { repo: request.repo, path: request.path, branch: request.branch },
+          { fetch: manualFetch, signal },
+        ),
+      )
+    },
+    async cancelInstall(input) {
+      const id = (input as { requestId?: unknown } | null)?.requestId
+      const controller = typeof id === 'string' ? requests.get(id) : undefined
+      controller?.abort()
+      return { cancelled: !!controller }
     },
   },
   methods: {

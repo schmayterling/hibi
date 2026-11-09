@@ -19,6 +19,10 @@ To use a theme that isn't in the vault, choose **Add folder…** and pick a them
 
 The **Themes** list on the page shows every theme Hibi knows for this vault with its author, version, where it came from and its license, so you can check a theme's origin before you use it.
 
+## Themes from the community directory
+
+Settings → Addons can also show Obsidian's community theme directory. Installing a theme from there downloads it from its GitHub repository: from its latest release when the release includes the theme, otherwise from its branch. Hibi checks it like any other theme and keeps its repository, version and license with the copy. Installing never applies a theme: preview it here first, then choose **Apply**. Screenshots load only when you open a theme's details. Community themes stay until you remove them.
+
 ## Theme options
 
 Many themes offer options through the Style Settings format, such as colours, fonts, widths and layout switches. After you apply such a theme, its options appear below the theme on the settings page. Changes apply right away and are kept for this vault. Hibi reads these options from the theme and never runs the Style Settings plugin.

@@ -61,7 +61,11 @@ export type Vault = {
 export type InstalledTheme = {
   id: string
   manifest: ThemeManifest
-  source: 'vault' | 'folder'
+  source: 'vault' | 'folder' | 'community'
+  /** For community themes: the GitHub repository, the release tag or branch, and the commit when known. */
+  repository?: string
+  ref?: string
+  commit?: string
   /** The theme's name in the vault's themes folder, for vault themes. */
   folder?: string
   hash: string
@@ -368,6 +372,7 @@ export async function installTheme(
   root: string,
   folder: string,
   source: InstalledTheme['source'],
+  origin: Pick<InstalledTheme, 'repository' | 'ref' | 'commit'> = {},
 ): Promise<InstalledTheme> {
   const { manifest, original, result, assets, hash, settings } =
     await checkTheme(folder)
@@ -377,6 +382,7 @@ export async function installTheme(
     manifest,
     source,
     ...(source === 'vault' ? { folder: basename(folder) } : {}),
+    ...origin,
     hash,
     assets: assets.hashes,
     sanitizerVersion: SANITIZER_VERSION,

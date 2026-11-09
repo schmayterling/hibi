@@ -162,7 +162,7 @@ export function Settings() {
           >
             Add folder…
           </Button>
-          {chosen?.source === 'folder' && (
+          {chosen && chosen.source !== 'vault' && (
             <Button
               disabled={busy}
               onClick={() =>

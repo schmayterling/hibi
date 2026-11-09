@@ -10,6 +10,17 @@ Technical notes for `src/addons/obsidian-themes/`. The user guide is the addon's
 - On open, `active` re-hashes only the kept theme and snippets and copies them again when they changed.
 - When `SANITIZER_VERSION` changes, `themeCss`/`snippetCss` check the stored original again.
 
+## Community directory installs
+
+`community.ts` (main process, node-testable) serves the host lane's directory UI through native `profileMethods`, called with `window.hibi.invokeAddonProfile`. The `invoke` channel runs inside the file operation queue, so a download there would hold every file operation and its cancel would wait behind it. Every request goes through `download()` from `src/main/download.ts` with `manualFetch` (Electron net, no cookies, manual redirects), the same bounded transport addon installs use.
+
+- `installRepo({ repo, name, branch?, requestId })` reads `api.github.com/repos/<repo>/releases/latest`. When the release has `theme.css` and `manifest.json` assets under `github.com/<repo>/releases/download/`, those are used and `ref` is the tag. Otherwise it reads `manifest.json` and `theme.css` (or `obsidian.css`) from `raw.githubusercontent.com/<repo>/<branch or HEAD>/`, and records the commit sha from `commits/<branch>` when GitHub returns one. It also reads LICENSE, LICENSE.md or LICENSE.txt at the same version. The manifest name must match the directory name. Files go through a temporary folder in `incoming/` into `installTheme(..., 'community', { repository, ref, commit })`, so checks, hashes and attribution match folder installs. Nothing is applied, and `pruneCopies` never removes community copies.
+- `screenshot({ repo, path, branch?, requestId })` returns a PNG, JPEG, GIF or WebP (checked by magic bytes) of at most 2 MiB as a data URL.
+- `cancelInstall({ requestId })` aborts either call. The aborted call resolves `{ ok: false, code: 'cancelled' }`.
+- Every hop must be HTTPS on api.github.com, github.com, raw.githubusercontent.com, objects.githubusercontent.com or release-assets.githubusercontent.com. Each request has a 30-second deadline and a 10-second stall limit. Size caps: CSS 5 MiB, manifest and license 64 KiB, release JSON 1 MiB.
+- Failures are `{ ok: false, code, message }` with code `invalid`, `not-found`, `too-large`, `network`, `name-mismatch`, `unsafe` or `cancelled`. `parseCommunityThemes` validates `community-css-themes.json` entries for the host's directory cache.
+- Tests (`tests/obsidian-themes-community.test.mjs`) use recorded GitHub answers through an injected fetch, so nothing goes to the network.
+
 ## Sanitizer
 
 `sanitize.ts` tokenizes theme CSS as CSS Syntax Level 3 does, so escaped names such as `\75rl(` or `@\69mport` are seen as the browser sees them. Before the CSS is used, it:

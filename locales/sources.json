@@ -3927,6 +3927,9 @@
   "8b56fc0ea9b7": [
     "src/renderer/src/ToolbarSettings.tsx"
   ],
+  "cef67b3e8272": [
+    "src/addons/obsidian/api/core/ui.tsx"
+  ],
   "1356a57a7a4b": [
     "src/addons/mermaid/hibi-addon.json"
   ],
@@ -4763,6 +4766,9 @@
   "8839e805f979": [
     "src/addons/obsidian/package.ts"
   ],
+  "41b5cde2dc38": [
+    "src/addons/obsidian/package.ts"
+  ],
   "708790bc4454": [
     "src/addons/obsidian/api/vault/paths.ts"
   ],
@@ -4796,7 +4802,7 @@
   "7cf49100e5c1": [
     "src/addons/obsidian/api/core/network.ts"
   ],
-  "1c4026fb69a7": [
+  "1ef7faee108d": [
     "src/addons/obsidian/store.ts"
   ],
   "77deabe238de": [
@@ -7197,7 +7203,8 @@
     "src/addons/obsidian/runtime.ts"
   ],
   "d175608a5346": [
-    "src/addons/obsidian/api/core/plugin.tsx"
+    "src/addons/obsidian/api/core/plugin.tsx",
+    "src/addons/obsidian/api/core/ui.tsx"
   ],
   "c6adbcf38611": [
     "src/addons/obsidian/runtime.ts"

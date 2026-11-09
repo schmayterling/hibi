@@ -3,7 +3,7 @@ import { parse, stringify } from 'yaml'
 export function normalizePath(path: string): string {
   return path
     .replace(/\\/g, '/')
-    .replace(/\u00a0/g, ' ')
+    .replace(/[\u00a0\u2007\u202f]/g, ' ')
     .normalize('NFC')
     .replace(/\/{2,}/g, '/')
     .replace(/^\/|\/$/g, '')

@@ -27,6 +27,7 @@ supported.
 
 The host provides lifecycle, commands, ribbon/status items, settings controls,
 notices, modals, menus, basic keymaps, icons, YAML, and path/debounce helpers.
+Status items show text and support clicks; custom status markup is not rendered.
 Service lanes provide vault, metadata, workspace, and editor APIs through the
 registry described in [API integration](api/README.md).
 

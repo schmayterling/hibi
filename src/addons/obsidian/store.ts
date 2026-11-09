@@ -11,7 +11,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { InstalledPlugin } from './package'
 import {
   parseObsidianManifest,
@@ -30,7 +30,22 @@ async function directory(path: string) {
   const stat = await lstat(path)
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new Error('Plugin folders must be regular directories.')
+  if ((await realpath(path)) !== resolve(path))
+    throw new Error('Plugin folders cannot contain symlinks.')
   return stat
+}
+
+async function makeDirectory(path: string): Promise<void> {
+  try {
+    await directory(path)
+  } catch (error) {
+    if (!missing(error)) throw error
+    await makeDirectory(dirname(path))
+    await mkdir(path, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error
+    })
+    await directory(path)
+  }
 }
 
 /** Refuse symlinks in every path segment below a trusted canonical root. */
@@ -112,8 +127,6 @@ function packageHash(manifest: Buffer, main: Buffer, styles: Buffer | null) {
 
 export async function readObsidianPackage(source: string) {
   await directory(source)
-  if ((await realpath(source)) !== resolve(source))
-    throw new Error('Plugin folders cannot contain symlinks.')
   const manifestBytes = await readPluginFile(
     join(source, 'manifest.json'),
     pluginLimits['manifest.json'],
@@ -209,7 +222,16 @@ export class ObsidianStore {
   constructor(
     readonly root: string,
     readonly vault: string,
-  ) {}
+  ) {
+    const location = relative(resolve(vault), resolve(root))
+    if (
+      !location ||
+      (!isAbsolute(location) &&
+        location !== '..' &&
+        !location.startsWith(`..${sep}`))
+    )
+      throw new Error('Plugin storage must be outside the vault.')
+  }
 
   /** Serialize writes/seeding so two loadData calls never overwrite a saveData. */
   private mutate<T>(
@@ -225,10 +247,7 @@ export class ObsidianStore {
   }
 
   private async prepare() {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    if ((await realpath(this.root)) !== resolve(this.root))
-      throw new Error('Plugin storage cannot contain symlinks.')
-    await directory(this.root)
+    await makeDirectory(this.root)
     for (const folder of ['packages', 'state']) {
       await mkdir(join(this.root, folder), { mode: 0o700 }).catch(
         (error: NodeJS.ErrnoException) => {
@@ -362,7 +381,7 @@ export class ObsidianStore {
   setEnabled(id: string, enabled: boolean, check: () => void = () => {}) {
     return this.mutate(async () => {
       const record = await this.record(id)
-      await this.readPackage(record)
+      if (enabled) await this.readPackage(record)
       const next = { ...record, enabled }
       await atomicJson(
         join(await this.stateFolder(id), 'package.json'),

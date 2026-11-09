@@ -64,8 +64,22 @@ export function parseObsidianManifest(value: unknown): PluginManifest {
 
 /** CSS is data. No imports or external/relative resource requests, including escaped tokens. */
 export function validatePluginCss(css: string): void {
-  const tokens = css
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+  const source = css.replace(/\r\n?/g, '\n')
+  const parts: string[] = []
+  let cursor = 0
+  for (;;) {
+    const start = source.indexOf('/*', cursor)
+    if (start < 0) {
+      parts.push(source.slice(cursor))
+      break
+    }
+    if (start > cursor) parts.push(source.slice(cursor, start))
+    const end = source.indexOf('*/', start + 2)
+    if (end < 0) throw new Error('Plugin CSS contains an unterminated comment.')
+    cursor = end + 2
+  }
+  const tokens = parts
+    .join('')
     .replace(
       /\\([0-9a-f]{1,6})\s?|\\(.)/gi,
       (_match, hex: string | undefined, character: string | undefined) =>

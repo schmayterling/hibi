@@ -30,7 +30,7 @@ export interface PluginEnvironment {
 
 export class Plugin extends Component {
   settings?: unknown
-  // Hibi IDs allow lowercase ASCII and hyphens; package hash keeps long/Unicode IDs distinct.
+  // Hibi IDs allow lowercase ASCII and hyphens; the plugin namespace stays stable on upgrades.
   private resourceId(local: string) {
     return `${this.host.idPrefix}-${local}`
   }
@@ -148,6 +148,7 @@ export class Plugin extends Component {
   }
 
   addStatusBarItem(): HTMLElement {
+    // ponytail: Hibi status items render text; rich plugin markup needs a status API extension.
     const element = ownElement(document.createElement('div'), this)
     element.className = 'status-bar-item'
     const handle = this.host.hibi.statusBar.register({
@@ -187,7 +188,7 @@ export class Plugin extends Component {
     this.register(
       this.host.hibi.settings.register({
         id: this.resourceId(`settings-${++this.nextItem}`),
-        label: tab.name || this.manifest.name,
+        label: (tab.name || this.manifest.name).slice(0, 100),
         Content: () => (
           <DomMount
             element={tab.containerEl}

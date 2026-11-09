@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
-import { fixtureVault } from './obsidian/harness.mjs'
+import { fixtureVault, readFixturePlugin } from './obsidian/harness.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -13,6 +13,22 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
   timeout: 90000,
 }, async (t) => {
   const fixture = await fixtureVault(t, 'host-surface', { cleanup: false })
+  const pending = await readFixturePlugin('host-pending')
+  const pendingFolder = join(fixture.root, 'pending-package')
+  await mkdir(pendingFolder)
+  await writeFile(
+    join(pendingFolder, 'manifest.json'),
+    JSON.stringify(pending.manifest),
+  )
+  await writeFile(join(pendingFolder, 'main.js'), pending.main)
+  const throwing = await readFixturePlugin('host-throws')
+  const throwingFolder = join(fixture.root, 'throwing-package')
+  await mkdir(throwingFolder)
+  await writeFile(
+    join(throwingFolder, 'manifest.json'),
+    JSON.stringify(throwing.manifest),
+  )
+  await writeFile(join(throwingFolder, 'main.js'), throwing.main)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${fixture.overlay}`],
   })
@@ -78,6 +94,20 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
   )
   await enabled.click()
   await page.waitForFunction(() => window.__hibiHostFixture?.loaded)
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const f = window.__hibiHostFixture
+      return [
+        f.menuComponent,
+        f.menuShowReturns,
+        f.menuHideReturns,
+        f.noticeShape,
+        f.noticeFragment,
+        f.modalMethods,
+      ]
+    }),
+    [true, true, true, true, true, true],
+  )
   await page.getByText('Fixture notice', { exact: true }).waitFor()
   await page.evaluate(() =>
     window.__hibiHostFixture.notice.setMessage('Updated fixture notice'),
@@ -221,6 +251,7 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
   await page.evaluate(() => window.__hibiHostFixture.openModal())
   const modal = page.getByRole('dialog', { name: 'Fixture modal', exact: true })
   await modal.getByText('Fixture modal content').waitFor()
+  await modal.getByText('Seeded modal fragment').waitFor()
   await page.keyboard.press('Escape')
   await modal.waitFor({ state: 'hidden' })
   await page.evaluate(() => window.__hibiHostFixture.openMenu())
@@ -228,9 +259,15 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
   assert.deepEqual(
     await page.evaluate(() => {
       const f = window.__hibiHostFixture
-      return [f.modalOpened, f.modalClosed, f.menu]
+      return [
+        f.modalOpened,
+        f.modalClosed,
+        f.modalCallback,
+        f.menu,
+        f.menuHidden,
+      ]
     }),
-    [1, 1, 1],
+    [1, 1, 1, 1, 2],
   )
   await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
   await command('Schedule fixture callback')
@@ -303,12 +340,122 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
       .isChecked(),
     true,
   )
+  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page
+    .getByRole('checkbox', { name: 'Enable Host surface', exact: true })
+    .click()
+  await page.waitForFunction(
+    () => typeof HTMLElement.prototype.createEl === 'undefined',
+  )
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [folder],
+    })
+  }, throwingFolder)
+  await page
+    .getByRole('button', { name: 'Install from folder', exact: true })
+    .click()
+  await page
+    .getByRole('checkbox', { name: 'Enable Host throws', exact: true })
+    .click()
+  await page.waitForFunction(() => window.__hibiThrowFixture?.loaded)
+  await page
+    .getByRole('checkbox', { name: 'Enable Host throws', exact: true })
+    .click()
+  await page.waitForFunction(() => window.__hibiThrowFixture.cleaned === 1)
+  await waitForAsync(
+    page,
+    async (vaultId) => {
+      const installed = await window.hibi.queryAddon('obsidian', 'list', {
+        vaultId,
+      })
+      return (
+        installed.find((plugin) => plugin.manifest.id === 'host-throws')
+          ?.enabled === false
+      )
+    },
+    vaultId,
+    { timeout: 5000, label: 'disable persists after throwing onunload' },
+  )
+  assert.equal(await page.evaluate(() => window.__hibiThrowFixture.unloaded), 1)
+  await page.getByText('Fixture unload failure.', { exact: true }).waitFor()
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [folder],
+    })
+  }, pendingFolder)
+  await page
+    .getByRole('button', { name: 'Install from folder', exact: true })
+    .click()
+  await page
+    .getByRole('checkbox', { name: 'Enable Host pending', exact: true })
+    .click()
+  await page.waitForFunction(() => window.__hibiPendingFixture?.started)
+  assert.equal(
+    await page.evaluate(() => typeof HTMLElement.prototype.createEl),
+    'function',
+  )
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page
     .getByRole('checkbox', { name: 'Obsidian plugins', exact: true })
     .click()
   await page.waitForFunction(
-    () => typeof HTMLElement.prototype.createEl === 'undefined',
+    () =>
+      window.__hibiPendingFixture.unloaded === 1 &&
+      typeof HTMLElement.prototype.createEl === 'undefined',
+  )
+  const pendingTicks = await page.evaluate(
+    () => window.__hibiPendingFixture.ticks,
+  )
+  await page.evaluate(() => window.__hibiPendingFixture.release())
+  await page.waitForFunction(() => window.__hibiPendingFixture.finished)
+  assert.equal(
+    await page.evaluate(() => window.__hibiPendingFixture.saveRefused),
+    true,
+  )
+  assert.equal(
+    JSON.parse(
+      await readFile(
+        join(
+          fixture.overlay,
+          'obsidian',
+          'vaults',
+          vaultId,
+          'state',
+          'host-pending',
+          'data.json',
+        ),
+        'utf8',
+      ),
+    ),
+    null,
+  )
+  await page.evaluate(() => {
+    document.dispatchEvent(new Event('host-pending-event'))
+    document.dispatchEvent(new Event('host-pending-late'))
+    window.__hibiPendingFixture.emitter.trigger('pending')
+  })
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 80)))
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const f = window.__hibiPendingFixture
+      return [f.events, f.lateEvents, f.unloaded]
+    }),
+    [0, 0, 1],
+  )
+  assert.equal(
+    await page.evaluate(() => window.__hibiPendingFixture.ticks),
+    pendingTicks,
+  )
+  assert.equal(
+    await page
+      .locator(
+        '[data-obsidian-plugin], [data-status-id^="obsidian."], [data-toolbar-id^="obsidian."]',
+      )
+      .count(),
+    0,
   )
   await fixture.assertUnchanged()
 })

@@ -1,3 +1,4 @@
+import { errorMessage } from '../../shared/errors'
 import type { AddonContext } from '../api'
 import { createCoreApi } from './api/core'
 import { Component } from './api/core/component'
@@ -63,6 +64,10 @@ function loadScript(
   url: string,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    if (owner.isUnloaded) {
+      reject(new Error('This plugin load was cancelled.'))
+      return
+    }
     const script = document.createElement('script')
     script.src = url
     script.dataset.obsidianPlugin = identity
@@ -185,7 +190,8 @@ export class ObsidianHost {
         }
       }
       for (const id of this.errors.keys())
-        if (!desired.has(id)) this.errors.delete(id)
+        if (!installed.some((plugin) => plugin.manifest.id === id))
+          this.errors.delete(id)
     })
     this.pending = run.catch(() => undefined)
     return run
@@ -197,21 +203,31 @@ export class ObsidianHost {
     const { manifest, hash } = descriptor
     const identity = `${this.vaultId}:${manifest.id}:${hash}`
     const base = `app://hibi/obsidian-plugins/${this.vaultId}/${manifest.id}/${hash}`
-    const api = createCoreApi(
-      {
-        hibi: this.hibi,
-        owner,
-        vaultId: this.vaultId,
-        contributions: this.contributions,
-        isCurrent: () => !this.stopped && !owner.isUnloaded,
-        idPrefix: `p${hash.slice(0, 40)}`,
-      },
-      this.app,
-      manifest,
-    )
-    for (const contribution of this.contributions)
-      Object.assign(api, contribution.exports)
     try {
+      // Host resource IDs stay stable across package upgrades without exposing native paths.
+      const digest = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(manifest.id),
+      )
+      if (this.stopped || owner.isUnloaded)
+        throw new Error('This plugin host has stopped.')
+      const namespace = [...new Uint8Array(digest).slice(0, 20)]
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('')
+      const api = createCoreApi(
+        {
+          hibi: this.hibi,
+          owner,
+          vaultId: this.vaultId,
+          contributions: this.contributions,
+          isCurrent: () => !this.stopped && !owner.isUnloaded,
+          idPrefix: `p${namespace}`,
+        },
+        this.app,
+        manifest,
+      )
+      for (const contribution of this.contributions)
+        Object.assign(api, contribution.exports)
       if (descriptor.hasStyles) {
         const style = document.createElement('link')
         style.rel = 'stylesheet'
@@ -254,7 +270,28 @@ export class ObsidianHost {
     const loaded = this.plugins.get(id)
     if (!loaded) return
     this.plugins.delete(id)
-    this.owner.removeChild(loaded.owner)
+    try {
+      this.owner.removeChild(loaded.owner)
+    } catch (error) {
+      let message = errorMessage(error)
+      try {
+        if (error instanceof AggregateError) {
+          const failures = error.errors
+            .slice(0, 8)
+            .flatMap((failure: unknown) =>
+              failure instanceof AggregateError
+                ? failure.errors.slice(0, 8)
+                : [failure],
+            )
+          message =
+            failures.map(errorMessage).join(' ').slice(0, 500) || message
+        }
+      } catch {
+        // Keep the safe message if a plugin's AggregateError cannot be inspected.
+      }
+      // Settings retain the error after disable; teardown cannot prevent persisting disabled state.
+      this.errors.set(id, message)
+    }
   }
 
   stop(): void {

@@ -21,6 +21,9 @@ import type {
   PluginManifest,
 } from './api/types'
 
+const fullAccessRequired =
+  'Paused in trusted workspace mode. Grant full computer access or disable this plugin.'
+
 interface ScriptBridge {
   activate: (capability: string) => void
   require: (name: string) => unknown
@@ -169,9 +172,18 @@ export class ObsidianHost {
       if (this.stopped) return
       const desired = new Map(
         installed
-          .filter((plugin) => plugin.enabled)
+          .filter(
+            (plugin) =>
+              plugin.enabled &&
+              (!window.hibiObsidianDesktop || plugin.fullAccess),
+          )
           .map((plugin) => [plugin.manifest.id, plugin]),
       )
+      for (const plugin of installed)
+        if (plugin.enabled && window.hibiObsidianDesktop && !plugin.fullAccess)
+          this.errors.set(plugin.manifest.id, fullAccessRequired)
+        else if (this.errors.get(plugin.manifest.id) === fullAccessRequired)
+          this.errors.delete(plugin.manifest.id)
       for (const [id, loaded] of this.plugins) {
         if (desired.get(id)?.hash !== loaded.hash) this.unload(id)
       }
@@ -235,28 +247,46 @@ export class ObsidianHost {
         document.head.append(style)
         owner.register(() => style.remove())
       }
-      const nonce = await invokeObsidianProfile<string>('preparePluginLoad', {
-        id: manifest.id,
-        hash,
-      })
-      const exports = await loadScript(
-        owner,
-        `global:${manifest.id}:${hash}:${nonce}`,
-        api,
-        `${base.replace('app://hibi/', 'app://obsidian-plugins/')}/main.js?load=${nonce}`,
-        (token) => {
-          capability = token
-          void invokeObsidianProfile('activateRequestUrl', {
-            id: manifest.id,
-            capability: token,
-          }).catch((error) => {
-            if (!owner.isUnloaded) {
-              reportError(error)
-              owner.unload()
-            }
-          })
-        },
-      )
+      const activate = (token: string) => {
+        capability = token
+        void invokeObsidianProfile('activateRequestUrl', {
+          id: manifest.id,
+          capability: token,
+        }).catch((error) => {
+          if (!owner.isUnloaded) {
+            reportError(error)
+            owner.unload()
+          }
+        })
+      }
+      let exports: unknown
+      if (descriptor.fullAccess) {
+        if (!window.hibiObsidianDesktop)
+          throw new Error(
+            'Hibi is switching to a trusted workspace for this plugin.',
+          )
+        const loaded = window.hibiObsidianDesktop.load(
+          manifest.id,
+          hash,
+          api,
+          requireObsidianHostModule,
+          activate,
+        )
+        owner.register(() => loaded.dispose())
+        exports = loaded.exports
+      } else {
+        const nonce = await invokeObsidianProfile<string>('preparePluginLoad', {
+          id: manifest.id,
+          hash,
+        })
+        exports = await loadScript(
+          owner,
+          `global:${manifest.id}:${hash}:${nonce}`,
+          api,
+          `${base.replace('app://hibi/', 'app://obsidian-plugins/')}/main.js?load=${nonce}`,
+          activate,
+        )
+      }
       if (this.stopped) throw new Error('This plugin host has stopped.')
       const Constructor =
         typeof exports === 'function'

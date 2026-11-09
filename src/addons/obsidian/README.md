@@ -64,8 +64,29 @@ dialogs, and menus use Hibi's shared UI. Status items show text and support
 clicks; custom status markup is not rendered. See [API integration](api/README.md)
 for vault, metadata, workspace, and editor APIs.
 
-Desktop-only packages, Node.js, Electron, and undeclared module imports are
-refused. CodeMirror and Lezer modules are shared with Hibi's editor.
+Desktop plugins need a separate **full computer access** confirmation before enabling.
+It names the plugin, author, and repository, and explains that the plugin can read
+and write any file and run programs. Hibi switches to a less isolated workspace
+while these plugins are enabled. Real Node.js and Electron modules, including
+Electron remote, share the app's DOM. CodeMirror and Lezer stay shared with
+Hibi's editor. In trusted mode, Hibi pauses enabled plugins without their own
+full-access grant. Hibi also pauses other installed addons’ renderer code;
+only bundled addons stay active. Turn off full access or disable paused addons
+from their Installed rows.
+The renderer shares this realm: code injected into Hibi's interface can gain
+computer access too (renderer XSS becomes remote code execution). The regular
+sandboxed workspace keeps its restricted module shim.
+
+Without full-access plugins, Hibi keeps its normal sandboxed, isolated renderer.
+Open tabs, unsaved text, pane layout, and text editor scroll positions survive
+mode changes. Unsaved undo stacks and non-text preview zoom and scroll are not
+transferred.
+Disable the plugin or use **Revoke full access** to stop it and replace its
+workspace realm. Revocation cannot undo file changes or programs it already
+launched. Hibi's own plugin storage never writes back to the vault; full-access
+plugin code can write anywhere you allow it to run. Failed revocations keep a
+visible pending banner and retry with backoff while preserving edits.
+
 `requestUrl` and `request` use Electron networking in the main process, without
 CORS restrictions. HTTP and HTTPS, custom methods and headers, string and
 ArrayBuffer bodies, and `contentType` are supported. Responses expose status,

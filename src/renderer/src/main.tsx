@@ -34,7 +34,6 @@ import {
 } from '../../shared/hotkeys'
 import { isMediaFile, type MediaAttachment } from '../../shared/media'
 import { runSourceHistory } from '../../shared/source-history'
-import type { SourceTransferSender } from '../../shared/source-transfer'
 import { startupMark } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { DialogProvider, useDialogService } from '../../ui/DialogProvider'
@@ -123,6 +122,7 @@ import { viewNotifications } from './view-notifications'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 import { WorkspacesSidebar } from './WorkspacesSidebar'
 import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
+import type { WorkspaceSessionHost } from './workspace-session'
 
 startupMark('renderer-entry')
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
@@ -220,49 +220,6 @@ function App() {
     viewNotifications.subscribe,
     viewNotifications.snapshot,
   )
-  useEffect(() => {
-    if (!settingTarget) return
-    let frame = 0
-    const reveal = () => {
-      const panel = window.document.getElementById(
-        `settings-${settingsCategory}`,
-      )
-      panel?.dispatchEvent(new Event('hibi:reveal-setting', { bubbles: true }))
-      const row = panel?.querySelector<HTMLElement>(
-        `[data-setting-id="${CSS.escape(settingTarget)}"]`,
-      )
-      const target =
-        panel?.querySelector<HTMLElement>(`#${CSS.escape(settingTarget)}`) ??
-        row
-      if (!target?.getClientRects().length) return
-      observer.disconnect()
-      frame = requestAnimationFrame(() => {
-        ;(row ?? target).scrollIntoView({ block: 'center', behavior: 'smooth' })
-        const control =
-          target === row
-            ? (row.querySelector<HTMLElement>(
-                'input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled)',
-              ) ?? row)
-            : target
-        ;(control.matches(':disabled') ? (row ?? control) : control).focus({
-          preventScroll: true,
-        })
-        setSettingTarget(null)
-      })
-    }
-    const observer = new MutationObserver(reveal)
-    observer.observe(window.document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['hidden'],
-    })
-    reveal()
-    return () => {
-      observer.disconnect()
-      cancelAnimationFrame(frame)
-    }
-  }, [settingTarget, settingsCategory])
   const dialogService = useDialogService()
   const dialogs = dialogService.api
   const toastService = useToastService()
@@ -417,51 +374,20 @@ function App() {
   shellDocument.current = document
   currentDocument.current = documentRuntime.get() ?? document
   useLayoutEffect(() => {
-    const checkpoints = new Map<
-      string,
-      { sender: SourceTransferSender; current: () => boolean }
-    >()
-    const tabs = new Map<string, string>()
+    let checkpoints:
+      | import('./document-checkpoints').DocumentCheckpoints
+      | undefined
     return window.hibi.onDocumentCheckpoint(
       async (tabId) => {
         const session = documentRuntime.session(tabId),
           source = session?.snapshot()
-        if (!session || !source)
-          throw new Error('No retained document recovery checkpoint.')
-        const { SourceTransferSender } = await import(
-          '../../shared/source-transfer'
-        )
-        if (!session.ownsCurrentSnapshot(source))
-          throw new Error('The document changed during recovery verification.')
-        const previous = tabs.get(tabId)
-        if (previous) {
-          checkpoints.get(previous)?.sender.close()
-          checkpoints.delete(previous)
-        }
-        const head = {
-          tabId: source.document.tabId,
-          revision: source.document.revision,
-          contentVersion: source.version,
-          streamId: crypto.randomUUID(),
-          length: source.utf16Length,
-        }
-        checkpoints.set(head.streamId, {
-          sender: new SourceTransferSender(head, source.chunks()),
-          current: () => session.ownsCurrentSnapshot(source),
-        })
-        tabs.set(tabId, head.streamId)
-        return head
+        checkpoints ??= new (
+          await import('./document-checkpoints')
+        ).DocumentCheckpoints()
+        return checkpoints.begin(session, source)
       },
-      (request) => {
-        const checkpoint = checkpoints.get(request.streamId)
-        if (!checkpoint?.current())
-          throw new Error('The document changed during recovery verification.')
-        return checkpoint.sender.read(request)
-      },
-      (request) => {
-        checkpoints.get(request.streamId)?.sender.close()
-        checkpoints.delete(request.streamId)
-      },
+      (request) => checkpoints!.read(request),
+      (request) => checkpoints?.close(request),
     )
   }, [])
   useLayoutEffect(
@@ -571,6 +497,7 @@ function App() {
   }, [splitLeftId, splitRightId, availableFlavors, flavorOverride])
   const [resetEditor, setResetEditor] = useState(0)
   const busyRef = useRef(false)
+  const sessionSuspended = useRef(false)
   const savingCommand = useRef<Promise<boolean> | null>(null)
   const pendingSave = useRef<Promise<boolean> | null>(null)
   const saveCancellation = useRef({ canceled: false })
@@ -582,8 +509,8 @@ function App() {
     setBusy(true)
   }
   function endBusy() {
-    busyRef.current = focusUnsafe.current
-    setBusy(focusUnsafe.current)
+    busyRef.current = focusUnsafe.current || sessionSuspended.current
+    setBusy(busyRef.current)
     // Paused editing drops them; otherwise they run once the caller's cleanup ends.
     if (!busyRef.current) queueMicrotask(runWaiting)
     else {
@@ -607,7 +534,11 @@ function App() {
   const shownTab = () =>
     addonViews.snapshot().activeTab ?? currentDocument.current?.tabId
   function wait(key: string | symbol, run: Waiting, forTab = false): void {
-    if (fileDialogOpen.current || focusUnsafe.current) {
+    if (
+      fileDialogOpen.current ||
+      focusUnsafe.current ||
+      sessionSuspended.current
+    ) {
       run(false)
       return
     }
@@ -1379,29 +1310,100 @@ function App() {
     setFindOpen(true)
   }
 
+  const currentSession: WorkspaceSessionHost = {
+    runtime: documentRuntime,
+    views: editorViewRegistry,
+    shell: {
+      split: splitTabs,
+      selectedMode,
+      settings: { open: settingsOpen, category: settingsCategory },
+      sidebar: { left: sidebarOpen, right: rightSidebarOpen, zen },
+    },
+    accept: acceptDocument,
+    suspend(value) {
+      sessionSuspended.current = value
+      if (value) {
+        setSavingTab(null)
+        startBusy()
+      } else endBusy()
+    },
+    settle: async () => {
+      await Promise.all([
+        savingCommand.current,
+        pendingSave.current,
+        focusQueue.current,
+      ])
+      return !focusUnsafe.current
+    },
+    autosaving: autosaveStatus.saving,
+    error: setError,
+  }
+  const sessionHost = useRef(currentSession)
+  sessionHost.current = currentSession
+  const sessionRef = useRef<Promise<{
+    bootstrap(initial: DocumentState): Promise<void>
+    dispose(): void
+  }> | null>(null)
+  const { knownFlavors, manifests, enabledAddons } = useEditorAddons(
+    addonHost,
+    availableFlavors,
+  )
+  const sessionEnabled =
+    window.hibiObsidianSession?.active || enabledAddons.has('obsidian')
+  useEffect(() => {
+    const bridge = window.hibiObsidianSession
+    if (!bridge || !sessionEnabled) return
+    const session = import('./workspace-session').then(
+      ({ createWorkspaceSession }) =>
+        createWorkspaceSession(
+          bridge,
+          () => sessionHost.current,
+          (shell) => {
+            splitTabsRef.current = shell.split
+            setSplitTabs(shell.split)
+            setSelectedMode(shell.selectedMode)
+            setSettingsOpen(shell.settings.open)
+            setSettingsCategory(shell.settings.category)
+            setSidebarOpen(shell.sidebar.left)
+            setRightSidebarOpen(shell.sidebar.right)
+            setZen(shell.sidebar.zen)
+          },
+        ),
+    )
+    sessionRef.current = session
+    void session.catch((error: unknown) => setError(errorMessage(error)))
+    return () => {
+      void session.then((session) => session.dispose()).catch(() => {})
+    }
+  }, [sessionEnabled, setError])
   useEffect(() => {
     let active = true
     startupMark('bootstrap-document-effect')
     window.hibi.bootstrap
       .document()
-      .then(({ info, document, hotkeys, externalPending, introduction }) => {
-        startupMark('bootstrap-document-result')
-        if (active) {
-          initialExternalPending.current = externalPending
-          setIntroductionOpen(
-            introduction && localStorage.getItem('introduction') === 'pending'
-              ? 'automatic'
-              : null,
-          )
-          void workspaceView.refresh().catch((error: unknown) => {
-            if (active)
-              setError(error instanceof Error ? error.message : String(error))
-          })
-          setInfo(info)
-          acceptDocument(document)
-          setHotkeys(hotkeys)
-        }
-      })
+      .then(
+        async ({ info, document, hotkeys, externalPending, introduction }) => {
+          startupMark('bootstrap-document-result')
+          if (active) {
+            initialExternalPending.current = externalPending
+            setIntroductionOpen(
+              introduction && localStorage.getItem('introduction') === 'pending'
+                ? 'automatic'
+                : null,
+            )
+            void workspaceView.refresh().catch((error: unknown) => {
+              if (active)
+                setError(error instanceof Error ? error.message : String(error))
+            })
+            setInfo(info)
+            // The session installer effect runs before this bootstrap effect.
+            if (window.hibiObsidianSession?.pending)
+              await (await sessionRef.current!).bootstrap(document)
+            else acceptDocument(document)
+            setHotkeys(hotkeys)
+          }
+        },
+      )
       .catch(() => {
         if (active) setFailed(true)
       })
@@ -2439,10 +2441,6 @@ function App() {
     }
   }
 
-  const { knownFlavors, manifests, enabledAddons } = useEditorAddons(
-    addonHost,
-    availableFlavors,
-  )
   const [flavorStatus, setFlavorStatus] = useState<DocumentFlavorStatus>({
     label: 'markdown',
     unsupported: false,
@@ -3448,6 +3446,8 @@ function App() {
             onRemoveAddon={addonHost.remove}
             updatingAddons={addonHost.updating}
             selected={settingsCategory}
+            settingTarget={settingTarget}
+            onTargetShown={setSettingTarget}
             onCategory={setSettingsCategory}
             onSetting={openSetting}
             onWorkspaceChanged={() =>

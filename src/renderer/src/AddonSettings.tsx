@@ -490,6 +490,8 @@ export function AddonSettings({
               )
               const retry = blockedBy.every(enabled)
               const revoked = addonRegistry.revoked(manifest.id)
+              const paused =
+                enabled(manifest.id) && addonRegistry.paused(manifest.id)
               return (
                 <SettingRow
                   key={manifest.id}
@@ -506,6 +508,12 @@ export function AddonSettings({
                     <>
                       {manifest.description}
                       <AddonMetadata manifest={manifest} />
+                      {paused && (
+                        <span className="addon-metadata">
+                          Paused while full computer access is on. Turn off full
+                          access to use this addon, or disable it.
+                        </span>
+                      )}
                       {blockedBy.map((id) => {
                         const dependency = addons.find(
                           (addon) => addon.manifest.id === id,
@@ -527,6 +535,21 @@ export function AddonSettings({
                   }
                 >
                   <div className="addon-actions">
+                    {paused && (
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void run(async () => {
+                            const { revokeFullAccess } = await import(
+                              '../../addons/obsidian/desktop-client'
+                            )
+                            await revokeFullAccess()
+                          })
+                        }
+                      >
+                        Turn off full computer access
+                      </Button>
+                    )}
                     {!revoked &&
                       blockedBy.length > 0 &&
                       providers.every(Boolean) && (

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -21,6 +22,7 @@ import {
   systemPreferences,
 } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
+import type { DesktopWorkspace } from '../addons/obsidian/desktop-native'
 import { ABOUT_CHANNELS, SPONSOR_URL } from '../shared/about'
 import {
   type AddonGardenRequest,
@@ -71,6 +73,7 @@ import {
 } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { OBSIDIAN_DESKTOP } from '../shared/obsidian-desktop'
 import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
@@ -151,6 +154,7 @@ import {
   getDocumentPathForTab,
   getDocumentSource,
   getDocumentSourceFor,
+  getDocumentTabs,
   getOpenDocumentVersions,
   getSavedDocument,
   getUnsavedNotes,
@@ -220,6 +224,7 @@ import {
 import {
   discardRecovery,
   dismissRecovery,
+  flushRecoveryJournal,
   previewRecoverySettings,
   recoveryChanged,
   recoveryOpened,
@@ -568,7 +573,18 @@ setAddonDeactivationHandler(async (id, generation) => {
   closeAddonWindows(id)
   await addonStorage.clearSession(id)
 })
-setAddonStatesHandler(sendAddonWindowStates)
+let desktopWorkspace: DesktopWorkspace | undefined
+let desktopWorkspaceReady: Promise<DesktopWorkspace> | undefined
+setAddonStatesHandler((states) => {
+  sendAddonWindowStates(states)
+  if (
+    desktopWorkspace ||
+    states.some((state) => state.id === 'obsidian' && state.enabled)
+  )
+    void ensureDesktopWorkspace()
+      .then((workspace) => workspace.request())
+      .catch(console.error)
+})
 setAddonWindowOwners(addonWindowOwners)
 addonStorage.subscribe((change) => {
   if (mainWindow && !mainWindow.isDestroyed())
@@ -808,13 +824,14 @@ function trustedWindow(
 ): BrowserWindow {
   if (
     !mainWindow ||
-    event.sender !== mainWindow.webContents ||
+    (event.sender !== mainWindow.webContents &&
+      event.sender !== desktopWorkspace?.previousWindow?.webContents) ||
     event.senderFrame !== event.sender.mainFrame ||
     !isTrustedRendererUrl(event.senderFrame.url, rendererUrl)
   ) {
     throw new Error('untrusted ipc sender')
   }
-  return mainWindow
+  return BrowserWindow.fromWebContents(event.sender) ?? mainWindow
 }
 
 const addonFileUnavailable = () =>
@@ -1088,9 +1105,86 @@ let windowSetupReady = false
 const appendDocumentChange = createJournalReceiver(getDocumentSourceFor)
 const checkpointVerifier = createCheckpointVerifier(getDocumentSourceFor)
 const documentTransfers = createDocumentTransfers()
-function createWindow(): void {
+const workspaceFlushes = new Map<number, () => Promise<void>>()
+async function ensureDesktopWorkspace() {
+  desktopWorkspaceReady ??= import('../addons/obsidian/desktop-native').then(
+    ({ DesktopWorkspace }) => {
+      desktopWorkspace = new DesktopWorkspace({
+        enabled: () =>
+          getAddonStates().some(
+            (state) => state.id === 'obsidian' && state.enabled,
+          ),
+        current: () => mainWindow,
+        generation: () => getAddonActivationGeneration('obsidian'),
+        trusted: (event) => {
+          trustedWindow(event)
+        },
+        prepare: async (window) => {
+          closing = true
+          while (pendingFileOperations.size)
+            await Promise.all(pendingFileOperations)
+          const flush = workspaceFlushes.get(window.id)
+          if (!flush)
+            throw new Error(
+              'Wait for the workspace to finish loading, then try again.',
+            )
+          await flush()
+        },
+        checkpoint: async (window) => {
+          await flushUndoHistory(window)
+          await undoHistoryWritten()
+          await flushRecoveryJournal()
+        },
+        create: (trusted) => {
+          const previous = mainWindow
+          resetAddonSessions()
+          releaseAddonWindows()
+          const next = createWindow(trusted, true)
+          if (!next)
+            throw new Error('Could not create the replacement workspace.')
+          if (previous && !previous.isDestroyed()) {
+            next.setBounds(previous.getBounds())
+            if (previous.isMaximized()) next.maximize()
+          }
+          return next
+        },
+        activate: (window) => {
+          mainWindow = window
+          if (desktopWorkspace?.trusted)
+            app.commandLine.removeSwitch('enable-sandbox')
+          else app.commandLine.appendSwitch('enable-sandbox')
+        },
+        settled: () => {
+          closing = false
+        },
+        documents: () => [
+          ...new Map(
+            [
+              getDocument(),
+              ...getDocumentTabs().flatMap(
+                (tab) => getDocumentForTab(tab.id) ?? [],
+              ),
+            ].map((document) => [document.tabId, document]),
+          ).values(),
+        ],
+      })
+      return desktopWorkspace
+    },
+  )
+  return desktopWorkspaceReady
+}
+
+function createWindow(
+  trusted = desktopWorkspace?.trusted ?? false,
+  workspaceSwap = false,
+): BrowserWindow | undefined {
   if (!windowSetupReady) return
-  closing = false
+  closing = workspaceSwap
+  // Electron 45 checks this switch at each renderer launch. Keep the original
+  // app-wide guard for ordinary workspaces; only a hash-granted realm lifts it.
+  // Every secondary renderer also sets sandbox:true explicitly.
+  if (trusted) app.commandLine.removeSwitch('enable-sandbox')
+  else app.commandLine.appendSwitch('enable-sandbox')
   startupMark('window-start')
   const window = createBrowserWindow({
     width: 1000,
@@ -1111,9 +1205,15 @@ function createWindow(): void {
         }),
     backgroundColor: appearanceColors().background,
     webPreferences: {
-      preload: join(import.meta.dirname, '../preload/index.cjs'),
-      contextIsolation: true,
-      sandbox: true,
+      preload: join(
+        import.meta.dirname,
+        trusted ? '../preload/obsidian-desktop.cjs' : '../preload/index.cjs',
+      ),
+      contextIsolation: !trusted,
+      sandbox: !trusted,
+      ...(workspaceSwap
+        ? { additionalArguments: ['--hibi-workspace-swap'] }
+        : {}),
       nodeIntegration: false,
       webSecurity: true,
       webviewTag: false,
@@ -1123,6 +1223,7 @@ function createWindow(): void {
   startupMark('window-created')
   mainWindow = window
   const stopRecording = () => {
+    if (mainWindow !== window) return
     recordingHotkey = false
     if (!window.isDestroyed()) window.webContents.setIgnoreMenuShortcuts(false)
   }
@@ -1132,17 +1233,20 @@ function createWindow(): void {
   window.on('focus', accessibility.sample)
   window.webContents.on('did-start-loading', stopRecording)
   window.webContents.on('did-start-loading', () => {
+    if (mainWindow !== window) return
     backgroundSettingsReady = false
     globalShortcuts.clear()
     addonHotkeys.clearRegistrations()
     installMenu()
   })
   window.webContents.on('did-start-loading', () => {
+    if (mainWindow !== window) return
     analysisService.cancel()
     checkpointVerifier.clear()
     documentTransfers.clear()
   })
   window.webContents.on('render-process-gone', () => {
+    if (mainWindow !== window) return
     backgroundSettingsReady = false
     stopRecording()
     globalShortcuts.clear()
@@ -1152,6 +1256,7 @@ function createWindow(): void {
     analysisService.cancel()
   })
   window.on('closed', () => {
+    if (mainWindow !== window) return
     backgroundSettingsReady = false
     recordingHotkey = false
     addonHotkeys.clearRegistrations()
@@ -1197,7 +1302,7 @@ function createWindow(): void {
       if (isMainFrame) {
         journalReady = false
         // A Vite or recovery reload can replace a frame before its first finish.
-        if (navigationStarted) resetAddonSessions()
+        if (navigationStarted && mainWindow === window) resetAddonSessions()
         navigationStarted = true
       }
     },
@@ -1254,7 +1359,18 @@ function createWindow(): void {
       flushRequest = undefined
     }
   }
+  workspaceFlushes.set(window.id, async () => {
+    if (!journalReady || rendererGone)
+      throw new Error(
+        'The editor has not confirmed its latest changes. Keep this window open and try again.',
+      )
+    await flushRenderer()
+  })
   window.on('close', (event) => {
+    if (mainWindow !== window) {
+      event.preventDefault()
+      return
+    }
     if (allowClose) return
     cancelImport(window.id)
     event.preventDefault()
@@ -1319,15 +1435,17 @@ function createWindow(): void {
   })
   window.once('ready-to-show', () => {
     startupMark('window-painted')
-    if (testing) return
+    if (testing || workspaceSwap) return
     if (!app.isPackaged && app.commandLine.hasSwitch('user-data-dir'))
       window.showInactive()
     else window.show()
   })
   window.on('closed', () => {
+    workspaceFlushes.delete(window.id)
+    ipcMain.removeListener(DOCUMENT_CHANNELS.flushed, flushed)
+    if (mainWindow !== window) return
     resetAddonSessions()
     onUpdateInstallFailure()
-    ipcMain.removeListener(DOCUMENT_CHANNELS.flushed, flushed)
     flushRequest?.reject(
       new Error('The editor closed before confirming its changes.'),
     )
@@ -1348,6 +1466,7 @@ function createWindow(): void {
     event.preventDefault(),
   )
   window.webContents.on('render-process-gone', (_event, details) => {
+    if (mainWindow !== window) return
     resetAddonSessions()
     rendererGone = true
     flushRequest?.resolve()
@@ -1376,7 +1495,10 @@ function createWindow(): void {
     rendererGone = false
   })
   localDiagnostics.observeWindow(window)
-  void window.loadURL(rendererUrl).catch((error: unknown) => {
+  void (async () => {
+    await desktopWorkspace?.attach(window, trusted)
+    await window.loadURL(rendererUrl)
+  })().catch((error: unknown) => {
     // Vite dependency optimization can replace the initial navigation with a reload.
     if (
       !app.isPackaged &&
@@ -1390,6 +1512,7 @@ function createWindow(): void {
     journalReady = false
     void showStartupError(error, window)
   })
+  return window
 }
 
 // The renderer runs a command that arrives during a file operation once the
@@ -3119,6 +3242,35 @@ if (!app.requestSingleInstanceLock()) {
           mainWindow?.setTitleBarOverlay(titleBarColors())
         refreshAddonWindowColors()
       })
+      // Only an existing plugin profile can carry a persisted full-access grant.
+      // This is a readiness hint; the store still verifies every hash and grant below.
+      if (existsSync(join(app.getPath('userData'), 'obsidian', 'global')))
+        await addonsReady
+      if (
+        getAddonStates().some(
+          (state) => state.id === 'obsidian' && state.enabled,
+        )
+      ) {
+        const workspace = await ensureDesktopWorkspace()
+        await workspace.initialize()
+      }
+      handle(OBSIDIAN_DESKTOP.restore, (event) => {
+        const restored = desktopWorkspace?.restore(event)
+        return restored
+          ? {
+              ...restored,
+              documents: restored.documents.map((document) =>
+                documentTransfers.encode(
+                  event.sender.id,
+                  document,
+                  false,
+                  true,
+                ),
+              ),
+            }
+          : null
+      })
+      handle(OBSIDIAN_DESKTOP.ready, (event) => desktopWorkspace?.ready(event))
       windowSetupReady = true
       createWindow()
       await preferences

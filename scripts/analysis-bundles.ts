@@ -42,6 +42,7 @@ export function sandboxPreloads(): Plugin {
   const entries = {
     'analysis.cjs': 'src/preload/analysis.ts',
     'addon-window.cjs': 'src/preload/addon-window.ts',
+    'obsidian-desktop.cjs': 'src/preload/obsidian-desktop.ts',
   }
   return {
     name: 'sandbox-preloads',
@@ -53,6 +54,16 @@ export function sandboxPreloads(): Plugin {
           format: 'cjs',
           platform: 'node',
           external: ['electron'],
+          ...(fileName === 'obsidian-desktop.cjs'
+            ? {
+                inject: [resolve('src/preload/obsidian-node-globals.ts')],
+                define: {
+                  'import.meta.env.DEV': String(
+                    process.env.NODE_ENV_ELECTRON_VITE === 'development',
+                  ),
+                },
+              }
+            : {}),
           write: false,
           metafile: true,
           target: 'node24',

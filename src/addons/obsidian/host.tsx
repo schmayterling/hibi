@@ -1,3 +1,4 @@
+import { hasRestoredWorkspace } from '../../renderer/src/workspace-session'
 import type { AddonContext } from '../api'
 import './api/vault/index'
 import './api/metadata/index'
@@ -10,6 +11,8 @@ import css from './style.css?inline'
 /** Global packages get fresh, captured file services whenever the open folder changes. */
 export function startObsidianHost(hibi: AddonContext): () => void {
   let active = true
+  let suspended =
+    !!window.hibiObsidianSession?.pending && !hasRestoredWorkspace()
   let sequence = 0
   let identity = ''
   let host: ObsidianHost | null = null
@@ -42,6 +45,7 @@ export function startObsidianHost(hibi: AddonContext): () => void {
     }
   }
   const reconcile = async () => {
+    if (suspended) return
     const request = ++sequence
     const workspace = await hibi.workspace.get()
     if (!active || request !== sequence) return
@@ -67,12 +71,26 @@ export function startObsidianHost(hibi: AddonContext): () => void {
       host?.unload(detail.id)
     void refresh().catch(failed)
   }
+  const suspend = () => {
+    suspended = true
+    sequence++
+    const previous = host
+    host = null
+    identity = ''
+    previous?.stop()
+  }
+  const resume = () => {
+    suspended = false
+    void reconcile().catch(failed)
+  }
+  window.addEventListener('hibi:obsidian-workspace-suspend', suspend)
+  window.addEventListener('hibi:obsidian-workspace-resume', resume)
   window.addEventListener('hibi:obsidian-community-installed', changed)
   window.addEventListener('hibi:obsidian-host-state-request', reportState)
   // A pending plugin onload cannot delay activation or host shutdown.
   void hibi.workspace
     .subscribeChanges((event) => {
-      if (!active || event.kind !== 'resync') return
+      if (!active || suspended || event.kind !== 'resync') return
       // Invalidate captured services synchronously, before other resync listeners run.
       const previous = host
       host = null
@@ -92,6 +110,8 @@ export function startObsidianHost(hibi: AddonContext): () => void {
     active = false
     sequence++
     subscription?.dispose()
+    window.removeEventListener('hibi:obsidian-workspace-suspend', suspend)
+    window.removeEventListener('hibi:obsidian-workspace-resume', resume)
     window.removeEventListener('hibi:obsidian-community-installed', changed)
     window.removeEventListener('hibi:obsidian-host-state-request', reportState)
     styles.dispose()

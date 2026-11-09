@@ -21,8 +21,10 @@ must stay in native handlers, never in App services.
 
 The editor lane calls `registerObsidianHostModule(name, module)` with its actual
 CodeMirror/Lezer modules. Only exact registered `@codemirror/*` and `@lezer/*`
-module names resolve. Node, Electron, relative imports, and arbitrary packages
-are refused.
+module names resolve in the portable loader. It refuses Node, Electron, relative
+imports, and arbitrary packages. Plugins with an explicit full-computer-access
+grant instead use the trusted workspace's real Node and Electron loader; see
+[the addon guide](../README.md).
 
 Native network authority is held in each plugin load's private closure. The
 renderer obtains a sender- and package-bound load ticket through

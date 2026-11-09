@@ -82,7 +82,7 @@ test('obsidian packages and overlays stay outside the source vault', async (t) =
   )
 })
 
-test('package reader refuses desktop-only, oversized, invalid utf-8, symlink and remote css assets', async (t) => {
+test('package reader accepts desktop manifests but refuses oversized, invalid utf-8, symlink and remote css assets', async (t) => {
   const server = await createServer({
     configFile: false,
     optimizeDeps: { noDiscovery: true, include: [] },
@@ -109,13 +109,10 @@ test('package reader refuses desktop-only, oversized, invalid utf-8, symlink and
       parseObsidianManifest({ ...fixture.plugin.manifest, id: '../escape' }),
     /manifest/,
   )
-  assert.throws(
-    () =>
-      parseObsidianManifest({
-        ...fixture.plugin.manifest,
-        isDesktopOnly: true,
-      }),
-    /Desktop-only/,
+  assert.equal(
+    parseObsidianManifest({ ...fixture.plugin.manifest, isDesktopOnly: true })
+      .isDesktopOnly,
+    true,
   )
   await writeFile(join(folder, 'main.js'), Buffer.from([0xc3, 0x28]))
   await assert.rejects(readObsidianPackage(folder), /encoded data|encoding/)

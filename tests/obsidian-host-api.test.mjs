@@ -452,6 +452,44 @@ test('plugin command IDs survive replacement by a package with a new content has
   assert.equal(typeof HTMLElement.prototype.createEl, 'undefined')
 })
 
+test('trusted workspace holds enabled plugins without their own full-access grant before any source runs', async (t) => {
+  const load = await modules(t)
+  const { ObsidianHost } = await load('runtime.ts')
+  const fixture = await readFixturePlugin('host-smoke')
+  const document = fakeDom(t)
+  window.hibiObsidianDesktop = {
+    load() {
+      throw new Error('ordinary plugin reached Node')
+    },
+  }
+  const descriptor = {
+    manifest: fixture.manifest,
+    hash: 'a'.repeat(64),
+    enabled: true,
+    hasStyles: false,
+  }
+  const host = new ObsidianHost(
+    {
+      native: {
+        query: async (method) => (method === 'list' ? [descriptor] : null),
+      },
+    },
+    'empty',
+  )
+  t.after(() => host.stop())
+  await host.start()
+  assert.equal(host.plugins.size, 0)
+  assert.match(
+    host.errors.get(descriptor.manifest.id),
+    /Paused.*full computer access/,
+  )
+  assert.equal(document.head.children.length, 0)
+  assert.equal(typeof HTMLElement.prototype.createEl, 'undefined')
+  descriptor.enabled = false
+  await host.refresh()
+  assert.equal(host.errors.has(descriptor.manifest.id), false)
+})
+
 test('disabling a plugin cancels resources during pending onload and cannot revive it', async (t) => {
   const load = await modules(t)
   const { ObsidianHost } = await load('runtime.ts')

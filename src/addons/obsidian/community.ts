@@ -435,10 +435,7 @@ export class CommunityService {
           ).bytes,
         ),
       )
-      const manifest = parseObsidianManifest({
-        ...rawManifest,
-        isDesktopOnly: false,
-      })
+      const manifest = parseObsidianManifest(rawManifest)
       if (
         manifest.id !== entry.id ||
         typeof rawManifest.isDesktopOnly !== 'boolean'
@@ -448,9 +445,7 @@ export class CommunityService {
         )
       result.version = manifest.version
       result.minAppVersion = manifest.minAppVersion
-      if (rawManifest.isDesktopOnly)
-        result.unsupported =
-          'Desktop-only plugins requiring Node.js or Electron are not supported.'
+      result.desktopOnly = manifest.isDesktopOnly
     } catch (error) {
       signal.throwIfAborted()
       result.error = [result.error, errorMessage(error)]

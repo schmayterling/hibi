@@ -428,7 +428,10 @@ export function useAddons(
         manifests,
         states.map((state) => ({
           ...state,
-          enabled: state.enabled && settled.get(state.id) !== false,
+          enabled:
+            state.enabled &&
+            settled.get(state.id) !== false &&
+            !addonRegistry.paused(state.id),
         })),
       ),
     [manifests, states, settled],

@@ -22,7 +22,7 @@ export type CommunityDetails = {
   release: string | null
   version?: string
   minAppVersion?: string
-  unsupported?: string
+  desktopOnly?: boolean
   error?: string
 }
 export const validCommunityRepo = (value: unknown): value is string =>

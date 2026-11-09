@@ -1,9 +1,4 @@
-import {
-  contextBridge,
-  ipcRenderer as transport,
-  webFrame,
-  webUtils,
-} from 'electron'
+import { ipcRenderer as transport, webFrame, webUtils } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS } from '../shared/about'
 import { ADDON_HOTKEY_CHANNELS } from '../shared/addon-hotkeys'
@@ -63,10 +58,12 @@ import {
   type WorkspaceStreamSnapshot,
 } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
+import { executionBridge, expose } from './expose'
 import {
   DiagnosticProducer,
   installStartupDiagnostics,
 } from './local-diagnostics'
+import { obsidianSession } from './obsidian-session'
 
 if (process.isMainFrame) {
   // A trusted native cut is a user gesture even after page activation expires.
@@ -85,12 +82,12 @@ if (process.isMainFrame) {
     try {
       stopStartupDiagnostics = installStartupDiagnostics(
         diagnostics,
-        contextBridge,
+        executionBridge,
       )
     } catch {
       /* Losing pre-entry observation must not disable renderer diagnostics. */
     }
-    contextBridge.exposeInMainWorld('hibiDiagnostics', {
+    expose('hibiDiagnostics', {
       record: (wire: unknown) => diagnostics.record(wire),
       configuration: () => {
         stopStartupDiagnostics()
@@ -179,6 +176,7 @@ if (process.isMainFrame) {
     )
   })
   transport.send(DOCUMENT_CHANNELS.flushed, 'ready', null)
+  expose('hibiObsidianSession', obsidianSession(transport, journal.flush))
   let externalPending = false
   ipcRenderer.on(DOCUMENT_CHANNELS.externalPending, () => {
     externalPending = true
@@ -266,7 +264,7 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   let backgroundSettingsReady = false
-  contextBridge.exposeInMainWorld('hibiTransport', {
+  expose('hibiTransport', {
     openDocumentTransfer: (tabId) =>
       transport.invoke(DOCUMENT_CHANNELS.transferOpen, tabId),
     readDocumentTransfer: (request) =>

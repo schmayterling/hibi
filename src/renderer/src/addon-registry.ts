@@ -4,7 +4,14 @@ import type { Addon, AddonManifest, MarkdownFlavor } from '../../addons/api'
 import type { ColorschemeInput } from '../../shared/colorschemes'
 import type { InstalledAddon } from '../../shared/sideload'
 import { startupSpan } from '../../shared/startup'
-import { type Definition, normalizeDefinition } from './addon-definition'
+import type { Definition } from './addon-definition'
+
+const normalizeDefinition: typeof import('./addon-definition').normalizeDefinition =
+  async (...args) =>
+    (await import('./addon-definition')).normalizeDefinition(...args)
+
+const trustedWorkspace = () =>
+  typeof window !== 'undefined' && !!window.hibiObsidianDesktop
 
 const origins = new Map(
   catalog.map(({ manifest, source }) => [manifest.id, source]),
@@ -173,6 +180,14 @@ export const addonRegistry = {
     }
   },
   isInstalled: (id: string) => installed.has(id),
+  paused(id: string) {
+    const entry = installed.get(id)
+    return !!(
+      trustedWorkspace() &&
+      entry &&
+      entry.addon.manifest.kind !== 'theme'
+    )
+  },
   /** Declared stylesheet URLs and color schemes; `reread` validates an installed package's current files again. */
   resources: async (
     id: string,
@@ -222,16 +237,17 @@ export const addonRegistry = {
         signature,
         ...describeAddon(
           item.manifest,
-          () =>
-            url
-              ? import(/* @vite-ignore */ url).then(
-                  (module: { default?: unknown }) => module.default,
-                )
-              : Promise.reject(
-                  new Error(
-                    'This addon is missing its startup file. Reinstall it.',
-                  ),
-                ),
+          async () => {
+            if (trustedWorkspace())
+              throw new Error(
+                'Installed addons are paused while full computer access is on. Turn off full access or disable this addon.',
+              )
+            if (!url)
+              throw new Error(
+                'This addon is missing its startup file. Reinstall it.',
+              )
+            return (await import(/* @vite-ignore */ url)).default
+          },
           { themes: item.themes },
         ),
         source: item.source ?? 'local',

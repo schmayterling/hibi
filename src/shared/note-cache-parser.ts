@@ -2,6 +2,7 @@ import type { SyntaxNode } from '@lezer/common'
 import type { Element, MarkdownConfig } from '@lezer/markdown'
 import { isMap, isScalar, isSeq, type Node, parseDocument } from 'yaml'
 import { boundarySyntax } from './markdown-boundary-syntax.ts'
+import { createPlainTextRunExtension } from './markdown-plain-text-runs.ts'
 import { metadataParsers } from './markdown-worker-parser.ts'
 import type {
   Loc,
@@ -110,25 +111,7 @@ function frontmatter(
   }
 }
 
-// Plain runs have no inline grammar opener. Let the same parser jump to its
-// next candidate rather than trying every inline rule at every body character.
-const inlineCandidate =
-  /[\\\\&`<*_![\]~$=\n]| {2,}(?=\n)|www\.|https?:\/\/|(?<!\w)[\w.+-]{1,100}@|mailto:|xmpp:/g
-const plainRuns: MarkdownConfig = {
-  parseInline: [
-    {
-      name: 'NotePlainRun',
-      parse(cx, next, pos) {
-        // Lezer keeps its link closer after contributed inline rules.
-        if (next === 93) return -1
-        inlineCandidate.lastIndex = pos - cx.offset + 1
-        return (
-          cx.offset + (inlineCandidate.exec(cx.text)?.index ?? cx.text.length)
-        )
-      },
-    },
-  ],
-}
+const plainRuns = createPlainTextRunExtension()
 const parserCache = new Map<string, (typeof metadataParsers)['gfm']>()
 function cacheParser(syntax: NoteSyntax) {
   const key = `${Number(syntax.gfm)}:${Number(syntax.wikilinks)}`
@@ -147,7 +130,7 @@ function cacheParser(syntax: NoteSyntax) {
         : []),
       boundarySyntax['math-inline@1'],
       boundarySyntax['math-block@1'],
-      plainRuns,
+      plainRuns.extension,
     ])
     parserCache.set(key, parser)
   }
@@ -216,6 +199,7 @@ export function noteCacheParse(
     }
     parser = parser.configure(config)
   }
+  plainRuns.allow(parser)
   // Replacing the BOM with one space keeps every source coordinate unchanged.
   const tree = parser.parse({
     length: input.length,

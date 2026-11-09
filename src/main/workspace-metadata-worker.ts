@@ -518,6 +518,10 @@ async function readHeadings(
   return readHeadingStore(base, record.headings, offset, limit, complete)
 }
 
+// Rich descriptors stay worker-owned; ordinary metadata pages carry only index projections.
+const metadataProjection = (page: WorkspaceMetadataPage | null) =>
+  page && { ...page, details: undefined }
+
 async function* resultPages(
   requests: readonly CachedMetadataRequest[],
 ): AsyncGenerator<RecordSlice> {
@@ -529,7 +533,7 @@ async function* resultPages(
   for (const request of requests) {
     // Release each derived record before opening the next. No batch-sized heap.
     const page = available ? await cached(request) : null
-    for (const tokens of writer.write(recordTokens(page)))
+    for (const tokens of writer.write(recordTokens(metadataProjection(page))))
       yield { tokens, done: false }
   }
   for (const tokens of writer.write([']'])) yield { tokens, done: false }
@@ -538,7 +542,9 @@ async function* resultPages(
 
 async function* resultPage(value: unknown): AsyncGenerator<RecordSlice> {
   const writer = new RecordWriter()
-  for (const tokens of writer.write(recordTokens(value)))
+  for (const tokens of writer.write(
+    recordTokens(metadataProjection(value as WorkspaceMetadataPage)),
+  ))
     yield { tokens, done: false }
   yield { tokens: writer.finish(), done: true }
 }

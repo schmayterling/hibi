@@ -73,8 +73,8 @@ async function fixture(t, persistent = true) {
       await parser.close()
       parser = new WorkspaceMetadataParser(() => options)
     },
-    parse(source, extra = {}) {
-      return parser.request(
+    async parse(source, extra = {}) {
+      const page = await parser.request(
         {
           kind: 'parse',
           page: { id, path: input.path, markdown: source },
@@ -85,6 +85,14 @@ async function fixture(t, persistent = true) {
         },
         current,
       )
+      assert.equal(Object.hasOwn(page, 'details'), false)
+      const detailPage = await parser.readDetails(
+        { ...request, version: extra.version ?? input.version },
+        0,
+        current,
+      )
+      assert.ok(detailPage)
+      return { ...page, details: detailPage.source }
     },
   }
 }
@@ -106,6 +114,8 @@ async function entries(parser, request, source) {
   reader.finish()
   return { result, pages }
 }
+
+const indexProjection = ({ details, ...page }) => page
 
 function decodeRecord(text) {
   const reader = new RecordReader()
@@ -176,7 +186,10 @@ test('worker pages huge nested fields with opaque descriptor, then reopens witho
   const headings = await host.parser.readHeadings(request, 0, 10, current)
   assert.deepEqual(headings.items, [heading])
   await host.reopen()
-  assert.deepEqual(await host.parser.request(request, current), page)
+  assert.deepEqual(
+    await host.parser.request(request, current),
+    indexProjection(page),
+  )
   assert.deepEqual(
     (await entries(host.parser, request, page.details)).result,
     streamed.result,
@@ -304,7 +317,10 @@ test('rich detail files reject symlinks; invalid YAML and fallback mark incomple
   const headings = await host.parser.readHeadings(request, 0, 10, current)
   assert.equal(headings.items[0].position, undefined)
   await host.reopen()
-  assert.deepEqual(await host.parser.request(request, current), fallback)
+  assert.deepEqual(
+    await host.parser.request(request, current),
+    indexProjection(fallback),
+  )
   assert.deepEqual(
     (await entries(host.parser, request, fallback.details)).result,
     [],

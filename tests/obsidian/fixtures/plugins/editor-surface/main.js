@@ -1,6 +1,7 @@
 const {
   Plugin,
   MarkdownRenderChild,
+  MarkdownRenderer,
   editorInfoField,
   editorLivePreviewField,
 } = require('obsidian')
@@ -12,7 +13,7 @@ const {
   keymap,
 } = require('@codemirror/view')
 
-const fixture = { sections: [], unloaded: 0 }
+const fixture = { sections: [], paths: [], unloaded: 0 }
 window.__hibiEditorFixture = fixture
 
 const changes = StateField.define({
@@ -54,6 +55,11 @@ const broken = StateField.define({
 
 module.exports = class EditorSurface extends Plugin {
   onload() {
+    fixture.render = async (markdown) => {
+      const el = document.createElement('div')
+      await MarkdownRenderer.render(this.app, markdown, el, 'note.md', this)
+      return el.innerHTML
+    }
     this.registerEditorExtension([
       changes,
       todos,
@@ -81,6 +87,7 @@ module.exports = class EditorSurface extends Plugin {
       (source, el, ctx) => {
         el.textContent = `lines: ${source.split('\n').length}`
         fixture.sections.push(ctx.getSectionInfo(el))
+        fixture.paths.push(ctx.sourcePath)
         ctx.addChild(new MarkdownRenderChild(el))
       },
     )

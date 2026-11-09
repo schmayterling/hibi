@@ -19,6 +19,7 @@ function session(raw) {
   const state = { raw, version: 1, undo: [], redo: [], selection: [0, 0] }
   const requests = []
   const notices = []
+  const completions = new Set()
   const features = { source: new Map(), formatted: new Map() }
   const panes = ['left', 'right'].map((viewId) => ({
     ...document,
@@ -57,6 +58,11 @@ function session(raw) {
       registerSource: register(features.source),
       registerFormatted: register(features.formatted),
       renderMarkdown: (source) => ({ html: `<p>${source}</p>`, css: '' }),
+      async registerCompletionProvider(provider, options) {
+        const entry = { provider, options }
+        completions.add(entry)
+        return () => completions.delete(entry)
+      },
       async runCommand(command) {
         const [from, to] =
           command === 'undo'
@@ -100,17 +106,25 @@ function session(raw) {
     editorViews: {
       list: () => panes,
       getActive: () => panes[0],
-      getSelection: (view) => ({
-        ok: true,
-        value: {
-          view,
-          editor: 'source',
-          editorGeneration: 1,
-          contentVersion: state.version,
-          anchor: state.selection[0],
-          head: state.selection[1],
-        },
-      }),
+      getSelection: (view) =>
+        panes.some(
+          (pane) =>
+            pane.viewId === view.viewId &&
+            pane.viewGeneration === view.viewGeneration &&
+            pane.documentGeneration === view.documentGeneration,
+        )
+          ? {
+              ok: true,
+              value: {
+                view,
+                editor: 'source',
+                editorGeneration: 1,
+                contentVersion: state.version,
+                anchor: state.selection[0],
+                head: state.selection[1],
+              },
+            }
+          : { ok: false, code: 'stale', message: 'This editor view changed.' },
       setSelection(selection) {
         state.selection = [selection.anchor, selection.head]
         return { ok: true, value: undefined }
@@ -125,7 +139,16 @@ function session(raw) {
         feature.create({ viewId }),
       ),
     })
-  return { hibi, state, requests, notices, features, panes, editorState }
+  return {
+    hibi,
+    state,
+    requests,
+    notices,
+    features,
+    panes,
+    editorState,
+    completions,
+  }
 }
 
 async function host(t, hibi) {
@@ -342,28 +365,80 @@ test('code block processors render fences in the formatted view until unload', a
   await vault.assertUnchanged()
 })
 
-test('editor suggestions are refused once per plugin without failing its load', async (t) => {
-  const { hibi, notices } = session('')
-  const { load, exports } = await host(t, hibi)
-  const plugin = await load({
+test('EditorSuggest triggers, lists, renders and selects through Hibi completions until unload', async (t) => {
+  const { hibi, state, requests, panes, completions } = session('hi @al\r\n')
+  const { load } = await host(t, hibi)
+  const { plugin } = await load({
     plugin: {
-      manifest: { id: 'suggest', name: 'Suggest' },
+      manifest: { id: 'mention', name: 'Mention' },
       main: `const { Plugin, EditorSuggest } = require('obsidian')
-        class Suggest extends EditorSuggest {}
+        class People extends EditorSuggest {
+          onTrigger(cursor, editor) {
+            const line = editor.getLine(cursor.line).slice(0, cursor.ch)
+            const at = line.lastIndexOf('@')
+            if (at < 0) return null
+            return {
+              start: { line: cursor.line, ch: at },
+              end: cursor,
+              query: line.slice(at + 1),
+            }
+          }
+          async getSuggestions(context) {
+            return ['alice', 'alan', 'bob'].filter((name) =>
+              name.startsWith(context.query),
+            )
+          }
+          renderSuggestion(value, el) {
+            el.textContent = value
+          }
+          selectSuggestion(value) {
+            const { editor, start, end } = this.context
+            editor.replaceRange('@' + value + ' ', start, end)
+          }
+        }
         module.exports = class extends Plugin {
           onload() {
-            this.registerEditorSuggest(new Suggest(this.app))
-            this.registerEditorSuggest(new Suggest(this.app))
-            this.loaded = true
+            this.registerEditorSuggest(new People(this.app))
           }
         }`,
     },
   })
-  assert.equal(plugin.plugin.loaded, true)
-  assert.deepEqual(notices, [
-    'Suggest: editor suggestions are not supported in Hibi.',
-  ])
-  assert.equal(typeof exports.EditorSuggest, 'function')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(completions.size, 1)
+  const [{ provider, options }] = completions
+  const request = (head) => ({
+    view: panes[0],
+    contentVersion: state.version,
+    editor: 'source',
+    documentLength: 6,
+    selection: { anchor: head, head },
+    before: '',
+    after: '',
+    trigger: { kind: 'input', character: 'l' },
+  })
+  const signal = new AbortController().signal
+  assert.deepEqual(await provider(request(2), signal), [])
+  const items = await provider(request(6), signal)
+  assert.deepEqual(
+    items.map(({ label, from, to, insertText }) => [
+      label,
+      from,
+      to,
+      insertText,
+    ]),
+    [
+      ['alice', 3, 6, ''],
+      ['alan', 3, 6, ''],
+    ],
+  )
+  const element = { textContent: '' }
+  options.render(items[1], element)
+  assert.equal(element.textContent, 'alan')
+  options.onSelect(request(6), items[0])
+  assert.equal(requests.length, 1)
+  assert.equal(state.raw, 'hi @alice \r\n')
+  plugin.unload()
+  assert.equal(completions.size, 0)
 })
 
 test('plugins import the editor’s own CodeMirror and Lezer modules', async () => {
@@ -400,4 +475,115 @@ test('undo and redo act on the captured pane, never the focused one', async (t) 
   await Promise.resolve()
   assert.equal(commands, 1)
   assert.equal(state.raw, 'one\r\n')
+})
+
+test('an editor whose pane moved to another note refuses instead of retargeting', async (t) => {
+  const { hibi, state, panes } = session('first\r\n')
+  let commands = 0
+  hibi.editor.runCommand = async () => {
+    commands++
+    return true
+  }
+  const { commandEditor } = await host(t, hibi)
+  const { editor, view } = commandEditor(panes[0])
+  // The pane's mounted view, as Hibi's editor reports it.
+  const dispatched = []
+  const cm = {
+    state: EditorState.create({ doc: 'first\n' }),
+    dispatch: (spec) => dispatched.push(spec),
+  }
+  view.runtime.views.set('left:source', cm)
+  assert.equal(editor.cm, cm)
+
+  // The same pane now shows another note.
+  panes[0] = {
+    ...panes[0],
+    documentId: 'other',
+    viewGeneration: 2,
+    documentGeneration: 2,
+  }
+  assert.equal(editor.cm, null)
+  assert.throws(
+    () => editor.setCursor({ line: 0, ch: 1 }),
+    /no longer open in its pane/,
+  )
+  assert.throws(() => editor.undo(), /no longer open in its pane/)
+  assert.throws(() => editor.getCursor(), /no longer open in its pane/)
+  assert.deepEqual(dispatched, [])
+  assert.equal(commands, 0)
+  assert.equal(state.raw, 'first\r\n')
+})
+
+test('setSelections keeps every range for the editor api and edits them in one step', async (t) => {
+  const { hibi, state, requests, panes } = session('ab\r\ncd\r\nef\r\n')
+  const { commandEditor } = await host(t, hibi)
+  const { editor } = commandEditor(panes[0])
+  editor.setSelections(
+    [
+      { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
+      { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
+    ],
+    1,
+  )
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
+    { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
+  ])
+  // The drawn selection is the main range.
+  assert.equal(editor.getSelection(), 'e')
+  editor.replaceSelection('X')
+  assert.equal(requests.length, 1)
+  assert.equal(state.raw, 'Xb\r\ncd\r\nXf\r\n')
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 1 }, head: { line: 0, ch: 1 } },
+    { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
+  ])
+  // Moving the drawn selection elsewhere drops the extra ranges.
+  editor.setCursor({ line: 1, ch: 0 })
+  assert.equal(editor.listSelections().length, 1)
+})
+
+test('wordAt reads whole code points, including astral letters', async (t) => {
+  const { hibi, panes } = session('a 𠀀𠀁x b 😀 c\r\n')
+  const { commandEditor } = await host(t, hibi)
+  const { editor } = commandEditor(panes[0])
+  const word = { from: { line: 0, ch: 2 }, to: { line: 0, ch: 7 } }
+  assert.deepEqual(editor.wordAt({ line: 0, ch: 2 }), word)
+  // Inside a surrogate pair, and at its end.
+  assert.deepEqual(editor.wordAt({ line: 0, ch: 3 }), word)
+  assert.deepEqual(editor.wordAt({ line: 0, ch: 7 }), word)
+  // Emoji are not word characters, as in CodeMirror's word categories.
+  assert.equal(editor.wordAt({ line: 0, ch: 11 }), null)
+})
+
+test('a transaction keeps its selection ranges: changes move them, never add carets', async (t) => {
+  const { hibi, state, requests, panes } = session('ab\r\ncd\r\nef\r\n')
+  const { commandEditor } = await host(t, hibi)
+  const { editor } = commandEditor(panes[0])
+  editor.setSelections(
+    [
+      { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
+      { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
+    ],
+    0,
+  )
+  editor.transaction({
+    replaceSelection: 'X',
+    changes: [{ from: { line: 1, ch: 0 }, text: '!' }],
+  })
+  assert.equal(requests.length, 1)
+  assert.equal(state.raw, 'Xb\r\n!cd\r\nXf\r\n')
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 1 }, head: { line: 0, ch: 1 } },
+    { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
+  ])
+  // The main range is still the first.
+  assert.deepEqual(editor.getCursor(), { line: 0, ch: 1 })
+
+  // Changes alone map the ranges through the edit.
+  editor.transaction({ changes: [{ from: { line: 0, ch: 0 }, text: '>> ' }] })
+  assert.deepEqual(editor.listSelections(), [
+    { anchor: { line: 0, ch: 4 }, head: { line: 0, ch: 4 } },
+    { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
+  ])
 })

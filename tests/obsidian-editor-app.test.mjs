@@ -29,6 +29,34 @@ const editors = (page) =>
       })),
   )
 
+/**
+ * Mod-Alt-j sent straight to one editor, whichever element has focus: whether
+ * a key binding took it, and the editor's text after.
+ */
+const pressStamp = (page, selector) =>
+  page.evaluate(
+    ({ selector, mac }) => {
+      const editor = document.querySelector(selector).cmTile.root.view
+      editor.dispatch({ selection: { anchor: editor.state.doc.length } })
+      const event = new KeyboardEvent('keydown', {
+        key: 'j',
+        code: 'KeyJ',
+        keyCode: 74,
+        altKey: true,
+        metaKey: mac,
+        ctrlKey: !mac,
+        bubbles: true,
+        cancelable: true,
+      })
+      editor.contentDOM.dispatchEvent(event)
+      return {
+        taken: event.defaultPrevented,
+        text: editor.state.doc.toString(),
+      }
+    },
+    { selector, mac: process.platform === 'darwin' },
+  )
+
 async function command(app, page, name) {
   await clickMenu(app, 'Command palette')
   const palette = page.getByRole('dialog', { name: /^command palette$/i })
@@ -169,12 +197,9 @@ test('obsidian editor extensions, commands and code blocks run in every pane and
 
   // The keymap runs in the source pane.
   const source = '.source-pane .cm-content'
-  await page.evaluate((selector) => {
-    const editor = document.querySelector(selector).cmTile.root.view
-    editor.focus()
-    editor.dispatch({ selection: { anchor: editor.state.doc.length } })
-  }, source)
-  await page.keyboard.press(`${mod === 'Meta' ? 'Meta' : 'Control'}+Alt+j`)
+  const pressed = await pressStamp(page, source)
+  assert.equal(pressed.taken, true)
+  assert.ok(pressed.text.endsWith('end\n[stamp]'))
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.endsWith('end\r\n[stamp]'),
   )
@@ -219,6 +244,41 @@ test('obsidian editor extensions, commands and code blocks run in every pane and
   ])
   assert.ok(split.every(({ other, todo }) => other === 'yes' && todo === 1))
 
+  // A block renders with its own pane's note while the other pane has focus.
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'other.md',
+  )
+  const renders = await page.evaluate(
+    () => window.__hibiEditorFixture.paths.length,
+  )
+  await page.evaluate(() => {
+    const editor = document.querySelector(
+      '.editor-page[data-side="left"] .rich-pane .cm-content',
+    ).cmTile.root.view
+    const at = editor.state.doc.toString().indexOf('b\n```')
+    editor.dispatch({ changes: { from: at, to: at + 1, insert: 'c' } })
+  })
+  await waitForAsync(
+    page,
+    (renders) => window.__hibiEditorFixture.paths.length > renders,
+    renders,
+  )
+  assert.equal(
+    await page.evaluate(() => window.__hibiEditorFixture.paths.at(-1)),
+    'note.md',
+  )
+
+  // MarkdownRenderer output keeps markup but drops inline styles.
+  const rendered = await page.evaluate(() =>
+    window.__hibiEditorFixture.render(
+      '<div style="position:fixed;inset:0;z-index:2147483647">cover</div>\n\n**bold**',
+    ),
+  )
+  assert.match(rendered, /<strong>bold<\/strong>/)
+  assert.match(rendered, /cover/)
+  assert.doesNotMatch(rendered, /style=/)
+
   // Unload removes every decoration, attribute and key.
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
@@ -235,32 +295,16 @@ test('obsidian editor extensions, commands and code blocks run in every pane and
       ),
   )
   // The removed key does nothing in a pane it ran in before.
-  const pane = '.editor-page[data-side="left"] .source-pane .cm-content'
-  const text = () =>
-    page.evaluate(
-      (pane) =>
-        document.querySelector(pane).cmTile.root.view.state.doc.toString(),
-      pane,
-    )
-  await page.evaluate((pane) => {
-    const editor = document.querySelector(pane).cmTile.root.view
-    editor.focus()
-    editor.dispatch({ selection: { anchor: editor.state.doc.length } })
-  }, pane)
-  await waitForAsync(
-    page,
-    (pane) => document.activeElement === document.querySelector(pane),
-    pane,
+  const left = '.editor-page[data-side="left"] .source-pane .cm-content'
+  const stamped = await page.evaluate(
+    (left) =>
+      document.querySelector(left).cmTile.root.view.state.doc.toString(),
+    left,
   )
-  const unchanged = await text()
-  assert.ok(unchanged.endsWith('[stamp]'))
-  await page.keyboard.press(`${mod === 'Meta' ? 'Meta' : 'Control'}+Alt+j`)
-  await page.evaluate(
-    () =>
-      new Promise((done) =>
-        requestAnimationFrame(() => requestAnimationFrame(done)),
-      ),
-  )
-  assert.equal(await text(), unchanged)
+  assert.ok(stamped.endsWith('[stamp]'))
+  assert.deepEqual(await pressStamp(page, left), {
+    taken: false,
+    text: stamped,
+  })
   assert.deepEqual(errors, [])
 })

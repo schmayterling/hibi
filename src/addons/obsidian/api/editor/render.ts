@@ -7,6 +7,7 @@ import type { FencedRenderer } from '../../../_shared/formatted-fence'
 import { Component } from '../core/component.ts'
 import { reportError } from '../core/events.ts'
 import type { App, PluginInstance } from '../types'
+import { editorInfoField } from './extensions.ts'
 
 export type MarkdownSectionInformation = {
   text: string
@@ -42,7 +43,6 @@ export class MarkdownRenderChild extends Component {
 type Renderer = {
   /** Markdown to safe HTML with the note's flavors, as previews render it. */
   html: (markdown: string) => string
-  sourcePath: () => string
   code: Map<string, CodeBlockProcessor>
   post: Set<MarkdownPostProcessor>
 }
@@ -70,6 +70,17 @@ function processorContext(
     addChild: (child) => owner.addChild(child),
     getSectionInfo,
   }
+}
+
+/** The note of the editor a rendered block is in, never the focused pane's. */
+function blockPath(el: HTMLElement) {
+  const editor = el.closest?.<HTMLElement>('.cm-editor')
+  const view = editor && EditorView.findFromDOM(editor)
+  const file = view?.state.field(editorInfoField, false)?.file as
+    | { path?: string }
+    | null
+    | undefined
+  return file?.path ?? ''
 }
 
 /** The fence holding a rendered block in a formatted view: the note and its 0-based lines. */
@@ -112,12 +123,10 @@ export class Processors {
   readonly post = new Set<MarkdownPostProcessor>()
 
   private readonly app: App
-  readonly sourcePath: () => string
 
-  constructor(app: App, html: Renderer['html'], sourcePath: () => string) {
+  constructor(app: App, html: Renderer['html']) {
     this.app = app
-    this.sourcePath = sourcePath
-    renderers.set(app, { html, sourcePath, code: this.code, post: this.post })
+    renderers.set(app, { html, code: this.code, post: this.post })
     apps.add(app)
   }
 
@@ -171,11 +180,7 @@ export class Processors {
                         handler(
                           source,
                           dom,
-                          processorContext(
-                            this.sourcePath(),
-                            owner,
-                            fenceSection,
-                          ),
+                          processorContext(blockPath(dom), owner, fenceSection),
                         ),
                       )
                     } catch (error) {
@@ -225,6 +230,8 @@ export class MarkdownRenderer extends MarkdownRenderChild {
     el.append(
       DOMPurify.sanitize(html, {
         ...renderedHtmlOptions,
+        // Inline styles in a note could cover or restyle the app around it.
+        FORBID_ATTR: [...(renderedHtmlOptions.FORBID_ATTR ?? []), 'style'],
         RETURN_DOM_FRAGMENT: true,
       }),
     )

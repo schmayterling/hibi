@@ -957,7 +957,11 @@ export type AddonContext = {
     onTypingContext: (
       listener: (event: import('../shared/completions').TypingContext) => void,
     ) => () => void
-    /** Data-only suggestions; provider work is bounded and stopped with this addon. */
+    /**
+     * Suggestions; provider work is bounded and stopped with this addon. Items
+     * are data the host applies, unless `onSelect` makes the edit itself;
+     * `render` draws an item's row into a real element.
+     */
     registerCompletionProvider: (
       provider: import('../shared/completions').CompletionProvider,
       options?: import('../shared/completions').CompletionProviderOptions,

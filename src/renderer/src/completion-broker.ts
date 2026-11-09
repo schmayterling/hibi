@@ -28,6 +28,8 @@ type Registration = {
   provider: CompletionProvider
   priority: number
   onAccepted?: CompletionProviderOptions['onAccepted']
+  onSelect?: CompletionProviderOptions['onSelect']
+  render?: CompletionProviderOptions['render']
 }
 type Job = {
   registration: Registration
@@ -47,6 +49,15 @@ type Session = {
 
 const position = (value: number, length: number) =>
   Number.isSafeInteger(value) && value >= 0 && value <= length
+
+/** An addon's own select or render code fails as an uncaught error, which names the addon. */
+function guarded(run: () => void) {
+  try {
+    run()
+  } catch (error) {
+    globalThis.reportError?.(error)
+  }
+}
 
 /** Capture safe prose once, only when a consumer reads it. */
 export function lazyCompletionProse(capture: () => CompletionRequest['prose']) {
@@ -165,7 +176,9 @@ function validItems(items: readonly CompletionItem[], length: number) {
       (item.preselect !== undefined && typeof item.preselect !== 'boolean') ||
       (item.acceptOnEnter !== undefined &&
         typeof item.acceptOnEnter !== 'boolean' &&
-        item.acceptOnEnter !== 'selected')
+        item.acceptOnEnter !== 'selected') ||
+      (item.data !== undefined &&
+        (typeof item.data !== 'string' || item.data.length > 128))
     )
       continue
     result.push(
@@ -182,6 +195,7 @@ function validItems(items: readonly CompletionItem[], length: number) {
         ...(item.acceptOnEnter === undefined
           ? {}
           : { acceptOnEnter: item.acceptOnEnter }),
+        ...(item.data === undefined ? {} : { data: item.data }),
       }),
     )
   }
@@ -308,22 +322,58 @@ export class CompletionBroker {
     }
   }
 
-  /** Reserve a current, visible item before dispatch; report only after verified success. */
-  prepareAcceptance(
-    request: CompletionRequest,
-    item: CompletionItem,
-  ): Dispose | null {
+  /** The current session and live registration of a shown item. */
+  #owner(item: CompletionItem, request?: CompletionRequest) {
     const session = this.#active ?? this.#visible
     if (
       !session ||
-      !sameCompletionContext(session.request, request) ||
+      (request && !sameCompletionContext(session.request, request)) ||
       !this.#current(session) ||
       !this.#items(session).includes(item)
     )
       return null
     const job = session.jobs.find((candidate) => candidate.items.includes(item))
     if (!job || !this.#registrations.has(job.registration.id)) return null
-    const registration = job.registration
+    return { session, registration: job.registration }
+  }
+
+  /** Draws a shown item with its provider's renderer, if it has one. */
+  renderer(item: CompletionItem): ((element: HTMLElement) => void) | null {
+    const render = this.#owner(item)?.registration.render
+    return render ? (element) => guarded(() => render(item, element)) : null
+  }
+
+  /** A picked item whose provider makes its own edit: runs its select callback once. */
+  prepareSelection(
+    request: CompletionRequest,
+    item: CompletionItem,
+  ): Dispose | null {
+    const owner = this.#owner(item, request)
+    const onSelect = owner?.registration.onSelect
+    if (!owner || !onSelect) return null
+    const { session, registration } = owner
+    const epoch = this.#lifetime.token
+    return () => {
+      if (
+        session.accepted ||
+        this.#disposed ||
+        !this.#lifetime.current(epoch) ||
+        this.#registrations.get(registration.id) !== registration
+      )
+        return
+      session.accepted = true
+      guarded(() => onSelect(session.request, item))
+    }
+  }
+
+  /** Reserve a current, visible item before dispatch; report only after verified success. */
+  prepareAcceptance(
+    request: CompletionRequest,
+    item: CompletionItem,
+  ): Dispose | null {
+    const owner = this.#owner(item, request)
+    if (!owner || owner.registration.onSelect) return null
+    const { session, registration } = owner
     const epoch = this.#lifetime.token
     return () => {
       if (
@@ -380,6 +430,12 @@ export class CompletionBroker {
       typeof options.onAccepted !== 'function'
     )
       throw new Error('Invalid completion feedback callback.')
+    if (
+      (options.onSelect !== undefined &&
+        typeof options.onSelect !== 'function') ||
+      (options.render !== undefined && typeof options.render !== 'function')
+    )
+      throw new Error('Invalid completion select or render callback.')
     const id = ++this.#nextId
     this.#registrations.set(id, {
       id,
@@ -389,6 +445,8 @@ export class CompletionBroker {
       },
       provider,
       onAccepted: options.onAccepted,
+      onSelect: options.onSelect,
+      render: options.render,
       priority: Math.max(-100, Math.min(100, priority)),
     })
     return () => this.#unregister([id])
@@ -517,7 +575,7 @@ export class CompletionBroker {
     const seen = new Set<string>(),
       items: CompletionItem[] = []
     for (const { item } of ranked) {
-      const key = `${item.from}:${item.to}:${item.insertText}`
+      const key = `${item.from}:${item.to}:${item.insertText}:${item.data ?? ''}`
       if (seen.has(key)) continue
       seen.add(key)
       items.push(item)

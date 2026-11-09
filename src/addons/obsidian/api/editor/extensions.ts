@@ -101,8 +101,14 @@ export class EditorRuntime {
   markdownViewOf(viewId: string) {
     return this.markdownViews.get(viewId) ?? null
   }
+  /** The pane's note, from its Markdown view or else the workspace's open notes. */
   fileOf(viewId: string) {
-    return this.markdownViews.get(viewId)?.file ?? null
+    const view = this.markdownViews.get(viewId)
+    if (view) return view.file
+    const workspace = this.context.app.workspace as {
+      fileFor?: (target: ViewTarget | null) => unknown
+    }
+    return workspace.fileFor?.(this.targetOf(viewId)) ?? null
   }
 
   targetOf(viewId: string): ViewTarget | null {
@@ -113,8 +119,22 @@ export class EditorRuntime {
     )
   }
 
-  /** The CodeMirror view of the pane's current editor. */
+  /** Whether the pane still shows this exact view and note generation. */
+  isLive(target: ViewTarget) {
+    return this.context.hibi.editorViews
+      .list()
+      .some(
+        (view) =>
+          view.viewId === target.viewId &&
+          view.viewGeneration === target.viewGeneration &&
+          view.documentId === target.documentId &&
+          view.documentGeneration === target.documentGeneration,
+      )
+  }
+
+  /** The CodeMirror view of the pane's current editor, never another note's. */
   viewOf(target: ViewTarget): EditorView | null {
+    if (!this.isLive(target)) return null
     const selection = this.context.hibi.editorViews.getSelection(target)
     const kind = selection.ok
       ? selection.value.editor === 'rich'
@@ -137,7 +157,11 @@ export class EditorRuntime {
       for (const old of this.editors.keys())
         if (old.startsWith(`${target.viewId}:`)) this.editors.delete(old)
       editor = new Editor(
-        { hibi: this.context.hibi, viewOf: (view) => this.viewOf(view) },
+        {
+          hibi: this.context.hibi,
+          viewOf: (view) => this.viewOf(view),
+          isLive: (view) => this.isLive(view),
+        },
         target,
       )
       this.editors.set(key, editor)

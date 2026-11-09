@@ -30,7 +30,7 @@ import {
   MarkdownRenderer,
   Processors,
 } from './render.ts'
-import { EditorSuggest } from './suggest.ts'
+import { EditorSuggest, registerEditorSuggest } from './suggest.ts'
 
 // Plugins share Hibi's own CodeMirror and Lezer: their classes must be the editor's.
 for (const [name, module] of Object.entries({
@@ -55,10 +55,6 @@ type Workspace = {
 export function createEditorApi(context: ApiContext) {
   const { app, hibi } = context
   const runtime = new EditorRuntime(context)
-  const activeFile = () => {
-    const active = hibi.editorViews.getActive()
-    return active ? runtime.fileOf(active.viewId) : null
-  }
   const processors = new Processors(
     app,
     (markdown) =>
@@ -66,18 +62,8 @@ export function createEditorApi(context: ApiContext) {
         markdown,
         hibi.editorViews.getActive()?.documentId,
       ).html,
-    () => (activeFile() as { path?: string } | null)?.path ?? '',
   )
   context.register(() => processors.dispose())
-  const reported = new Set<string>()
-  const unsupported = (plugin: PluginInstance, feature: string) => {
-    const key = `${plugin.manifest.id}\n${feature}`
-    if (reported.has(key)) return
-    reported.add(key)
-    hibi.notify(
-      `${plugin.manifest.name}: ${feature} are not supported in Hibi.`,
-    )
-  }
   // Every service is in place once plugins load.
   let hooked = false
   const hook = () => {
@@ -144,7 +130,8 @@ export function createEditorApi(context: ApiContext) {
           if (sortOrder !== undefined) processor.sortOrder = sortOrder
           return processors.registerPost(plugin, processor)
         },
-        registerEditorSuggest: () => unsupported(plugin, 'editor suggestions'),
+        registerEditorSuggest: (suggest: EditorSuggest<unknown>) =>
+          registerEditorSuggest(runtime, plugin, suggest),
       })
     },
   }

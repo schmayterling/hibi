@@ -333,7 +333,9 @@ test('menus are components and their show and hide methods return the same insta
   assert.deepEqual([dismissed, hidden], [2, 2])
 })
 
-test('notices preserve live fragments and remove their shared container on unload', async (t) => {
+test('notices preserve live fragments in Hibi’s shared toast shell and dismiss on unload', async (t) => {
+  const sharedNotices = []
+  let dismissed = 0
   const load = await modules(t)
   const { Component } = await load('api/core/component.ts')
   const { createUiApi } = await load('api/core/ui.tsx')
@@ -344,13 +346,27 @@ test('notices preserve live fragments and remove their shared container on unloa
     owner,
     app: {},
     name: 'fixture',
-    hibi: { toasts: { getPreferences: () => ({ position: 'bottom-right' }) } },
+    hibi: {
+      toasts: {
+        getPreferences: () => ({ position: 'bottom-right' }),
+        show: (options) => {
+          assert.equal(options.duration, 0)
+          assert.ok(
+            options.content,
+            'live content must use the shared toast shell',
+          )
+          sharedNotices.push(options)
+          return { dismiss: () => dismissed++, update() {} }
+        },
+      },
+    },
   })
   const fragment = document.createDocumentFragment()
   const strong = document.createElement('strong')
   strong.textContent = 'Live content'
   fragment.append(strong)
   const notice = new Notice(fragment, 0)
+  assert.equal(sharedNotices.length, 1)
   assert.equal(notice.noticeEl, notice.messageEl)
   assert.equal(notice.messageEl.contains(strong), true)
   assert.equal(notice.containerEl.contains(strong), true)
@@ -362,6 +378,7 @@ test('notices preserve live fragments and remove their shared container on unloa
   assert.equal(notice.messageEl.contains(strong), false)
   owner.unload()
   assert.equal(document.body.children.length, 0)
+  assert.equal(dismissed, 1)
 })
 
 test('plugin command IDs survive replacement by a package with a new content hash', async (t) => {
@@ -410,4 +427,66 @@ test('plugin command IDs survive replacement by a package with a new content has
   host.stop()
   assert.equal(document.head.children.length, 0)
   assert.equal(typeof HTMLElement.prototype.createEl, 'undefined')
+})
+
+test('disabling a plugin cancels resources during pending onload and cannot revive it', async (t) => {
+  const load = await modules(t)
+  const { ObsidianHost } = await load('runtime.ts')
+  const { wrapObsidianPlugin } = await load('package.ts')
+  const fixture = await readFixturePlugin('host-smoke')
+  const document = fakeDom(t)
+  const started = Promise.withResolvers()
+  const finish = Promise.withResolvers()
+  const state = {
+    started: started.resolve,
+    finish: finish.promise,
+    cleaned: 0,
+    events: 0,
+  }
+  const source = `const {Plugin} = require('obsidian');
+    module.exports = class extends Plugin { async onload() {
+      this.register(() => fixtureState.cleaned++);
+      this.registerDomEvent(document, 'pending-unload', () => fixtureState.events++);
+      fixtureState.started();
+      await fixtureState.finish;
+    } }`
+  const append = document.head.append.bind(document.head)
+  document.head.append = (script) => {
+    append(script)
+    queueMicrotask(() => {
+      vm.runInNewContext(
+        wrapObsidianPlugin(source, script.dataset.obsidianPlugin),
+        {
+          __hibiObsidianHost: globalThis.__hibiObsidianHost,
+          fixtureState: state,
+          document,
+        },
+      )
+      script.onload?.()
+    })
+  }
+  const descriptor = {
+    manifest: fixture.manifest,
+    hash: 'c'.repeat(64),
+    enabled: true,
+    hasStyles: false,
+  }
+  const host = new ObsidianHost(
+    { native: { query: async () => [descriptor] } },
+    'empty',
+  )
+  t.after(() => host.stop())
+  const activating = host.start()
+  await started.promise
+  descriptor.enabled = false
+  host.unload(fixture.manifest.id)
+  document.dispatchEvent(new Event('pending-unload'))
+  assert.equal(state.cleaned, 1)
+  assert.equal(state.events, 0)
+  assert.equal(document.head.children.length, 0)
+  assert.equal(typeof HTMLElement.prototype.createEl, 'undefined')
+  finish.resolve()
+  await activating
+  assert.equal(host.plugins.size, 0)
+  assert.equal(host.errors.size, 0)
 })

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react'
+import { createElement, useLayoutEffect, useRef } from 'react'
 import type { AddonContext, DialogHandle } from '../../../api'
 import type { App, PluginInstance } from '../types'
 import { Component } from './component'
@@ -49,19 +49,7 @@ export class PluginSettingTab {
   hide(): void {}
 }
 
-let noticeRegion: HTMLDivElement | null = null
 let closeActiveMenu: (() => void) | null = null
-function notices(hibi: AddonContext): HTMLDivElement {
-  if (!noticeRegion?.isConnected) {
-    noticeRegion = document.createElement('div')
-    noticeRegion.className = 'hibi-obsidian-notices'
-    noticeRegion.popover = 'manual'
-    noticeRegion.dataset.position = hibi.toasts.getPreferences().position
-    document.body.append(noticeRegion)
-    noticeRegion.showPopover()
-  }
-  return noticeRegion
-}
 function observe(value: unknown) {
   if (value instanceof Promise) void value.catch(reportError)
 }
@@ -79,36 +67,33 @@ export function createUiApi(context: UiContext) {
     containerEl = ownElement(document.createElement('div'), this.lifecycle)
     messageEl = childElement(this.containerEl, 'div', 'notice-message')
     noticeEl = this.messageEl
-    private timer: number | undefined
-    private region: HTMLDivElement
+    private toast: ReturnType<AddonContext['toasts']['show']>
     constructor(message: string | DocumentFragment, duration = 5000) {
       if (owner.isUnloaded) throw new Error('This plugin has unloaded.')
       this.containerEl.className = 'notice'
-      this.containerEl.setAttribute('role', 'status')
       this.setMessage(message)
-      const close = childElement(this.containerEl, 'button', 'notice-close')
-      close.type = 'button'
-      close.textContent = '×'
-      close.setAttribute('aria-label', 'Dismiss notification')
-      this.lifecycle.registerDomEvent(close, 'click', () => this.hide())
-      // Native popover preserves live plugin DOM fragments and owns their teardown.
-      this.region = notices(hibi)
-      this.region.append(this.containerEl)
+      // Mount live fragments inside Hibi's toast shell so existing DOM listeners survive.
+      // The lifecycle guard prevents a queued React mount from reviving unloaded content.
+      const Content = () =>
+        this.lifecycle.isUnloaded
+          ? null
+          : createElement(DomMount, { element: this.containerEl })
+      this.toast = hibi.toasts.show({
+        message: this.messageEl.textContent || context.name,
+        content: createElement(Content),
+        duration,
+      })
       this.lifecycle.register(() => {
-        clearTimeout(this.timer)
         this.containerEl.remove()
-        if (!this.region.childElementCount) {
-          if (noticeRegion === this.region) noticeRegion = null
-          if (this.region.matches(':popover-open')) this.region.hidePopover()
-          this.region.remove()
-        }
+        this.toast.dismiss()
       })
       owner.addChild(this.lifecycle)
-      if (duration !== 0)
-        this.timer = window.setTimeout(() => this.hide(), duration)
     }
     setMessage(message: string | DocumentFragment): this {
       this.messageEl.replaceChildren(message)
+      this.toast?.update({
+        message: this.messageEl.textContent || context.name,
+      })
       return this
     }
     hide(): void {

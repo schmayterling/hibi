@@ -776,6 +776,7 @@ export function SettingsScreen({
               remove={onRemoveAddon}
               request={addonRequest}
               onRequestDone={onAddonRequestDone}
+              openSettings={onCategory}
             />
           </SettingsPanel>
           <SettingsPanel

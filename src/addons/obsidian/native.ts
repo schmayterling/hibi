@@ -13,6 +13,7 @@ import {
 } from './community-native'
 import {
   type CommunityPluginSource,
+  type InstalledPlugin,
   validPluginId,
   wrapObsidianPlugin,
 } from './package'
@@ -27,13 +28,45 @@ const stores = new Map<string, ObsidianStore>()
 const communityCandidates = new Map<
   string,
   {
-    vaultId: string
     createdAt: number
     check: () => void
     packageData: Awaited<ReturnType<typeof readObsidianPackage>>
     source: CommunityPluginSource
   }
 >()
+
+const globalStores = new Map<string, Promise<ObsidianStore>>()
+
+export async function obsidianGlobalStore() {
+  const base = join(app.getPath('userData'), 'obsidian')
+  const root = join(base, 'global')
+  let ready = globalStores.get(root)
+  if (!ready) {
+    const store = new ObsidianStore(root)
+    ready = store.migrateLegacy(join(base, 'vaults')).then(() => store)
+    globalStores.set(root, ready)
+    ready.catch(() => {
+      if (globalStores.get(root) === ready) globalStores.delete(root)
+    })
+  }
+  return { store: await ready }
+}
+
+function addonCheck(context: NativeAddonContext) {
+  const check = () => {
+    if (!context.isCurrent())
+      throw new Error('The plugin host changed. Try again.')
+  }
+  check()
+  return check
+}
+
+async function globalPlace(input: unknown, context: NativeAddonContext) {
+  const check = addonCheck(context)
+  const place = await obsidianGlobalStore()
+  check()
+  return { ...place, check, data: (input ?? {}) as { id?: unknown } }
+}
 
 export async function obsidianStoreForVault(vault: string) {
   const canonical = await realpath(vault)
@@ -47,11 +80,20 @@ export async function obsidianStoreForVault(vault: string) {
   return { store, identity, canonical }
 }
 
-async function captured(input: unknown, context: NativeAddonContext) {
+async function captured(
+  input: unknown,
+  context: NativeAddonContext,
+  requireIdentity = true,
+) {
   const data = input as { vaultId?: unknown; id?: unknown } | null
   const vault = context.workspace.directory()
   const id = context.workspace.id()
-  if (!data || !vault || !id || data.vaultId !== id)
+  if (
+    !data ||
+    !vault ||
+    !id ||
+    ((requireIdentity || data.vaultId !== undefined) && data.vaultId !== id)
+  )
     throw new Error('Open this plugin’s vault again.')
   const place = await obsidianStoreForVault(vault)
   if (place.identity !== id)
@@ -79,17 +121,20 @@ async function install(
   context: NativeAddonContext,
   fromVault: boolean,
 ) {
-  const place = await captured(input, context)
+  const place = await globalPlace(input, context)
+  let check = place.check
   let source: string
   if (fromVault) {
+    const folder = await captured(input ?? {}, context, false)
+    check = folder.check
     const id = pluginId(place.data)
     // Discovery validates .obsidian and plugins as regular directories before reading.
-    const candidate = (await discoverObsidianPlugins(place.canonical)).find(
+    const candidate = (await discoverObsidianPlugins(folder.canonical)).find(
       (entry) => entry.id === id,
     )
     if (!candidate || candidate.error)
       throw new Error(candidate?.error ?? 'This vault plugin is unavailable.')
-    source = join(place.canonical, '.obsidian', 'plugins', id)
+    source = join(folder.canonical, '.obsidian', 'plugins', id)
   } else {
     const choice = await runFileDialog(() =>
       dialog.showOpenDialog({
@@ -100,18 +145,26 @@ async function install(
     if (choice.canceled || !choice.filePaths[0]) return null
     source = choice.filePaths[0]
   }
-  place.check()
+  check()
   const packageData = await readObsidianPackage(source)
-  return trustPackage(place, packageData)
+  check()
+  return trustPackage(
+    { ...place, check },
+    packageData,
+    undefined,
+    fromVault ? 'vault' : 'folder',
+  )
 }
 
 async function trustPackage(
-  place: Awaited<ReturnType<typeof captured>>,
+  place: Pick<Awaited<ReturnType<typeof globalPlace>>, 'store' | 'check'>,
   packageData: Awaited<ReturnType<typeof readObsidianPackage>>,
   source?: CommunityPluginSource,
-  signal?: AbortSignal,
+  origin: NonNullable<InstalledPlugin['origin']> = source
+    ? 'community'
+    : 'folder',
 ) {
-  signal?.throwIfAborted()
+  place.check()
   const verdict = await runFileDialog(() =>
     dialog.showMessageBox({
       type: 'warning',
@@ -124,23 +177,14 @@ async function trustPackage(
   )
   place.check()
   if (verdict.response !== 1) return null
-  const check = () => {
-    signal?.throwIfAborted()
-    place.check()
-  }
-  check()
-  return place.store.install(packageData, check, source)
+  return place.store.install(packageData, place.check, source, origin)
 }
 
-/** Called only by the lazy app-protocol route after addon/vault activation checks. */
-export async function obsidianPluginAsset(
-  request: Request,
-  vault: string,
-  vaultId: string,
-) {
+/** Called only by the lazy app-protocol route after addon activation checks. */
+export async function obsidianPluginAsset(request: Request) {
   const url = new URL(request.url)
   const match =
-    /^\/obsidian-plugins\/([a-f0-9]{64})\/([a-z0-9][a-z0-9_-]{0,63})\/([a-f0-9]{64})\/(main\.js|styles\.css)$/.exec(
+    /^\/obsidian-plugins\/(global)\/([a-z0-9][a-z0-9_-]{0,63})\/([a-f0-9]{64})\/(main\.js|styles\.css)$/.exec(
       url.pathname,
     )
   if (
@@ -153,9 +197,8 @@ export async function obsidianPluginAsset(
   )
     return null
   const [, identity, id, hash, name] = match
-  if (identity !== vaultId || !id || !hash) return null
-  const place = await obsidianStoreForVault(vault)
-  if (place.identity !== identity) return null
+  if (!id || !hash) return null
+  const place = await obsidianGlobalStore()
   const source = await place.store.enabledPackage(id, hash)
   return name === 'main.js'
     ? {
@@ -209,15 +252,28 @@ export default {
       ).queries.obsidianMetadataFile(input)
     },
     async list(input, context) {
-      const place = await captured(input, context)
-      return place.store.list()
+      const place = await globalPlace(input, context)
+      const result = await place.store.list()
+      place.check()
+      return result
     },
     async discover(input, context) {
-      const place = await captured(input, context)
-      return discoverObsidianPlugins(place.canonical)
+      addonCheck(context)
+      if (!context.workspace.directory()) return []
+      const place = await captured(input ?? {}, context, false)
+      const result = await discoverObsidianPlugins(place.canonical)
+      place.check()
+      return result
+    },
+    async settingsOffer(input, context) {
+      const place = await globalPlace(input, context)
+      const id = pluginId(place.data)
+      if (!context.workspace.directory()) return false
+      const folder = await captured(input, context, false)
+      return place.store.settingsOffer(id, folder.canonical, folder.check)
     },
     async data(input, context) {
-      const place = await captured(input, context)
+      const place = await globalPlace(input, context)
       const value = await place.store.loadData(
         pluginId(place.data),
         place.check,
@@ -228,7 +284,7 @@ export default {
   },
   profileMethods: {
     async downloadCommunity(input, context) {
-      const place = await captured(input, context)
+      const place = await globalPlace(input, context)
       return communityTask(
         input,
         async (signal) => {
@@ -251,7 +307,6 @@ export default {
           const key = (input as { requestId: string }).requestId
           communityCandidates.set(key, {
             ...result,
-            vaultId: place.identity,
             check: place.check,
             createdAt: Date.now(),
           })
@@ -276,7 +331,7 @@ export default {
     vaultCreateFolder: vaultMethod('vaultCreateFolder'),
     vaultAction: vaultMethod('vaultAction'),
     async installCommunity(input, context) {
-      const place = await captured(input, context)
+      const place = await globalPlace(input, context)
       const key = (input as { key?: unknown }).key
       if (typeof key !== 'string')
         throw new Error('Download this plugin again.')
@@ -284,7 +339,6 @@ export default {
       communityCandidates.delete(key)
       if (
         !candidate ||
-        candidate.vaultId !== place.identity ||
         candidate.packageData.manifest.id !== pluginId(place.data) ||
         Date.now() - candidate.createdAt > 120000
       )
@@ -295,7 +349,7 @@ export default {
     install: (input, context) => install(input, context, false),
     installVault: (input, context) => install(input, context, true),
     async enable(input, context) {
-      const place = await captured(input, context)
+      const place = await globalPlace(input, context)
       const id = pluginId(place.data)
       const enabled = (input as { enabled?: unknown }).enabled
       if (typeof enabled !== 'boolean')
@@ -322,8 +376,17 @@ export default {
       place.check()
       return place.store.setEnabled(id, enabled, place.check)
     },
+    async importVaultData(input, context) {
+      const place = await globalPlace(input, context)
+      const folder = await captured(input, context, false)
+      return place.store.importVaultData(
+        pluginId(place.data),
+        folder.canonical,
+        folder.check,
+      )
+    },
     async saveData(input, context) {
-      const place = await captured(input, context)
+      const place = await globalPlace(input, context)
       await place.store.saveData(
         pluginId(place.data),
         (input as { value?: unknown }).value,
@@ -332,7 +395,7 @@ export default {
       place.check()
     },
     async remove(input, context) {
-      const place = await captured(input, context)
+      const place = await globalPlace(input, context)
       await place.store.remove(pluginId(place.data), place.check)
     },
   },

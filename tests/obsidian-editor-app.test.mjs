@@ -133,7 +133,7 @@ test('obsidian editor extensions, commands and code blocks run in every pane and
   await page
     .getByRole('checkbox', { name: 'Obsidian plugins', exact: true })
     .click()
-  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.getByRole('button', { name: 'Install copy', exact: true }).click()
   const enabled = page.getByRole('checkbox', {
     name: 'Enable Editor surface',
@@ -281,7 +281,7 @@ test('obsidian editor extensions, commands and code blocks run in every pane and
 
   // Unload removes every decoration, attribute and key.
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page
     .getByRole('checkbox', { name: 'Enable Editor surface', exact: true })
     .click()

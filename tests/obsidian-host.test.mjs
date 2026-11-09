@@ -80,7 +80,7 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
   })
   assert.equal(await hostEnabled.isChecked(), false)
   await hostEnabled.click()
-  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.getByRole('button', { name: 'Install copy', exact: true }).click()
   const enabled = page.getByRole('checkbox', {
     name: 'Enable Host surface',
@@ -146,7 +146,9 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
       mod: true,
     },
   )
-  await page.getByRole('tab', { name: 'Host surface', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'Settings for Host surface', exact: true })
+    .click()
   const toggle = page.getByRole('checkbox', {
     name: 'Fixture toggle',
     exact: true,
@@ -158,8 +160,7 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
   const data = join(
     fixture.overlay,
     'obsidian',
-    'vaults',
-    vaultId,
+    'global',
     'state',
     'host-surface',
     'data.json',
@@ -269,7 +270,7 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
     }),
     [1, 1, 1, 1, 2],
   )
-  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await command('Schedule fixture callback')
   await page
     .getByRole('checkbox', { name: 'Enable Host surface', exact: true })
@@ -333,14 +334,16 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
       window.__hibiHostFixture?.loaded &&
       window.__hibiHostFixture.unloaded === 0,
   )
-  await page.getByRole('tab', { name: 'Host surface', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'Settings for Host surface', exact: true })
+    .click()
   assert.equal(
     await page
       .getByRole('checkbox', { name: 'Fixture toggle', exact: true })
       .isChecked(),
     true,
   )
-  await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page
     .getByRole('checkbox', { name: 'Enable Host surface', exact: true })
     .click()
@@ -354,7 +357,10 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
     })
   }, throwingFolder)
   await page
-    .getByRole('button', { name: 'Install from folder', exact: true })
+    .getByRole('button', {
+      name: 'Install Obsidian plugin from folder',
+      exact: true,
+    })
     .click()
   await page
     .getByRole('checkbox', { name: 'Enable Host throws', exact: true })
@@ -387,7 +393,10 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
     })
   }, pendingFolder)
   await page
-    .getByRole('button', { name: 'Install from folder', exact: true })
+    .getByRole('button', {
+      name: 'Install Obsidian plugin from folder',
+      exact: true,
+    })
     .click()
   await page
     .getByRole('checkbox', { name: 'Enable Host pending', exact: true })
@@ -415,22 +424,18 @@ test('trusted fixture plugin loads, renders settings, persists overlay, runs com
     await page.evaluate(() => window.__hibiPendingFixture.saveRefused),
     true,
   )
-  assert.equal(
-    JSON.parse(
-      await readFile(
-        join(
-          fixture.overlay,
-          'obsidian',
-          'vaults',
-          vaultId,
-          'state',
-          'host-pending',
-          'data.json',
-        ),
-        'utf8',
+  await assert.rejects(
+    readFile(
+      join(
+        fixture.overlay,
+        'obsidian',
+        'global',
+        'state',
+        'host-pending',
+        'data.json',
       ),
     ),
-    null,
+    { code: 'ENOENT' },
   )
   await page.evaluate(() => {
     document.dispatchEvent(new Event('host-pending-event'))

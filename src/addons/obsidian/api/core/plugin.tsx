@@ -49,14 +49,12 @@ export class Plugin extends Component {
     if (!this.host.isCurrent())
       return Promise.reject(new Error('This plugin has unloaded.'))
     return this.host.hibi.native.query('data', {
-      vaultId: this.host.vaultId,
       id: this.manifest.id,
     })
   }
   async saveData(value: unknown): Promise<void> {
     if (!this.host.isCurrent()) throw new Error('This plugin has unloaded.')
     await this.host.hibi.native.invoke('saveData', {
-      vaultId: this.host.vaultId,
       id: this.manifest.id,
       value,
     })

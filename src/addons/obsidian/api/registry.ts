@@ -5,10 +5,24 @@ import type {
   Dispose,
 } from './types'
 
+/** Stable resource IDs also let Installed rows open a plugin's registered settings. */
+export async function pluginResourcePrefix(id: string) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(id),
+  )
+  return (
+    'p' +
+    [...new Uint8Array(digest).slice(0, 20)]
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+  )
+}
+
 const registrations = new Map<string, ApiRegistration>()
 const modules = new Map<string, unknown>()
 
-/** Register before host activation. Each vault creates its own service instances. */
+/** Register before host activation. Each folder lifetime creates its own service instances. */
 export function registerObsidianApi(registration: ApiRegistration): Dispose {
   if (registrations.has(registration.id))
     throw new Error(`Obsidian API already registered: ${registration.id}`)

@@ -314,7 +314,7 @@ export type DesktopApi = {
     refresh?: boolean,
   ) => Promise<import('./addon-directory').AddonDirectory>
   obsidianCommunity: (
-    action: 'directory' | 'details' | 'cancel',
+    action: 'directory' | 'details' | 'cancel' | 'installed',
     input: {
       requestId: string
       refresh?: boolean

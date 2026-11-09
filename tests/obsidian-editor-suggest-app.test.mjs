@@ -77,14 +77,14 @@ test('obsidian editor suggestions open on their trigger, pick with Enter, close 
         .getByRole('checkbox', { name: 'Obsidian plugins', exact: true })
         .click()
       await page
-        .getByRole('tab', { name: 'Obsidian plugins', exact: true })
+        .getByRole('tab', { name: 'Addon Manager', exact: true })
         .click()
       await page
         .getByRole('button', { name: 'Install copy', exact: true })
         .click()
     } else
       await page
-        .getByRole('tab', { name: 'Obsidian plugins', exact: true })
+        .getByRole('tab', { name: 'Addon Manager', exact: true })
         .click()
     await page
       .getByRole('checkbox', { name: 'Enable Editor suggest', exact: true })

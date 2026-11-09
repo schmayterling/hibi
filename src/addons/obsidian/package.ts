@@ -14,6 +14,7 @@ export interface InstalledPlugin {
   hash: string
   enabled: boolean
   hasStyles: boolean
+  origin?: 'folder' | 'vault' | 'community'
   source?: CommunityPluginSource
 }
 

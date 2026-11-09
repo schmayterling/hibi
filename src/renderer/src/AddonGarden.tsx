@@ -1,5 +1,5 @@
-import { CloudOff, Sprout } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { CloudOff, Search, Sprout } from 'lucide-react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import {
   type AddonDirectoryEntry,
   directoryInstallUrl,
@@ -13,6 +13,7 @@ import {
   PanelMessage,
   SettingRow,
 } from '../../ui/Controls'
+import { SettingsFilter } from '../../ui/SettingsFilter'
 
 type Directory = {
   status: 'idle' | 'loading' | 'ready' | 'error'
@@ -21,7 +22,176 @@ type Directory = {
   error?: string
 }
 
-/** Loads the directory the first time `active` is true; `retry` asks main to refresh it. */
+/** One row vocabulary for installed addons and both community directories. */
+export function AddonCatalogRow({
+  id,
+  name,
+  description,
+  metadata,
+  details,
+  hidden,
+  children,
+}: {
+  id: string
+  name: string
+  description?: ReactNode
+  metadata?: ReactNode
+  details?: { label: string; onOpen: () => void }
+  hidden?: boolean
+  children: ReactNode
+}) {
+  return (
+    <SettingRow
+      id={id}
+      label={name}
+      hidden={hidden ?? false}
+      {...(details ? { details } : {})}
+      description={
+        <>
+          {description}
+          {metadata && <span className="addon-metadata">{metadata}</span>}
+        </>
+      }
+    >
+      <div className="addon-actions">{children}</div>
+    </SettingRow>
+  )
+}
+
+/** Shared toolbar, search/reset row and category chips for every addon source. */
+export function AddonCatalogToolbar({
+  actions,
+  query,
+  onQuery,
+  categories,
+  category,
+  onCategory,
+  onReset,
+  resetDisabled,
+  disabled,
+}: {
+  actions: ReactNode
+  query: string
+  onQuery: (query: string) => void
+  categories: readonly string[]
+  category: string | null
+  onCategory: (category: string | null) => void
+  onReset: () => void
+  resetDisabled: boolean
+  disabled?: boolean
+}) {
+  return (
+    <>
+      <ControlRow className="addon-catalog-actions">{actions}</ControlRow>
+      <SettingsFilter
+        id="addon-filter"
+        label="Filter addons"
+        placeholder="Filter addons…"
+        value={query}
+        onChange={onQuery}
+        disabled={disabled ?? false}
+        resetDisabled={resetDisabled}
+        onReset={onReset}
+      />
+      <ControlRow
+        className="addon-categories"
+        role="group"
+        aria-label="Addon categories"
+      >
+        {[null, ...categories].map((option) => (
+          <Button
+            key={option ?? 'all'}
+            aria-pressed={category === option}
+            onClick={() => onCategory(option)}
+          >
+            {option ?? 'All'}
+          </Button>
+        ))}
+      </ControlRow>
+    </>
+  )
+}
+
+/** Directory loading, empty, stale-cache and offline states share the garden's layout. */
+export function AddonDirectoryStatus({
+  name,
+  loading,
+  error,
+  fetchedAt,
+  hasEntries,
+  retry,
+  note,
+  children,
+}: {
+  name: string
+  loading: boolean
+  error?: string | undefined
+  fetchedAt?: string | null | undefined
+  hasEntries: boolean
+  retry: () => void
+  note: string
+  children: ReactNode
+}) {
+  if (!hasEntries)
+    return (
+      <Panel>
+        <PanelMessage
+          icon={
+            error ? (
+              <CloudOff size={32} strokeWidth={1.5} />
+            ) : (
+              <Sprout size={32} strokeWidth={1.5} />
+            )
+          }
+          title={
+            error
+              ? "Couldn't load " + name
+              : loading
+                ? 'Loading ' + name + '…'
+                : name + ' has no addons yet'
+          }
+          role={error ? 'alert' : 'status'}
+          loading={!error && loading}
+        >
+          {error}
+        </PanelMessage>
+        {error && (
+          <ControlRow className="addon-garden-retry">
+            <Button onClick={retry}>Try again</Button>
+          </ControlRow>
+        )}
+      </Panel>
+    )
+  return (
+    <>
+      <p className="addon-garden-note">{note}</p>
+      {(loading || error) && (
+        <div className="addon-garden-status" role="status">
+          <span>
+            {loading
+              ? 'Refreshing ' + name + '…'
+              : `Showing addons from ${fetchedAt ? new Date(fetchedAt).toLocaleString() : 'an earlier visit'}. ${error ?? ''}`}
+          </span>
+          {error && <Button onClick={retry}>Try again</Button>}
+        </div>
+      )}
+      {children}
+    </>
+  )
+}
+
+export function NoMatchingAddons() {
+  return (
+    <Panel>
+      <PanelMessage
+        icon={<Search size={32} strokeWidth={1.5} />}
+        title="No matching addons"
+      />
+    </Panel>
+  )
+}
+
+/** Loads the directory the first time active is true; retry asks main to refresh it. */
 export function useAddonDirectory(active: boolean) {
   const [directory, setDirectory] = useState<Directory>({
     status: 'idle',
@@ -68,9 +238,7 @@ export function AddonGarden({
 }: {
   directory: Directory
   retry: () => void
-  /** Search and category filters from the addon manager. */
   shown: (entry: AddonDirectoryEntry) => boolean
-  /** How this ID relates to the addons Hibi already has. */
   status: (
     entry: AddonDirectoryEntry,
   ) => 'builtin' | 'installed' | 'update' | 'new'
@@ -78,123 +246,84 @@ export function AddonGarden({
   install: (entry: AddonDirectoryEntry) => void
   uninstall: (entry: AddonDirectoryEntry) => void
 }) {
-  const { entries } = directory
-  const matching = entries.filter(shown)
-  if (!entries.length) {
-    if (directory.status === 'error')
-      return (
-        <Panel>
-          <PanelMessage
-            icon={<CloudOff size={32} strokeWidth={1.5} />}
-            title="Couldn't load Hibi garden"
-            role="alert"
-          >
-            {directory.error}
-          </PanelMessage>
-          <ControlRow className="addon-garden-retry">
-            <Button onClick={retry}>Try again</Button>
-          </ControlRow>
-        </Panel>
-      )
-    return (
-      <Panel>
-        <PanelMessage
-          icon={<Sprout size={32} strokeWidth={1.5} />}
-          title={
-            directory.status === 'ready'
-              ? 'Hibi garden has no addons yet'
-              : 'Loading Hibi garden…'
-          }
-          loading={directory.status !== 'ready'}
-        />
-      </Panel>
-    )
-  }
+  const matching = directory.entries.filter(shown)
   return (
-    <>
-      <p className="addon-garden-note">
-        Addons in Hibi garden are made by their authors. Hibi checks each
-        package and asks before installing it.
-      </p>
-      {directory.status !== 'ready' && (
-        <div className="addon-garden-status" role="status">
-          <span>
-            {directory.status === 'loading'
-              ? 'Refreshing Hibi garden…'
-              : `Showing addons from ${directory.fetchedAt ? new Date(directory.fetchedAt).toLocaleString() : 'an earlier visit'}. ${directory.error ?? ''}`}
-          </span>
-          {directory.status === 'error' && (
-            <Button onClick={retry}>Try again</Button>
-          )}
-        </div>
-      )}
+    <AddonDirectoryStatus
+      name="Hibi garden"
+      loading={directory.status === 'idle' || directory.status === 'loading'}
+      error={directory.error}
+      fetchedAt={directory.fetchedAt}
+      hasEntries={!!directory.entries.length}
+      retry={retry}
+      note="Addons in Hibi garden are made by their authors. Hibi checks each package and asks before installing it."
+    >
       <div className="settings-group addon-list" hidden={!matching.length}>
-        {entries.map((entry) => {
+        {directory.entries.map((entry) => {
           const relation = status(entry)
           return (
-            <SettingRow
+            <AddonCatalogRow
               key={entry.id}
-              id={`garden-${entry.id}`}
-              label={entry.name}
+              id={'garden-' + entry.id}
+              name={entry.name}
+              description={entry.description}
               hidden={!shown(entry)}
-              description={
+              metadata={
                 <>
-                  {entry.description}
-                  <span className="addon-metadata">
-                    <span>{sentenceCase(entry.kind)}</span>
-                    <span>v{entry.version}</span>
-                    <span>{entry.license}</span>
-                    {entry.authors?.map((author) => (
-                      <span key={author.github ?? author.displayName}>
-                        {author.displayName}
-                      </span>
-                    ))}
-                  </span>
+                  <span>{sentenceCase(entry.kind)}</span>
+                  <span>v{entry.version}</span>
+                  <span>{entry.license}</span>
+                  {entry.authors?.map((author) => (
+                    <span key={author.github ?? author.displayName}>
+                      {author.displayName}
+                    </span>
+                  ))}
                 </>
               }
             >
-              <div className="addon-actions">
+              <Button
+                variant="ghost"
+                aria-label={entry.name + ' source'}
+                onClick={() =>
+                  void window.hibi.openAddonDocumentationLink(
+                    directoryInstallUrl(entry),
+                  )
+                }
+              >
+                Source
+              </Button>
+              {(relation === 'installed' || relation === 'update') && (
                 <Button
-                  variant="ghost"
-                  aria-label={`${entry.name} source`}
-                  onClick={() =>
-                    void window.hibi.openAddonDocumentationLink(
-                      directoryInstallUrl(entry),
-                    )
-                  }
+                  aria-label={'Uninstall ' + entry.name}
+                  disabled={busy}
+                  onClick={() => uninstall(entry)}
                 >
-                  Source
+                  Uninstall
                 </Button>
-                {(relation === 'installed' || relation === 'update') && (
-                  <Button
-                    aria-label={`Uninstall ${entry.name}`}
-                    disabled={busy}
-                    onClick={() => uninstall(entry)}
-                  >
-                    Uninstall
-                  </Button>
-                )}
-                {relation === 'builtin' ? (
-                  <span className="addon-garden-included">
-                    Included with Hibi
-                  </span>
-                ) : relation === 'installed' ? (
-                  <span className="addon-garden-included">Installed</span>
-                ) : (
-                  <Button
-                    id={`garden-${entry.id}-install`}
-                    aria-label={`${relation === 'update' ? 'Replace' : 'Install'} ${entry.name}`}
-                    disabled={busy}
-                    onClick={() => install(entry)}
-                  >
-                    {relation === 'update' ? 'Replace' : 'Install'}
-                  </Button>
-                )}
-              </div>
-            </SettingRow>
+              )}
+              {relation === 'builtin' ? (
+                <span className="addon-garden-included">
+                  Included with Hibi
+                </span>
+              ) : relation === 'installed' ? (
+                <span className="addon-garden-included">Installed</span>
+              ) : (
+                <Button
+                  id={'garden-' + entry.id + '-install'}
+                  aria-label={
+                    (relation === 'update' ? 'Replace ' : 'Install ') +
+                    entry.name
+                  }
+                  disabled={busy}
+                  onClick={() => install(entry)}
+                >
+                  {relation === 'update' ? 'Replace' : 'Install'}
+                </Button>
+              )}
+            </AddonCatalogRow>
           )
         })}
       </div>
-    </>
+      {!matching.length && <NoMatchingAddons />}
+    </AddonDirectoryStatus>
   )
 }

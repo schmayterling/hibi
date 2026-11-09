@@ -13,7 +13,7 @@ export type NoteCacheLink = {
 export type NoteCacheTag = { tag: string; position: Pos }
 export type NoteCacheListItem = {
   position: Pos
-  /** Parent item's zero-based source line, or -1 for a root item. */
+  /** Parent item's zero-based source line; roots negate their list's first item line. */
   parent: number
   task?: string
   id?: string

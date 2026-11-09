@@ -792,6 +792,37 @@ async function fileChunk(): Promise<boolean | null> {
   return false
 }
 
+async function temporaryDetails(
+  writer: DetailStoreWriter,
+): Promise<DetailStoreWriter> {
+  const source = writer.record
+  const temporary = new DetailStoreWriter(
+    headingDirectory,
+    source.key.slice(0, 64),
+    source.identity,
+    { inline: false },
+  )
+  try {
+    if (writer.inline !== undefined)
+      temporary.write(writer.inline, source.count)
+    else {
+      let cursor = 0
+      while (cursor < source.bytes) {
+        const page = await readDetailStore(writer.directory, source, cursor)
+        if (!page) throw new TypeError('Invalid metadata detail store')
+        temporary.write(page.tokens, cursor === 0 ? source.count : 0)
+        cursor = page.nextCursor
+      }
+    }
+    temporary.finish(source.complete)
+    writer.abort()
+    return temporary
+  } catch (error) {
+    temporary.abort()
+    throw error
+  }
+}
+
 async function derive(
   input: MetadataParseInput,
   chunks: readonly string[],
@@ -914,6 +945,7 @@ async function derive(
       path: input.path,
       directory: detailWriter.directory,
       source: details,
+      ...(details.bytes === 0 ? { inline: [] } : {}),
     }
     detailLocations.set(input.id, detailLocation)
     const previous = headingLocations.get(input.id)
@@ -956,17 +988,13 @@ async function derive(
           store: writer.finish(),
         })
       }
-      if (detailWriter.inline !== undefined) {
-        const temporary = new DetailStoreWriter(
-          headingDirectory,
-          idPattern.test(input.id)
-            ? input.id
-            : createHash('sha256').update(input.path).digest('hex'),
-          headingIdentity(input),
-          { inline: false },
-        )
-        temporary.write(detailWriter.inline, details.count)
-        page.details = temporary.finish(details.complete)
+      if (
+        details.bytes &&
+        (detailWriter.directory !== headingDirectory ||
+          detailWriter.inline !== undefined)
+      ) {
+        detailWriter = await temporaryDetails(detailWriter)
+        page.details = detailWriter.record
         detailLocations.set(input.id, {
           ...detailLocation,
           directory: headingDirectory,
@@ -978,6 +1006,8 @@ async function derive(
   } catch (error) {
     detailWriter.abort()
     writer?.abort()
+    headingLocations.delete(input.id)
+    await clearDetailLocation(input.id)
     throw error
   }
 }

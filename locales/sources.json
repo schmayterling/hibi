@@ -7537,6 +7537,7 @@
     "src/addons/obsidian/native.ts"
   ],
   "c9d91facd3d2": [
+    "src/addons/obsidian/api/network/capabilities.ts",
     "src/addons/obsidian/runtime.ts"
   ],
   "e4d8e6b52b57": [

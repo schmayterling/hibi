@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { InstalledSnippet, InstalledTheme } from '../obsidian-themes/store'
 import type { CommunityEntry } from './community-types'
 import type { InstalledPlugin } from './package'
+import type { VaultSettingsOffer } from './store'
+
+type CapturedSettingsOffer = VaultSettingsOffer & {
+  id: string
+  vaultId: string
+}
 
 export type ObsidianInventory = {
   plugins: InstalledPlugin[]
@@ -26,10 +32,10 @@ export const emptyInventory: ObsidianInventory = {
   snippets: [],
   selection: { snippets: [] },
 }
-export const changed = (id?: string, enabled?: boolean) =>
+export const changed = (id?: string, enabled?: boolean, reload = false) =>
   window.dispatchEvent(
     new CustomEvent('hibi:obsidian-community-installed', {
-      detail: { id, enabled },
+      detail: { id, enabled, reload },
     }),
   )
 export const themesChanged = () =>
@@ -39,7 +45,7 @@ export const themesChanged = () =>
 export function useObsidianInventory(pluginsEnabled: boolean) {
   const [inventory, setInventory] = useState(emptyInventory)
   const [suggestions, setSuggestions] = useState<VaultSuggestion[]>([])
-  const [offers, setOffers] = useState<string[]>([])
+  const [offers, setOffers] = useState<CapturedSettingsOffer[]>([])
   const [error, setError] = useState('')
   const [runtimeErrors, setRuntimeErrors] = useState<Record<string, string>>({})
   const current = useRef(0)
@@ -59,19 +65,32 @@ export function useObsidianInventory(pluginsEnabled: boolean) {
                 VaultSuggestion[]
               >,
               Promise.all(
-                result.plugins.map(async (plugin) =>
-                  (await window.hibi.queryAddon('obsidian', 'settingsOffer', {
-                    id: plugin.manifest.id,
-                  }))
-                    ? plugin.manifest.id
-                    : null,
-                ),
+                result.plugins.map(async (plugin) => {
+                  const offer = (await window.hibi.queryAddon(
+                    'obsidian',
+                    'settingsOffer',
+                    {
+                      id: plugin.manifest.id,
+                    },
+                  )) as VaultSettingsOffer | false
+                  return offer
+                    ? {
+                        ...offer,
+                        id: plugin.manifest.id,
+                        vaultId: workspace.id,
+                      }
+                    : null
+                }),
               ),
             ])
           : [[], []]
       if (current.current !== request) return
       setSuggestions(found)
-      setOffers(offers.filter((id): id is string => id !== null))
+      setOffers(
+        offers.filter(
+          (offer): offer is CapturedSettingsOffer => offer !== null,
+        ),
+      )
       setError('')
     } catch (error) {
       if (current.current === request)
@@ -81,6 +100,14 @@ export function useObsidianInventory(pluginsEnabled: boolean) {
   useEffect(() => {
     void refresh()
     const reload = () => void refresh()
+    const stopWorkspace = window.hibi.onWorkspaceHeaderChanged((change) => {
+      if (
+        !change ||
+        !change.paths ||
+        change.paths.some((path) => path.startsWith('.obsidian/'))
+      )
+        reload()
+    })
     const runtime = (event: Event) =>
       setRuntimeErrors((event as CustomEvent<Record<string, string>>).detail)
     window.addEventListener('hibi:obsidian-host-state', runtime)
@@ -89,6 +116,7 @@ export function useObsidianInventory(pluginsEnabled: boolean) {
     window.addEventListener('hibi:obsidian-themes-saved', reload)
     return () => {
       current.current++
+      stopWorkspace()
       window.removeEventListener('hibi:obsidian-host-state', runtime)
       window.removeEventListener('hibi:obsidian-community-installed', reload)
       window.removeEventListener('hibi:obsidian-themes-saved', reload)

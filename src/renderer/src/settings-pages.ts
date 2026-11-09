@@ -7,12 +7,8 @@ export const coreSettingsCategories = [
   { id: 'general', label: 'Others' },
 ] as const
 
-/** Addon content shown inside Hibi's Appearance page instead of a page of its own. */
-export const APPEARANCE_SECTION = 'appearance'
-
 export function settingsCategory(owner: string, category = 'addons') {
-  return category === APPEARANCE_SECTION ||
-    coreSettingsCategories.some((entry) => entry.id === category)
+  return coreSettingsCategories.some((entry) => entry.id === category)
     ? category
     : `${owner}.${category}`
 }

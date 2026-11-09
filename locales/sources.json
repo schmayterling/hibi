@@ -967,6 +967,9 @@
   "8607818debfd": [
     "src/addons/obsidian/api/vault/native.ts"
   ],
+  "44cd6c70bd1c": [
+    "src/addons/obsidian/store.ts"
+  ],
   "b24e887ece6e": [
     "src/main/media.ts"
   ],
@@ -1345,6 +1348,9 @@
   "6b2fe25d348e": [
     "src/addons/vim/Settings.tsx"
   ],
+  "9a41e1077dca": [
+    "src/addons/obsidian/store.ts"
+  ],
   "8c3440194015": [
     "src/shared/admitted-operations.ts",
     "src/shared/document-journal.ts"
@@ -1641,6 +1647,9 @@
   ],
   "9c78aa9fb78e": [
     "src/renderer/src/main.tsx"
+  ],
+  "371996f6ba02": [
+    "src/addons/obsidian/store.ts"
   ],
   "1cc686099dd9": [
     "src/renderer/src/AddonHotkeySettings.tsx"
@@ -2008,7 +2017,8 @@
     "src/renderer/src/AddonSettings.tsx"
   ],
   "48845bff334a": [
-    "src/addons/dictionary/CustomWords.tsx"
+    "src/addons/dictionary/CustomWords.tsx",
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "f5b084a14162": [
     "src/renderer/src/NotificationSettings.tsx"
@@ -3118,7 +3128,7 @@
   "352f68dafab4": [
     "src/main/document.ts"
   ],
-  "ca6ba8a3a486": [
+  "bd5a50571894": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "33ffe414fe4e": [
@@ -3668,6 +3678,12 @@
   ],
   "48c32379de34": [
     "src/addons/obsidian/api/vault/native.ts"
+  ],
+  "606916cd4e1a": [
+    "src/addons/obsidian/store.ts"
+  ],
+  "f9d7ce82f16f": [
+    "src/addons/obsidian/native.ts"
   ],
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
@@ -4730,6 +4746,9 @@
   ],
   "d4b1ea5708dd": [
     "src/addons/diagnostics/Settings.tsx"
+  ],
+  "a7b3b5ace87e": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "74f6739f0c0a": [
     "src/addons/diagnostics/Settings.tsx"
@@ -7033,6 +7052,9 @@
   "7a689ecd9070": [
     "src/addons/obsidian/api/file-manager/index.ts"
   ],
+  "4120dda56523": [
+    "src/addons/obsidian/store.ts"
+  ],
   "a9a4506c02e2": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -7440,9 +7462,6 @@
   "7026bfea8279": [
     "src/main/workspace-files.ts"
   ],
-  "1cadce47c6a7": [
-    "src/addons/obsidian/store.ts"
-  ],
   "bb25a9076028": [
     "src/addons/obsidian/native.ts"
   ],
@@ -7479,6 +7498,9 @@
   ],
   "efd510c34d07": [
     "src/renderer/src/RecoverySettings.tsx"
+  ],
+  "b59dccd14c87": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "73003d179a64": [
     "src/main/addon-repository.ts"

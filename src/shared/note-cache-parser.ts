@@ -110,6 +110,25 @@ function frontmatter(
   }
 }
 
+// Plain runs have no inline grammar opener. Let the same parser jump to its
+// next candidate rather than trying every inline rule at every body character.
+const inlineCandidate =
+  /[\\\\&`<*_![\]~$=\n]| {2,}(?=\n)|www\.|https?:\/\/|(?<!\w)[\w.+-]{1,100}@|mailto:|xmpp:/g
+const plainRuns: MarkdownConfig = {
+  parseInline: [
+    {
+      name: 'NotePlainRun',
+      parse(cx, next, pos) {
+        // Lezer keeps its link closer after contributed inline rules.
+        if (next === 93) return -1
+        inlineCandidate.lastIndex = pos - cx.offset + 1
+        return (
+          cx.offset + (inlineCandidate.exec(cx.text)?.index ?? cx.text.length)
+        )
+      },
+    },
+  ],
+}
 const parserCache = new Map<string, (typeof metadataParsers)['gfm']>()
 function cacheParser(syntax: NoteSyntax) {
   const key = `${Number(syntax.gfm)}:${Number(syntax.wikilinks)}`
@@ -120,10 +139,15 @@ function cacheParser(syntax: NoteSyntax) {
     ).configure([
       ...(syntax.wikilinks ? [boundarySyntax['obsidian@1']] : []),
       ...(syntax.gfm
-        ? [boundarySyntax['empty-tasks@1'], boundarySyntax['github-alerts@1']]
+        ? [
+            boundarySyntax['empty-tasks@1'],
+            boundarySyntax['github-alerts@1'],
+            boundarySyntax['footnotes@1'],
+          ]
         : []),
       boundarySyntax['math-inline@1'],
       boundarySyntax['math-block@1'],
+      plainRuns,
     ])
     parserCache.set(key, parser)
   }
@@ -239,6 +263,7 @@ const unescapeLink = (text: string) =>
   text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, '$1')
 
 function disabled(node: SyntaxNode, settings: ReadonlySet<string>) {
+  if (!settings.size) return false
   const depth = headingDepth(node)
   if (depth) return settings.has(`core.heading-${depth}`)
   const features: Record<string, string> = {
@@ -297,8 +322,20 @@ function sectionType(node: SyntaxNode): NoteCacheSection['type'] | undefined {
       return node.getChild('AlertTitle') ? 'callout' : 'blockquote'
     case 'Table':
       return 'table'
+    case 'NoteFrontmatter':
+      return 'yaml'
+    case 'HorizontalRule':
+      return 'thematicBreak'
+    case 'HTMLBlock':
+      return 'html'
+    case 'BlockMath':
+      return 'math'
+    case 'FootnoteDefinition':
+      return 'footnoteDefinition'
+    case 'LinkReference':
+      return 'definition'
     default:
-      return undefined
+      return node.type.is('Block') ? node.name : undefined
   }
 }
 
@@ -313,19 +350,22 @@ export function* noteCacheEntries(
   const settings = new Set(syntax.disabledFeatures)
   const definitions = new Map<string, string>()
   const seenIds = new Set<string>()
-  tree.iterate({
-    enter(ref) {
-      if (disabled(ref.node, settings)) return false
-      if (ref.name !== 'LinkReference') return
-      const label = ref.node.getChild('LinkLabel'),
-        url = ref.node.getChild('URL')
-      if (label && url) {
-        const key = labelKey(read(label.from, label.to))
-        if (!definitions.has(key))
-          definitions.set(key, destination(read(url.from, url.to)))
-      }
-    },
-  })
+  const attachedMarkers = new Set<number>()
+  const hasBlockIds = source.includes('^')
+  if (source.includes(']:'))
+    tree.iterate({
+      enter(ref) {
+        if (disabled(ref.node, settings)) return false
+        if (ref.name !== 'LinkReference') return
+        const label = ref.node.getChild('LinkLabel'),
+          url = ref.node.getChild('URL')
+        if (label && url) {
+          const key = labelKey(read(label.from, label.to))
+          if (!definitions.has(key))
+            definitions.set(key, destination(read(url.from, url.to)))
+        }
+      },
+    })
   function destination(text: string) {
     return unescapeLink(
       text.startsWith('<') && text.endsWith('>') ? text.slice(1, -1) : text,
@@ -362,7 +402,44 @@ export function* noteCacheEntries(
     if (/\]\([ \t]*\)$/.test(raw)) return ''
     return definitions.get(labelKey(node.name === 'Image' ? raw.slice(1) : raw))
   }
-  function text(node: SyntaxNode): string {
+  function column(value: string) {
+    let result = 0
+    for (const char of value) result += char === '\t' ? 4 - (result % 4) : 1
+    return result
+  }
+  function gap(from: number, to: number, block: SyntaxNode) {
+    if (from === to) return ''
+    const value = read(from, to)
+    const start = position(block.from, block.from).start
+    const base = column(read(block.from - start.col, block.from))
+    if (!base) return value
+    return value.replace(
+      /(^|\n)([ \t]*)/g,
+      (_match, eol: string, spaces: string, index: number) => {
+        const at = from + index + eol.length
+        const loc = position(at, at).start
+        let col = column(read(at - loc.col, at)),
+          size = 0
+        while (size < spaces.length && col < base) {
+          col += spaces[size++] === '\t' ? 4 - (col % 4) : 1
+        }
+        return (
+          eol +
+          ' '.repeat(size ? Math.max(0, col - base) : 0) +
+          spaces.slice(size)
+        )
+      },
+    )
+  }
+  function text(node: SyntaxNode, block = node): string {
+    if (disabled(node, settings)) return ''
+    if (
+      node.name === 'Autolink' ||
+      (node.name === 'URL' &&
+        node.parent?.name !== 'Link' &&
+        node.parent?.name !== 'Image')
+    )
+      return read(node.from, node.to).replace(/^<|>$/g, '')
     if (node.name === 'WikiLink' || node.name === 'WikiEmbed') {
       const label = node.getChild('WikiAlias') ?? node.getChild('WikiTarget')
       return label ? read(label.from, label.to).trim() : ''
@@ -386,10 +463,17 @@ export function* noteCacheEntries(
     let result = '',
       from = node.from
     for (let child = node.firstChild; child; child = child.nextSibling) {
-      result += read(from, child.from) + text(child)
-      from = child.to
+      result += gap(from, child.from, block)
+      if (child.name === 'HeaderMark' && node.name.startsWith('Setext'))
+        return result.slice(0, result.lastIndexOf('\n'))
+      result += text(child, block)
+      from =
+        child.to +
+        (child.name === 'QuoteMark' && read(child.to, child.to + 1) === ' '
+          ? 1
+          : 0)
     }
-    return result + read(from, node.to)
+    return result + gap(from, node.to, block)
   }
   function link(node: SyntaxNode): NoteCacheLink | undefined {
     const value = target(node)
@@ -435,6 +519,7 @@ export function* noteCacheEntries(
     return node
   }
   function blockId(node: SyntaxNode): string | undefined {
+    if (!hasBlockIds) return
     if (node.name === 'ListItem' || node.name === 'Blockquote') {
       for (let child = node.firstChild; child; child = child.nextSibling)
         if (
@@ -468,8 +553,16 @@ export function* noteCacheEntries(
     node: SyntaxNode,
     property?: string,
   ): Generator<NoteCacheEntry> {
-    if (disabled(node, settings)) return
+    if (
+      disabled(node, settings) ||
+      (attachedMarkers.has(node.from) && node.name === 'Paragraph')
+    )
+      return
     if (node.name === 'NoteFrontmatter') {
+      yield {
+        kind: 'section',
+        value: { type: 'yaml', position: position(node.from, node.to) },
+      }
       if (parsed.frontmatter?.values)
         yield {
           kind: 'frontmatter',
@@ -492,7 +585,18 @@ export function* noteCacheEntries(
       }
       return
     }
-    const candidate = blockId(node)
+    const following = hasBlockIds ? node.nextSibling : null
+    const attached =
+      hasBlockIds &&
+      sectionType(node) &&
+      !['NoteFrontmatter', 'HorizontalRule'].includes(node.name) &&
+      following?.name === 'Paragraph' &&
+      /^\^[A-Za-z0-9-]+[ \t]*$/.test(read(following.from, following.to))
+        ? following
+        : null
+    if (attached) attachedMarkers.add(attached.from)
+    const candidate = attached ? idAt(attached) : blockId(node)
+    const to = attached?.to ?? node.to
     const id = candidate && !seenIds.has(candidate) ? candidate : undefined
     if (id) seenIds.add(id)
     const type =
@@ -502,7 +606,7 @@ export function* noteCacheEntries(
         kind: 'section',
         value: {
           type,
-          position: position(node.from, node.to),
+          position: position(node.from, to),
           ...(id ? { id } : {}),
         },
       }
@@ -519,13 +623,21 @@ export function* noteCacheEntries(
     if (node.name === 'ListItem') {
       let parent = node.parent
       while (parent && parent.name !== 'ListItem') parent = parent.parent
-      const task = node.getChild('Task')?.getChild('TaskMarker')
+      const marker = node.getChild('Task')?.getChild('TaskMarker')
+      const content = node.getChild('Task') ?? node.getChild('Paragraph')
+      const task = marker
+        ? read(marker.from + 1, marker.to - 1)
+        : syntax.gfm && content
+          ? /^\[([^\]\r\n])\](?:[ \t]|$)/.exec(
+              read(content.from, Math.min(content.to, content.from + 4)),
+            )?.[1]
+          : undefined
       yield {
         kind: 'listItem',
         value: {
           position: position(node.from, node.to),
           parent: parent ? position(parent.from, parent.to).start.line : -1,
-          ...(task ? { task: read(task.from + 1, task.to - 1) } : {}),
+          ...(task !== undefined ? { task } : {}),
           ...(id ? { id } : {}),
         },
       }
@@ -533,8 +645,10 @@ export function* noteCacheEntries(
     if (id)
       yield {
         kind: 'block',
-        value: { id, position: position(node.from, node.to) },
+        value: { id, position: position(node.from, to) },
       }
+    if (node.name === 'Highlight' && property === undefined)
+      yield* plain(node.from + 2, node.to - 2)
     if (opaque.test(node.name) || node.name === 'LinkReference') return
     // Only inline-bearing blocks scan their text gaps; container gaps are syntax.
     const inline =

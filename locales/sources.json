@@ -3595,6 +3595,9 @@
   "5d11a76afe7b": [
     "src/main/workspace-metadata-worker.ts"
   ],
+  "a60754679999": [
+    "src/shared/note-cache-query.ts"
+  ],
   "55fd4183e9eb": [
     "src/shared/document-worker-service.ts"
   ],
@@ -7344,6 +7347,9 @@
   "3812b8afab3d": [
     "src/addons/obsidian/api/editor/editor.ts"
   ],
+  "dc7b850d3921": [
+    "src/addons/obsidian/api/workspace/index.ts"
+  ],
   "dd81768f0d54": [
     "src/renderer/src/document-runtime.ts"
   ],
@@ -7479,6 +7485,10 @@
   ],
   "2baa271ed84a": [
     "src/renderer/src/History.tsx"
+  ],
+  "2b454314fa89": [
+    "src/addons/obsidian/api/metadata/index.ts",
+    "src/shared/note-cache-query.ts"
   ],
   "f25351b3d4a1": [
     "src/renderer/src/recovery-offer.tsx"
@@ -7684,6 +7694,9 @@
     "src/addons/autocomplete/index.tsx"
   ],
   "59a6bbc4ccfb": [
+    "src/addons/obsidian/api/workspace/index.ts"
+  ],
+  "549a1d2be8f6": [
     "src/addons/obsidian/api/workspace/index.ts"
   ],
   "78c4a3ab448e": [

@@ -34,6 +34,10 @@ import {
   recordTokens,
 } from '../src/main/workspace-metadata-record.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
+import {
+  metadataWorkerFixture,
+  withoutPositions,
+} from './workspace-metadata-detail-fixtures.mjs'
 
 const id = createHash('sha256').update('note.md').digest('hex')
 const identity = createHash('sha256').update('fixture').digest('hex')
@@ -83,7 +87,7 @@ test('heading index seeks to large offsets with fixed resident buffers and O(pag
   const record = writer.finish()
   assert.equal(
     (await stat(join(path, `${record.key}.hidx`))).size,
-    88 + count * 24,
+    88 + count * 80,
   )
   assert.equal(
     (await stat(join(path, `${record.key}.hdat`))).size,
@@ -114,9 +118,9 @@ test('heading index seeks to large offsets with fixed resident buffers and O(pag
   })
   assert.equal(
     reads.reduce((sum, read) => sum + read.length, 0),
-    88 * 2 + 24 * 2 + 8 * 2,
+    88 * 2 + 80 * 2 + 8 * 2,
   )
-  assert.ok(reads.some((read) => read.position === 88 + (count - 3) * 24))
+  assert.ok(reads.some((read) => read.position === 88 + (count - 3) * 80))
   assert.deepEqual(await readHeadingStore(path, record, count + 20, 2, true), {
     items: [],
     nextOffset: count + 20,
@@ -291,7 +295,7 @@ test('completed pruning removes replaced and deleted heading stores; worker temp
     (await parser.readHeadings(request, 0, 1, current)).items[0].text,
     'saved',
   )
-  assert.equal((await readdir(privateDirectory)).length, 2)
+  assert.equal((await readdir(privateDirectory)).length, 3)
   await parser.close()
   await assert.rejects(stat(privateDirectory), { code: 'ENOENT' })
   parser = new WorkspaceMetadataParser(() => options)
@@ -380,7 +384,7 @@ await import(${JSON.stringify(entry.href)})
   // Exactly at both bounds.
   await parse('full.md', `# ${label}\n`.repeat(inlineHeadingCount))
   const files = (await readdir(path)).filter(
-    (name) => name !== 'record-opens.mjs',
+    (name) => name !== 'record-opens.mjs' && !name.endsWith('.mdat'),
   )
   assert.deepEqual(
     files.sort(),
@@ -396,17 +400,27 @@ await import(${JSON.stringify(entry.href)})
   )
   const before = recordOpens
   assert.equal(await parser.finishBuild(current), true)
-  assert.equal(recordOpens, before, 'pruning reads no record')
-  assert.equal((await readdir(path)).length, 3)
+  assert.equal(
+    recordOpens,
+    before + 1,
+    'only the rich detail file needs an owner-record read',
+  )
+  assert.equal(
+    (await readdir(path)).filter((name) => name.endsWith('.mdat')).length,
+    1,
+  )
+  assert.equal((await readdir(path)).length, 4)
   await parser.close()
   parser = new WorkspaceMetadataParser(() => options)
   const headings = (path, offset, limit) =>
-    parser.readHeadings(
-      { ...request, id: note(path).id, path },
-      offset,
-      limit,
-      current,
-    )
+    parser
+      .readHeadings(
+        { ...request, id: note(path).id, path },
+        offset,
+        limit,
+        current,
+      )
+      .then(withoutPositions)
   assert.deepEqual(await headings('few.md', 0, 1), {
     items: [{ depth: 1, text: 'one' }],
     nextOffset: 1,
@@ -461,7 +475,7 @@ test('headings past either inline bound page from heading files in order', async
         .filter((name) => name.startsWith(id))
         .map((name) => name.slice(name.lastIndexOf('.')))
         .sort(),
-      ['.hdat', '.hidx', '.json'],
+      ['.hdat', '.hidx', '.json', ...(path === 'many.md' ? ['.mdat'] : [])],
     )
     const result = await parser.readHeadings(
       { ...request, id, path },
@@ -482,16 +496,13 @@ test('a parse error drops inline headings before the fallback scan', async (t) =
   const bundle = join(path, 'throwing-headings.mjs')
   await writeFile(
     bundle,
-    `
-import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
-const walk = Marked.prototype.walkTokens
-Marked.prototype.walkTokens = function (tokens, callback) {
-  if (!tokens[0]?.raw?.startsWith('throwing-headings') || !String(callback).includes('onHeading')) return walk.call(this, tokens, callback)
-  callback({ type: 'heading', depth: 1, tokens: [{ type: 'text', text: 'discarded' }] })
+    metadataWorkerFixture(`
+export function* noteCacheEntries(source, syntax, parsed) {
+  if (!source.startsWith('throwing-headings')) return yield* actualNoteCacheEntries(source, syntax, parsed)
+  yield { kind: 'heading', value: { depth: 1, text: 'discarded', position: fixturePosition } }
   throw new Error('parse fixture')
 }
-await import(${JSON.stringify(entry.href)})
-`,
+`),
   )
   const parser = new WorkspaceMetadataParser(() => ({
     entry: bundle,
@@ -539,10 +550,13 @@ test('saved records reject inline headings that disagree with their page or boun
   for (const line of (await readFile(file, 'utf8')).trimEnd().split('\n'))
     reader.write(JSON.parse(line))
   const original = reader.finish()
-  assert.deepEqual(original.inlineHeadings, [
-    { depth: 1, text: 'one' },
-    { depth: 2, text: 'two' },
-  ])
+  assert.deepEqual(
+    original.inlineHeadings.map(({ position, ...heading }) => heading),
+    [
+      { depth: 1, text: 'one' },
+      { depth: 2, text: 'two' },
+    ],
+  )
   const write = (record) =>
     writeFile(file, `${JSON.stringify([...recordTokens(record)])}\n`)
   await write(original)
@@ -614,17 +628,20 @@ await import(${JSON.stringify(entry.href)})
     current,
   )
   assert.equal(page.metadata.headings.count, 2)
-  assert.deepEqual(await parser.readHeadings(request, 0, 2, current), {
-    items: [
-      { depth: 1, text: 'kept' },
-      { depth: 2, text: 'second' },
-    ],
-    nextOffset: 2,
-    hasMore: false,
-    complete: true,
-  })
+  assert.deepEqual(
+    withoutPositions(await parser.readHeadings(request, 0, 2, current)),
+    {
+      items: [
+        { depth: 1, text: 'kept' },
+        { depth: 2, text: 'second' },
+      ],
+      nextOffset: 2,
+      hasMore: false,
+      complete: true,
+    },
+  )
   assert.deepEqual(await readdir(path), ['refused-record.mjs'])
-  assert.equal((await readdir(parser.headingDirectory)).length, 2)
+  assert.equal((await readdir(parser.headingDirectory)).length, 3)
   // A heading file that cannot be written leaves no empty heading answer.
   await rm(parser.headingDirectory, { recursive: true })
   const changed = { ...input, version: 'disk:2' }
@@ -716,8 +733,11 @@ await import(${JSON.stringify(entry.href)})
       const headings = await parser.readHeadings(saved, 0, 1000, current)
       assert.equal(headings.items.length, count)
       assert.equal(headings.complete, true)
+      const details = await parser.readDetails(saved, 0, current)
+      assert.equal(details.complete, true)
+      assert.ok(details.source.count >= count)
       assert.deepEqual(await readdir(cache), [])
-      assert.equal((await readdir(parser.headingDirectory)).length, 2)
+      assert.equal((await readdir(parser.headingDirectory)).length, 3)
     } finally {
       if (mode === 'read-only') await chmod(cache, 0o700)
       else await rm(refuse)
@@ -743,16 +763,13 @@ test('watchdog respawn cleans partial heading files, retransfers sources, and pr
   const bundle = join(path, 'stuck-headings.mjs')
   await writeFile(
     bundle,
-    `
-import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
-const walk = Marked.prototype.walkTokens
-Marked.prototype.walkTokens = function (tokens, callback) {
-  if (!tokens[0]?.raw?.startsWith('stuck-headings')) return walk.call(this, tokens, callback)
-  for (let i = 0; i < 10000; i++) callback({ type: 'heading', depth: 1, tokens: [{ type: 'text', text: 'partial' }] })
+    metadataWorkerFixture(`
+export function* noteCacheEntries(source, syntax, parsed) {
+  if (!source.startsWith('stuck-headings')) return yield* actualNoteCacheEntries(source, syntax, parsed)
+  for (let i = 0; i < 10000; i++) yield { kind: 'heading', value: { depth: 1, text: 'partial', position: fixturePosition } }
   while (true) {}
 }
-await import(${JSON.stringify(entry.href)})
-`,
+`),
   )
   const parser = new WorkspaceMetadataParser(() => ({
     entry: bundle,
@@ -861,17 +878,19 @@ test('file changes or EIO after heading extraction return null and publish no re
     await writeFile(
       bundle,
       mode === 'changed'
-        ? `
-import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
+        ? metadataWorkerFixture(`
 import { writeFileSync } from 'node:fs'
-const walk = Marked.prototype.walkTokens
 let changed = false
-Marked.prototype.walkTokens = function (tokens, callback) {
-  if (!changed) { changed = true; writeFileSync(${JSON.stringify(nativePath)}, '# replacement') }
-  return walk.call(this, tokens, callback)
+export function* noteCacheEntries(source, syntax, parsed) {
+  for (const entry of actualNoteCacheEntries(source, syntax, parsed)) {
+    yield entry
+    if (!changed && entry.kind === 'heading') {
+      changed = true
+      writeFileSync(${JSON.stringify(nativePath)}, '# replacement')
+    }
+  }
 }
-await import(${JSON.stringify(entry.href)})
-`
+`)
         : `
 import fs from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
@@ -1103,16 +1122,16 @@ test('heading volumes keep cold and warm metadata resident bytes independent of 
   const labelLength = Number(process.env.HIBI_HEADING_LABEL ?? 512)
   await writeFile(
     bundle,
-    `
-import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
-const walk = Marked.prototype.walkTokens
-Marked.prototype.walkTokens = function (tokens, callback) {
-  if (!tokens[0]?.raw?.startsWith('synthetic-headings')) return walk.call(this, tokens, callback)
-  for (let i = 0; i < ${count}; i++) callback({ type: 'heading', depth: i % 6 + 1, tokens: [{ type: 'text', text: 'h'.repeat(${labelLength}) }] })
-  return []
+    metadataWorkerFixture(
+      `
+export function* noteCacheEntries(source, syntax, parsed) {
+  if (!source.startsWith('synthetic-headings')) return yield* actualNoteCacheEntries(source, syntax, parsed)
+  for (let i = 0; i < ${count}; i++) yield { kind: 'heading', value: { depth: i % 6 + 1, text: 'h'.repeat(${labelLength}), position: fixturePosition } }
 }
-await import(${JSON.stringify(selected.entry.href)})
 `,
+      '',
+      selected.entry.href,
+    ),
   )
   let parser = new selected.Parser(() => ({
     entry: bundle,

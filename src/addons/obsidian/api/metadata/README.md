@@ -1,83 +1,72 @@
 # Metadata compatibility
 
-Import `metadata/index.ts` before creating host contributions. It registers
-`app.metadataCache`, the `MetadataCache` class, `getAllTags`, and the four
-`parseFrontMatter*` helpers through `registerObsidianApi`. The module augments
-`MetadataCacheApi` without changing the shared host contract.
+Import `metadata/index.ts` before creating contributions. It registers
+`app.metadataCache`, `MetadataCache`, `getAllTags`, `resolveSubpath`, and the
+`parseFrontMatter*` helpers through `registerObsidianApi`.
 
-The native host merges `createMetadataNative(context, checkHost).queries` into its
-read-only queries. `obsidianMetadataFile` accepts `{ vaultId, target, path,
-syntaxSnapshot? }` and returns one worker metadata page plus its workspace
-sequence. It checks the captured vault, configuration folders, symlinks, and
-activation before and after work. The parent-owned `workspaceMetadataFile`
-helper must retain the normal main-process file confinement checks.
+With no folder open the cache is empty and has no document, workspace or syntax
+subscriptions. Plain folders use the same worker. The host recreates service
+and plugin lifetimes when the folder identity or generation changes.
 
-Without an open folder, the contribution exposes an empty cache and registers no document, workspace or syntax subscriptions. Plain folders use the same bounded metadata worker without requiring Obsidian configuration. The host recreates the cache when the captured folder changes.
+## Loading and source agreement
 
-## Loading and events
+`getFileCache(file)` and `getCache(path)` are synchronous. A cold request returns
+`null` and queues that note. Completed reads emit `changed(file, source, cache)`,
+then `resolve(file)`. `resolved` means the requested queue drained successfully.
+It does not mean every file has been loaded. The serial queue and retained cache
+each hold at most 128 requested notes; evicted entries can be requested again.
 
-`getFileCache(file)` and `getCache(path)` are synchronous. An uncached request
-returns `null` and queues that file. Completed reads emit `changed(file, source,
-cache)`, then `resolve(file)`. `resolved` means the requested queue drained
-successfully, rather than a claim that every vault file has been indexed.
+Rich records come from Hibi's public `workspace.query({kind: 'metadata', ...})`
+stream. The SDK captures active syntax settings. Bounded token pages reconstruct
+one entry at a time, including large nested YAML values split across pages.
+There is no renderer Markdown or YAML parse. Source is read through `vault.read`
+only for the `changed` event, including unsaved document edits. Worker versions,
+document versions and workspace sequences must agree around that read.
+Source text is released after the event.
 
-`resolvedLinks` and `unresolvedLinks` are lazy read-only object views.
-Enumerating their keys uses Vault's loaded file paths without loading note
-metadata. Reading a cold row queues that source and returns `undefined`.
-After `resolve`, reading it returns destination counts. Metadata and queued
-requests are bounded to 128 notes, processed serially. Evicted or refused
-requests can be requested again. Rows and cached values are plugin-visible
-copies; they are not host index objects. Source text is released after the
-`changed` callback.
+Known document and workspace paths refresh only affected requested notes.
+Unknown events refresh requested entries while retaining their previous values.
+An unchanged version and cache retain object identity and emit no new `changed`.
+Per-path jobs cancel superseded loads; disposal cancels publication and callbacks.
 
-Headings and resolved targets use bounded workspace query pages. Per-file tags
-and normalized references come from Hibi's existing worker/cache. Frontmatter
-uses the existing shared `noteProperties` helper on the one requested source
-returned by `vault.read`, including an open draft. Worker versions, document
-versions, and workspace sequences must agree around this source read before
-publication. Workspace content events with known paths and document events with
-mapped targets invalidate only those requested files. Per-file pending jobs
-cancel stale publication without cancelling unrelated reads. Document identities
-are resolved through Vault's cached tab-to-path mapping, not the focused tab.
-Unknown-target events, tree changes, resyncs, and syntax changes queue refreshes
-of requested files while keeping existing cached values available. A refresh
-preserves cache and link-row identity and omits `changed` when both the worker
-version and metadata are unchanged. A workspace replacement clears the cache;
-disposal cancels publication and removes all three subscriptions. There is no
-whole-vault source snapshot or second vault parser.
+## Fields and links
 
-Metadata requests accept Markdown files; attachments return `null` without a source read.
-All public source paths are vault-relative; an empty source context means the vault root.
-Link resolution uses Hibi's shared
-root/sibling/unique-basename rules. `fileToLinktext` follows Vault's shortest,
-relative, or absolute link setting, preserves attachment extensions, and honors
-`omitMdExtension`. Shortest links use the shared shortest unique folder suffix;
-a leading slash disambiguates a root path that is also another file's suffix.
+Headings, links, embeds, tag occurrences, list items, sections and blocks have
+`position: {start: {line, col, offset}, end: {line, col, offset}}`. Coordinates
+are zero-based UTF-16 offsets in the original source, with exclusive ends.
+CRLF counts as two source units. A BOM remains part of the first line.
 
-## Host limits
+Links and embeds retain their original source spelling, display label and
+subpath. Tags retain source spelling and repeated positions; Hibi's tag
+predicate index remains normalized. Frontmatter supports nested YAML mappings
+and arrays, with `frontmatterPosition` and positioned `frontmatterLinks`.
+Frontmatter link keys use dot-separated property paths. Alias expansion is
+bounded; malformed or unsupported YAML is marked incomplete by the worker.
 
-Hibi's metadata does not provide source positions. Heading and tag items omit
-`position`; `frontmatterPosition`, block IDs, sections, list items, links,
-embeds, and frontmatter-link cache entries are unavailable. No zero positions or
-guessed ranges are supplied.
+`blocks` maps explicit block IDs to their owning source blocks. Duplicate IDs
+use their first definition. `resolveSubpath(cache, '#^id')` returns that block;
+heading subpaths return the current and next heading at the same or higher
+level. Sections describe top-level blocks, with nested list items listed
+separately. Code, math and literal HTML content do not produce Markdown links,
+tags or explicit block IDs from their interior.
 
-Worker references retain local/wiki occurrence counts, but normalize Markdown
-paths, strip subpaths, and merge wiki links with embeds. Unresolved keys
-therefore use normalized paths, and embedded references contribute to the same
-counts. External URLs and anchor-only Markdown references are absent. Existing destinations missing from the
-resolved index are omitted rather than mislabeled unresolved.
+`resolvedLinks` and `unresolvedLinks` are lazy read-only views over loaded Vault
+descriptors. A cold row queues its source and returns `undefined`. Local links,
+embeds and frontmatter links contribute occurrence counts, including self
+references. External URLs are excluded. Reads never build a second whole-vault
+parser or retain a source snapshot of the vault.
 
-Frontmatter contains scalar values and flat scalar lists only. Nested values
-are unavailable. Tags use Hibi's normalized NFC/lowercase index values and do
-not retain source spelling or repeated tag positions. Existing host parsing
-also treats a BOM-prefixed first heading as text.
+Paths are vault-relative; an empty source context means the root. Attachments
+return `null` from metadata queries. Link resolution and shortest, relative or
+absolute link text use Hibi's shared resolver and Vault link settings.
 
-The SDK automatically captures active syntax for workspace queries, but does
-not do so for arbitrary native queries. Until the host supplies
-`syntaxSnapshot` to the metadata query, its worker uses Hibi's explicitly
-incomplete legacy syntax fallback. This can differ from active per-file
-settings. The parent host owns that snapshot handoff and native wiring.
+## Limits
 
-These are partial compatibility results. Plugins requiring exact positions,
-raw link/embed spelling, nested frontmatter, or a synchronous complete-vault
-cache need additional host capabilities.
+Custom addon syntax outside the worker's built-in grammar is reported as
+incomplete. Resource-limit fallback records omit unavailable rich fields;
+positions are never guessed. The synchronous cache covers requested notes,
+rather than guaranteeing an immediately complete vault cache.
+
+The older private `createMetadataNative` query remains available to the host.
+It retains identity, configuration-directory and symlink guards. The cache
+uses the public syntax-aware stream instead of its legacy syntax fallback.

@@ -39,4 +39,22 @@ The declaration closure references React, CodeMirror, Lezer, and Marked types, s
 
 Choose unique syntax node names, preferably starting with your addon id. Hibi rejects declarations that collide with bundled nodes or another active addon. Declare `inlineStops: true` only when inline parsers start at backslash, backtick, `& * _ ! [ ] < > ~ ^ $ : =`, line breaks, or core URL/email starts. Other starting characters require the plain-text shortcut to stay off for that grammar.
 
+Use `context.workspace.metadata({target, path})` to stream one note's positioned metadata. Capture `target` from `context.workspace.changeSnapshot()`; `path` is relative to that folder. The async iterator yields `NoteCacheEntry` values for headings, links, embeds, tag occurrences, list items, sections, blocks and nested frontmatter. It reads the metadata worker's bounded pages, including unsaved open-note edits, without loading source text for every note.
+
+```typescript
+const snapshot = await context.workspace.changeSnapshot()
+if (snapshot.target) {
+  for await (const entry of context.workspace.metadata({
+    target: snapshot.target,
+    path: 'notes/example.md',
+  })) {
+    if (entry.kind === 'heading') {
+      console.log(entry.value.text, entry.value.position.start)
+    }
+  }
+}
+```
+
+Positions use zero-based `{line, col, offset}` locations in the original UTF-16 source, including BOM and CRLF units, with exclusive ends. Use `workspace.query({target, kind: 'resolve-subpath', path, subpath: '#^block-id'})` for an explicit block, or pass a heading name or slug as the subpath. A successful result contains its source position and source version. Capture document and editor versions before moving a caret; discard a result if they changed while awaiting it. Iterators reject stale folder, source, syntax or continuation identities. Callers that need completeness diagnostics can read `kind: 'metadata'` query pages directly.
+
 Creating a package does not publish it to the garden.

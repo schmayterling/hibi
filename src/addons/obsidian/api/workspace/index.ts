@@ -328,7 +328,58 @@ export class Workspace extends Events {
       sourcePath,
     )
     if (!file) throw new Error('This link does not resolve to a vault file.')
-    await this.getLeaf(newLeaf).openFile(file)
+    const leaf = this.getLeaf(newLeaf)
+    await leaf.openFile(file)
+    const hash = linktext.indexOf('#')
+    const target = this.app.vault.target
+    const view = leaf.target()
+    if (hash < 0 || !target || !view) return
+    const { hibi } = this.context
+    const selected = hibi.editorViews.getSelection(view)
+    if (!selected.ok) return
+    const result = await hibi.workspace.query({
+      target,
+      path: file.path,
+      kind: 'resolve-subpath',
+      subpath: linktext.slice(hash),
+    })
+    this.assertActive(true)
+    if (!result.ok) throw new Error(result.message)
+    if (result.value.kind !== 'resolve-subpath' || !result.value.resolved)
+      return
+    if (
+      result.value.stale ||
+      result.value.path !== file.path ||
+      result.value.target.workspaceId !== target.workspaceId ||
+      result.value.target.workspaceGeneration !== target.workspaceGeneration
+    )
+      throw new Error('This workspace changed. Try again.')
+    const current = hibi.editorViews.getSelection(view)
+    if (
+      leaf.file() !== file ||
+      !current.ok ||
+      current.value.contentVersion !== selected.value.contentVersion ||
+      current.value.editorGeneration !== selected.value.editorGeneration ||
+      current.value.anchor !== selected.value.anchor ||
+      current.value.head !== selected.value.head
+    )
+      throw new Error('This editor view changed. Read it again.')
+    const editor = (
+      leaf.view as {
+        editor?: {
+          setCursor(position: { line: number; ch: number }): void
+          scrollIntoView?(range: {
+            from: { line: number; ch: number }
+            to: { line: number; ch: number }
+          }): void
+        }
+      } | null
+    )?.editor
+    if (!editor) return
+    const { line, col } = result.value.resolved.position.start
+    const position = { line, ch: col }
+    editor.setCursor(position)
+    editor.scrollIntoView?.({ from: position, to: position })
   }
   registerView(type: string, creator: ViewCreator) {
     this.assertActive()

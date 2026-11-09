@@ -43,6 +43,8 @@ export type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../shared/markdown-syntax'
+export type { NoteCacheEntry, NotePosition } from '../shared/note-cache'
+export type { NoteMetadataRequest } from '../shared/note-cache-query'
 export type { CodeLanguage } from '../shared/syntax'
 
 import type {
@@ -1114,6 +1116,10 @@ export type AddonContext = {
         import('../shared/workspace-query').QueryFailure
       >
     >
+    /** Stream positioned metadata for one note, including unsaved document edits. */
+    metadata: (
+      request: import('../shared/note-cache-query').NoteMetadataRequest,
+    ) => AsyncIterable<import('../shared/note-cache').NoteCacheEntry>
     get: () => Promise<WorkspaceState | null>
     open: () => Promise<WorkspaceState | null>
     openFile: (path: string) => Promise<void>

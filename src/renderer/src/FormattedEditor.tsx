@@ -402,7 +402,7 @@ export function MarkdownEditor({
     setAnchor(null)
   }
   const followLink = (href: string) => {
-    if (!href.startsWith('#')) {
+    if (!href.startsWith('#') || href.startsWith('#^')) {
       onLink(href)
       return
     }

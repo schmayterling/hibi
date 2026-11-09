@@ -1,3 +1,4 @@
+import { headingAnchors } from '../../../../shared/heading-anchor'
 import type { CachedMetadata } from './index'
 
 export function parseFrontMatterEntry(
@@ -40,6 +41,37 @@ export function parseFrontMatterTags(frontmatter: unknown): string[] | null {
         .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`)),
     ) ?? null
   )
+}
+
+/** Resolve a heading or explicit block id from this note's positioned cache. */
+export function resolveSubpath(cache: CachedMetadata, subpath: string) {
+  let target: string
+  try {
+    target = decodeURIComponent(subpath.replace(/^#/, ''))
+  } catch {
+    return null
+  }
+  if (target.startsWith('^')) {
+    const block = cache.blocks?.[target.slice(1)]
+    if (!block) return null
+    const list = cache.listItems?.find((item) => item.id === block.id)
+    return { type: 'block' as const, block, ...(list ? { list } : {}) }
+  }
+  const headings = cache.headings ?? []
+  const anchors = headingAnchors(headings.map(({ heading }) => heading))
+  const folded = target.normalize('NFC').toLowerCase()
+  const index = headings.findIndex(
+    ({ heading }, index) =>
+      heading.normalize('NFC').toLowerCase() === folded ||
+      anchors[index]?.anchor === target ||
+      anchors[index]?.legacy === target,
+  )
+  const current = headings[index]
+  if (!current) return null
+  const next =
+    headings.slice(index + 1).find(({ level }) => level <= current.level) ??
+    null
+  return { type: 'heading' as const, current, next }
 }
 
 export function getAllTags(cache: CachedMetadata): string[] | null {

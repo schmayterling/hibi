@@ -66,6 +66,7 @@ export class DetailStoreWriter {
   private fallbackDirectory: string | undefined
   private allowInline: boolean
   private temporary: string
+  private stored: string | undefined
 
   constructor(
     directory: string,
@@ -103,6 +104,7 @@ export class DetailStoreWriter {
   private openFile(): void {
     this.temporary = join(this.directory, `.${this.record.key}.mdat.tmp`)
     this.fd = openSync(this.temporary, 'wx', 0o600)
+    this.stored = this.temporary
     if (
       !sameFileIdentity(
         statSync(this.directory, { bigint: true }),
@@ -192,10 +194,9 @@ export class DetailStoreWriter {
         writeAll(this.fd, header, header.length, 0)
         closeSync(this.fd)
         this.fd = undefined
-        renameSync(
-          this.temporary,
-          join(this.directory, `${this.record.key}.mdat`),
-        )
+        const target = join(this.directory, `${this.record.key}.mdat`)
+        renameSync(this.temporary, target)
+        this.stored = target
       }
       return this.record
     } catch (error) {
@@ -207,21 +208,17 @@ export class DetailStoreWriter {
   abort(): void {
     if (this.fd !== undefined) closeSync(this.fd)
     this.fd = undefined
+    const stored = this.stored
+    this.stored = undefined
+    if (!stored) return
     try {
       if (
-        !sameFileIdentity(
+        sameFileIdentity(
           lstatSync(this.directory, { bigint: true }),
           this.folder,
         )
       )
-        return
-      for (const path of [
-        this.temporary,
-        join(this.directory, `${this.record.key}.mdat`),
-      ])
-        try {
-          unlinkSync(path)
-        } catch {}
+        unlinkSync(stored)
     } catch {}
   }
 }

@@ -327,6 +327,66 @@ test('rich detail files reject symlinks; invalid YAML and fallback mark incomple
   )
 })
 
+test('empty and incomplete draft detail streams remain explicit without files', async (t) => {
+  const host = await fixture(t, false)
+  const page = await host.parse('', { version: 'draft:empty' })
+  assert.equal(page.details.complete, true)
+  assert.equal(page.details.bytes, 0)
+  assert.deepEqual(
+    (
+      await entries(
+        host.parser,
+        { ...request, version: 'draft:empty' },
+        page.details,
+      )
+    ).result,
+    [],
+  )
+  const fallback = await host.parse('body', {
+    version: 'draft:fallback',
+    fallback: true,
+  })
+  assert.equal(fallback.details.complete, false)
+  assert.deepEqual(
+    (
+      await entries(
+        host.parser,
+        { ...request, version: 'draft:fallback' },
+        fallback.details,
+      )
+    ).result,
+    [],
+  )
+})
+
+test('paged heading positions survive disk cache reopen', async (t) => {
+  const host = await fixture(t)
+  const source = Array.from({ length: 80 }, (_, i) => `# n${i}`).join('\r\n')
+  await host.parse(source)
+  const expected = Array.from({ length: 5 }, (_, i) => {
+    const line = i + 73
+    const text = `n${line}`
+    const offset = source.indexOf(`# ${text}`)
+    return {
+      depth: 1,
+      text,
+      position: {
+        start: { line, col: 0, offset },
+        end: { line, col: 5, offset: offset + 5 },
+      },
+    }
+  })
+  assert.deepEqual(
+    (await host.parser.readHeadings(request, 73, 5, current)).items,
+    expected,
+  )
+  await host.reopen()
+  assert.deepEqual(
+    (await host.parser.readHeadings(request, 73, 5, current)).items,
+    expected,
+  )
+})
+
 test('worker projection consumes rich parse once and preserves flat predicates without marked', (t) => {
   const lexer = t.mock.method(Marked.prototype, 'lexer')
   const entries = []

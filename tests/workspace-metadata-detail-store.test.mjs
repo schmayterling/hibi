@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import {
+import promises, {
   mkdtemp,
   readFile,
   rename,
@@ -9,6 +9,7 @@ import {
   truncate,
   writeFile,
 } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -141,6 +142,45 @@ test('detail reader rejects incomplete streams and invalid primitive tokens', ()
   )
 })
 
+test('frontmatter keys preserve data without changing object prototypes', () => {
+  const values = JSON.parse(
+    '{"__proto__":{"polluted":true},"constructor":{"prototype":"data"}}',
+  )
+  const entry = { kind: 'frontmatter', value: { values, position } }
+  const reader = new DetailReader()
+  const [actual] = reader.write([...recordTokens(entry)])
+  reader.finish()
+  assert.deepEqual(actual, entry)
+  assert.equal(Object.getPrototypeOf(actual.value.values), Object.prototype)
+  assert.equal(Object.hasOwn(actual.value.values, '__proto__'), true)
+  assert.equal({}.polluted, undefined)
+})
+
+test('typed detail reader rejects malformed entries after primitive decoding', () => {
+  const invalid = [
+    { kind: 'heading', value: { depth: 9, text: 'bad', position } },
+    { kind: 'link', value: { link: 1, original: 'bad', position } },
+    {
+      kind: 'embed',
+      value: { link: 'ok', original: 'ok', displayText: false, position },
+    },
+    { kind: 'tag', value: { tag: 1, position } },
+    { kind: 'frontmatter', value: { values: [], position } },
+    {
+      kind: 'frontmatterLink',
+      value: { link: 'ok', original: 'ok', key: 1, position },
+    },
+    { kind: 'listItem', value: { parent: -2, position } },
+    { kind: 'section', value: { type: 1, position } },
+    { kind: 'block', value: { id: 1, position } },
+  ]
+  for (const entry of invalid)
+    assert.throws(
+      () => [...new DetailReader().write([...recordTokens(entry)])],
+      /Invalid metadata entry/,
+    )
+})
+
 test('metadata-only record reads skip resident inline details while detail reads retain them', () => {
   const inlineDetails = [
     ...recordTokens({
@@ -162,6 +202,49 @@ test('metadata-only record reads skip resident inline details while detail reads
   }
   assert.deepEqual(projected.finish(), { page: value.page, inlineDetails: [] })
   assert.deepEqual(complete.finish(), value)
+})
+
+test('detail file lstat/open race never opens symlink target', async (t) => {
+  const path = await directory(t)
+  const writer = new DetailStoreWriter(path, id, identity)
+  writer.add({
+    kind: 'frontmatter',
+    value: { values: { huge: 'x'.repeat(100000) }, position },
+  })
+  const source = writer.finish(true)
+  const file = join(path, `${source.key}.mdat`)
+  const outside = join(path, 'outside')
+  await writeFile(outside, await readFile(file))
+  const outsideInfo = await promises.stat(outside, { bigint: true })
+  const originalLstat = promises.lstat
+  const originalOpen = promises.open
+  let swapped = false
+  let outsideOpens = 0
+  t.mock.method(promises, 'lstat', async (...args) => {
+    const info = await originalLstat(...args)
+    if (!swapped && String(args[0]) === file) {
+      swapped = true
+      await rename(file, `${file}.moved`)
+      await symlink(outside, file)
+    }
+    return info
+  })
+  t.mock.method(promises, 'open', async (...args) => {
+    const opened = await originalOpen(...args)
+    const info = await opened.stat({ bigint: true })
+    if (info.dev === outsideInfo.dev && info.ino === outsideInfo.ino)
+      outsideOpens++
+    return opened
+  })
+  syncBuiltinESMExports()
+  try {
+    assert.equal(await readDetailStore(path, source, 0), null)
+    assert.equal(swapped, true)
+    assert.equal(outsideOpens, 0)
+  } finally {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
 })
 
 test('disk detail guards reject identity, size, invalid boundaries, links and truncation', async (t) => {

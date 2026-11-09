@@ -294,17 +294,63 @@ export function validNotePosition(value: unknown): value is NotePosition {
   )
 }
 
-const detailKinds = new Set([
-  'heading',
-  'link',
-  'embed',
-  'tag',
-  'listItem',
-  'section',
-  'block',
-  'frontmatter',
-  'frontmatterLink',
-])
+function validDetailEntry(entry: unknown): entry is NoteCacheEntry {
+  if (
+    !entry ||
+    typeof entry !== 'object' ||
+    !('kind' in entry) ||
+    !('value' in entry) ||
+    !entry.value ||
+    typeof entry.value !== 'object' ||
+    Array.isArray(entry.value)
+  )
+    return false
+  const value = entry.value as Record<string, unknown>
+  if (!validNotePosition(value.position)) return false
+  const optionalText = (key: string) =>
+    value[key] === undefined || typeof value[key] === 'string'
+  const link =
+    typeof value.link === 'string' &&
+    typeof value.original === 'string' &&
+    optionalText('displayText')
+  switch (entry.kind) {
+    case 'heading':
+      return (
+        typeof value.depth === 'number' &&
+        Number.isInteger(value.depth) &&
+        value.depth >= 1 &&
+        value.depth <= 6 &&
+        typeof value.text === 'string'
+      )
+    case 'link':
+    case 'embed':
+      return link
+    case 'frontmatterLink':
+      return link && typeof value.key === 'string'
+    case 'tag':
+      return typeof value.tag === 'string'
+    case 'block':
+      return typeof value.id === 'string'
+    case 'section':
+      return typeof value.type === 'string' && optionalText('id')
+    case 'listItem':
+      return (
+        typeof value.parent === 'number' &&
+        Number.isSafeInteger(value.parent) &&
+        value.parent >= -1 &&
+        optionalText('task') &&
+        optionalText('id')
+      )
+    case 'frontmatter':
+      return (
+        !!value.values &&
+        typeof value.values === 'object' &&
+        !Array.isArray(value.values)
+      )
+    default:
+      return false
+  }
+}
 
 /** One root per entry; release it before reconstructing the next entry. */
 export class DetailReader {
@@ -316,17 +362,9 @@ export class DetailReader {
       this.reader ??= new RecordReader()
       this.reader.write([token])
       if (!this.reader.done) continue
-      const entry = this.reader.finish() as NoteCacheEntry
+      const entry = this.reader.finish()
       this.reader = undefined
-      if (
-        !entry ||
-        typeof entry !== 'object' ||
-        !detailKinds.has(entry.kind) ||
-        !entry.value ||
-        typeof entry.value !== 'object' ||
-        Array.isArray(entry.value) ||
-        !validNotePosition(entry.value.position)
-      )
+      if (!validDetailEntry(entry))
         throw new TypeError('Invalid metadata entry')
       yield entry
     }

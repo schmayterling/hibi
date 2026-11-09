@@ -12,6 +12,11 @@ import {
   stopCommunityInstalls,
 } from './community-native'
 import {
+  consumeFullAccessChallenge,
+  desktopAccessChanged,
+  fullAccessChallenge,
+} from './desktop-native'
+import {
   type CommunityPluginSource,
   type InstalledPlugin,
   validPluginId,
@@ -187,7 +192,7 @@ async function trustPackage(
     dialog.showMessageBox({
       type: 'warning',
       message: `Install ${packageData.manifest.name}?`,
-      detail: `${packageData.manifest.description}\n\nAuthor: ${source?.author ?? packageData.manifest.author}${source ? `\nRepository: ${source.repo}\nRelease: ${source.release}` : ''}\nRequires Obsidian ${packageData.manifest.minAppVersion} or later. Hibi provides a partial compatibility API.\n\nObsidian plugins run with Hibi's renderer access and can read or change your notes and interface. Install only plugins you trust. This copy starts disabled. Hibi never writes to .obsidian.\n\nSHA-256: ${packageData.hash}`,
+      detail: `${packageData.manifest.description}\n\nAuthor: ${source?.author ?? packageData.manifest.author}${source ? `\nRepository: ${source.repo}\nRelease: ${source.release}` : ''}\nRequires Obsidian ${packageData.manifest.minAppVersion} or later. Hibi provides a partial compatibility API.\n\nObsidian plugins run with Hibi's renderer access and can read or change your notes and interface. Install only plugins you trust. This copy starts disabled. Hibi keeps plugin copies and settings outside .obsidian. Full computer access requires a separate confirmation before enabling it.\n\nSHA-256: ${packageData.hash}`,
       buttons: ['Cancel', 'Trust and install'],
       defaultId: 0,
       cancelId: 0,
@@ -195,7 +200,14 @@ async function trustPackage(
   )
   place.check()
   if (verdict.response !== 1) return null
-  return place.store.install(packageData, place.check, source, origin)
+  const installed = await place.store.install(
+    packageData,
+    place.check,
+    source,
+    origin,
+  )
+  desktopAccessChanged(packageData.manifest.id)
+  return installed
 }
 
 /** Called only by the lazy app-protocol route after addon activation checks. */
@@ -274,6 +286,19 @@ export default {
       const result = await place.store.list()
       place.check()
       return result
+    },
+    async prepareFullAccess(input, context) {
+      const place = await globalPlace(input, context)
+      const plugin = (await place.store.list()).find(
+        (plugin) => plugin.manifest.id === pluginId(place.data),
+      )
+      if (!plugin || (input as { hash?: unknown }).hash !== plugin.hash)
+        throw new Error(
+          'This plugin changed. Review full computer access again.',
+        )
+      await place.store.readPackage(plugin)
+      place.check()
+      return fullAccessChallenge(plugin, place.check)
     },
     async discover(input, context) {
       addonCheck(context)
@@ -372,27 +397,46 @@ export default {
       const enabled = (input as { enabled?: unknown }).enabled
       if (typeof enabled !== 'boolean')
         throw new Error('Choose whether to enable this plugin.')
+      let fullAccess = false
       if (enabled) {
         const plugin = (await place.store.list()).find(
           (entry) => entry.manifest.id === id,
         )
         if (!plugin) throw new Error('Choose an installed Obsidian plugin.')
-        const verdict = await runFileDialog(() =>
-          dialog.showMessageBox({
-            type: 'warning',
-            message: `Enable ${plugin.manifest.name}?`,
-            detail:
-              'This plugin can read or change your notes and interface. Enable it only if you trust its code.',
-            buttons: ['Cancel', 'Trust and enable'],
-            defaultId: 0,
-            cancelId: 0,
-          }),
-        )
-        place.check()
-        if (verdict.response !== 1) return null
+        if (
+          plugin.manifest.isDesktopOnly ||
+          (input as { fullAccess?: unknown }).fullAccess === true
+        ) {
+          consumeFullAccessChallenge(
+            (input as { token?: unknown }).token,
+            plugin,
+          )
+          fullAccess = true
+        } else {
+          const verdict = await runFileDialog(() =>
+            dialog.showMessageBox({
+              type: 'warning',
+              message: `Enable ${plugin.manifest.name}?`,
+              detail:
+                'This plugin can read or change your notes and interface. Enable it only if you trust its code.',
+              buttons: ['Cancel', 'Trust and enable'],
+              defaultId: 0,
+              cancelId: 0,
+            }),
+          )
+          place.check()
+          if (verdict.response !== 1) return null
+        }
       }
       place.check()
-      return place.store.setEnabled(id, enabled, place.check)
+      const result = await place.store.setEnabled(
+        id,
+        enabled,
+        place.check,
+        fullAccess,
+      )
+      desktopAccessChanged(id, result.fullAccess)
+      return result
     },
     async importVaultData(input, context) {
       const offer = settingsImport(input)
@@ -423,9 +467,20 @@ export default {
       )
       place.check()
     },
+    async revokeFullAccess(input, context) {
+      const place = await globalPlace(input, context)
+      for (const plugin of await place.store.list()) {
+        if (plugin.fullAccess)
+          await place.store.setEnabled(plugin.manifest.id, false, place.check)
+      }
+      desktopAccessChanged()
+    },
     async remove(input, context) {
       const place = await globalPlace(input, context)
-      await place.store.remove(pluginId(place.data), place.check)
+      const id = pluginId(place.data)
+      await place.store.setEnabled(id, false, place.check)
+      desktopAccessChanged(id)
+      await place.store.remove(id, place.check)
     },
   },
 } satisfies NativeAddon

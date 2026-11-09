@@ -133,6 +133,8 @@ export function SettingsScreen({
   onZen,
   discover,
   selected,
+  settingTarget,
+  onTargetShown,
   onCategory,
   onSetting,
   onBack,
@@ -180,6 +182,8 @@ export function SettingsScreen({
   onZen: (enabled: boolean) => void
   discover: boolean
   selected: string
+  settingTarget?: string | null
+  onTargetShown?: (target: null) => void
   onCategory: (category: string) => void
   onWorkspaceChanged: () => Promise<void>
   onSetting: (category: string, id: string) => void
@@ -223,6 +227,47 @@ export function SettingsScreen({
   tabsBusy: boolean
   onTabsEnabled: (enabled: boolean) => void
 }) {
+  useEffect(() => {
+    if (!open || !settingTarget) return
+    let frame = 0
+    const reveal = () => {
+      const panel = window.document.getElementById(`settings-${selected}`)
+      panel?.dispatchEvent(new Event('hibi:reveal-setting', { bubbles: true }))
+      const row = panel?.querySelector<HTMLElement>(
+        `[data-setting-id="${CSS.escape(settingTarget)}"]`,
+      )
+      const target =
+        panel?.querySelector<HTMLElement>(`#${CSS.escape(settingTarget)}`) ??
+        row
+      if (!target?.getClientRects().length) return
+      observer.disconnect()
+      frame = requestAnimationFrame(() => {
+        ;(row ?? target).scrollIntoView({ block: 'center', behavior: 'smooth' })
+        const control =
+          target === row
+            ? (row.querySelector<HTMLElement>(
+                'input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled)',
+              ) ?? row)
+            : target
+        ;(control.matches(':disabled') ? (row ?? control) : control).focus({
+          preventScroll: true,
+        })
+        onTargetShown?.(null)
+      })
+    }
+    const observer = new MutationObserver(reveal)
+    observer.observe(window.document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['hidden'],
+    })
+    reveal()
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [open, settingTarget, selected, onTargetShown])
   useEffect(() => {
     if (open) void addonRegistry.loadDetails().catch(console.error)
   }, [open])

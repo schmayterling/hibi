@@ -83,6 +83,17 @@ export function releaseDocuments(tabId: string) {
   tabStates.delete(tabId)
 }
 
+/** Reuse the same acknowledged source stream for a workspace handoff. */
+export async function loadTransferredDocument(
+  native: DocumentTransferApi,
+  wire: DocumentTransfer,
+  pending = new Map<string, Promise<DocumentState>>(),
+) {
+  const transfer = { ...wire, documentTransfer: { ...wire.documentTransfer } }
+  const { loadDocumentTransfer } = await import('./document-transfer-load.ts')
+  return loadDocumentTransfer(native, transfer, loaded, pending)
+}
+
 /** Hydrate inside the renderer: neither IPC nor contextBridge copies a complete note. */
 export function documentTransferApi(
   native: DesktopApi & DocumentTransferApi,
@@ -91,11 +102,8 @@ export function documentTransferApi(
   ) => DocumentState | null | Promise<DocumentState | null>,
 ): DesktopApi {
   const pending = new Map<string, Promise<DocumentState>>()
-  const load = async (wire: DocumentTransfer) => {
-    const transfer = { ...wire, documentTransfer: { ...wire.documentTransfer } }
-    const { loadDocumentTransfer } = await import('./document-transfer-load.ts')
-    return loadDocumentTransfer(native, transfer, loaded, pending)
-  }
+  const load = (wire: DocumentTransfer) =>
+    loadTransferredDocument(native, wire, pending)
   const hydrate = async (value: unknown): Promise<unknown> => {
     if (!value || typeof value !== 'object') return value
     if ('documentTransfer' in value) return load(value as DocumentTransfer)

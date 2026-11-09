@@ -113,6 +113,34 @@ async function leftBehind(root, text, options) {
   return journal
 }
 
+test('workspace flush writes current unsaved buffers without waiting for the journal timer', async (t) => {
+  const root = await profile(t)
+  const journal = await main(root, {
+    notes: [note(1, 'latest unsaved 🌸\r\ntext')],
+  })
+  journal.recoveryChanged()
+  await journal.flushRecoveryJournal()
+  const next = await main(root)
+  assert.equal((await next.waitingRecovery()).copies.length, 1)
+  assert.equal(await textOf(next, tab(1)), 'latest unsaved 🌸\r\ntext')
+})
+
+test('workspace flush rejects a disk failure before the renderer can be replaced', async (t) => {
+  const root = await profile(t)
+  const io = {
+    ...fs,
+    open: async () => {
+      throw new Error('fixture disk failure')
+    },
+  }
+  const journal = await main(root, {
+    io,
+    notes: [note(1, 'must remain in the old renderer')],
+  })
+  await assert.rejects(journal.flushRecoveryJournal(), /fixture disk failure/)
+  assert.deepEqual(await files(root), [])
+})
+
 test('a copy comes back byte for byte in the next launch', async (t) => {
   for (const text of [
     'héllo 🌸\r\nline two\n',

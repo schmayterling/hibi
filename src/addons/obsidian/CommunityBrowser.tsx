@@ -22,6 +22,7 @@ import {
   Panel,
   PanelMessage,
   Select,
+  SettingRow,
   Toggle,
 } from '../../ui/Controls'
 import { useDialogs } from '../../ui/DialogProvider'
@@ -34,6 +35,7 @@ import {
   type CommunityEntry,
   filterCommunityEntries,
 } from './community-types'
+import { setPluginEnabled } from './desktop-client'
 import {
   cancelInstall,
   changed,
@@ -110,17 +112,15 @@ function InstallButton({
       }
     }
   }, [entry.kind])
-  const label = details?.unsupported
-    ? 'Desktop only'
-    : !enabled
-      ? entry.kind === 'plugin'
-        ? 'Turn on Obsidian plugins'
-        : 'Turn on Obsidian themes'
-      : newer(entry, inventory, details)
-        ? 'Update'
-        : installedEntry(entry, inventory)
-          ? 'Installed'
-          : 'Install'
+  const label = !enabled
+    ? entry.kind === 'plugin'
+      ? 'Turn on Obsidian plugins'
+      : 'Turn on Obsidian themes'
+    : newer(entry, inventory, details)
+      ? 'Update'
+      : installedEntry(entry, inventory)
+        ? 'Installed'
+        : 'Install'
   const cancel = () => {
     if (!task.current) return
     task.current.controller.abort()
@@ -175,7 +175,7 @@ function InstallButton({
           aria-label={
             label + (label.startsWith('Turn on') ? ' for ' : ' ') + entry.name
           }
-          disabled={busy || !!details?.unsupported}
+          disabled={busy}
           onClick={() => void act()}
         >
           {busy ? 'Working…' : label}
@@ -349,7 +349,12 @@ function CommunityDetailsView({
                   : 'Latest release: ') + details.release}
             </p>
           )}
-          {details.unsupported && <p role="status">{details.unsupported}</p>}
+          {details.desktopOnly && (
+            <p role="status">
+              This desktop plugin needs full computer access before it can run.
+              You will review its permissions when enabling it.
+            </p>
+          )}
           {details.error && <p role="status">{details.error}</p>}
           <ControlRow className="addon-catalog-actions">
             <Button
@@ -593,7 +598,7 @@ export default function CommunityBrowser(props: ManagerProps) {
                     )}
                     {installed && <span>Installed</span>}
                     {newer(entry, inventory, detail) && <span>Update</span>}
-                    {detail?.unsupported && <span>Desktop only</span>}
+                    {detail?.desktopOnly && <span>Desktop only</span>}
                   </>
                 }
               >
@@ -750,6 +755,39 @@ export function InstalledObsidian({
           {error || inventory.error || inventory.runtimeErrors.$host}
         </p>
       )}
+      {!window.hibiObsidianDesktop &&
+        inventory.plugins.some((plugin) => plugin.fullAccess) && (
+          <SettingRow
+            id="obsidian-workspace-needed"
+            label="Workspace switch needed"
+            description="Hibi could not finish switching plugin access. Your current workspace stays open. Save any changes, then retry the switch."
+          >
+            <Button
+              disabled={busy}
+              onClick={() => window.hibiObsidianSession?.switch()}
+            >
+              Retry workspace switch
+            </Button>
+          </SettingRow>
+        )}
+      {window.hibiObsidianDesktop && (
+        <SettingRow
+          id="obsidian-trusted-workspace"
+          label="Trusted workspace mode"
+          description="Full-access plugins can read and write any file and run programs. Hibi is using a less isolated workspace until their access is revoked."
+        >
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await window.hibi.invokeAddon('obsidian', 'revokeFullAccess')
+              })
+            }
+          >
+            Revoke all full access
+          </Button>
+        </SettingRow>
+      )}
       <div className="settings-group addon-list">
         {plugins.map((plugin) => {
           const manifest = plugin.manifest
@@ -779,6 +817,8 @@ export function InstalledObsidian({
               metadata={
                 <>
                   <span>Obsidian plugin</span>
+                  {plugin.fullAccess && <span>Full computer access</span>}
+                  {manifest.isDesktopOnly && <span>Desktop only</span>}
                   <span>
                     {plugin.source
                       ? 'Obsidian community'
@@ -848,6 +888,38 @@ export function InstalledObsidian({
                   </Button>
                 </>
               )}
+              {plugin.fullAccess ? (
+                <Button
+                  aria-label={
+                    'Revoke full computer access for ' + manifest.name
+                  }
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await setPluginEnabled(plugin, false, dialogs)
+                      changed(manifest.id, false)
+                    })
+                  }
+                >
+                  Revoke full access
+                </Button>
+              ) : (
+                !manifest.isDesktopOnly && (
+                  <Button
+                    aria-label={
+                      'Grant full computer access to ' + manifest.name
+                    }
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        await setPluginEnabled(plugin, true, dialogs, true)
+                      })
+                    }
+                  >
+                    Full computer access
+                  </Button>
+                )
+              )}
               {page && openSettings && (
                 <Button
                   aria-label={'Settings for ' + manifest.name}
@@ -881,16 +953,10 @@ export function InstalledObsidian({
                     )
                       return
                     await activate('plugin')
-                    if (plugin.enabled) {
-                      await window.hibi.invokeAddon('obsidian', 'enable', {
-                        id: manifest.id,
-                        enabled: false,
-                      })
-                      changed(manifest.id, false)
-                    }
                     await window.hibi.invokeAddon('obsidian', 'remove', {
                       id: manifest.id,
                     })
+                    changed(manifest.id, false)
                   })
                 }
               >
@@ -912,10 +978,7 @@ export function InstalledObsidian({
                   onChange={(event) => {
                     const enabled = event.target.checked
                     void run(async () => {
-                      await window.hibi.invokeAddon('obsidian', 'enable', {
-                        id: manifest.id,
-                        enabled,
-                      })
+                      await setPluginEnabled(plugin, enabled, dialogs)
                       if (!enabled) changed(manifest.id, false)
                     })
                   }}

@@ -620,6 +620,13 @@ export function startRecoveryJournal(
   unsavedNotes = notes
   notify = say
 }
+/** A realm change retains every buffer in main and flushes its recovery copy before destroying the old renderer. */
+export async function flushRecoveryJournal() {
+  clearTimeout(timer)
+  timer = undefined
+  await tracked(serial(() => writeDue()))
+}
+
 /** Waits for queued writes and removals, as a quit must, for 5 seconds at most. */
 export async function recoveryWritten() {
   let bound: ReturnType<typeof setTimeout> | undefined

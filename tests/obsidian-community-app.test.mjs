@@ -379,17 +379,17 @@ test('native community tab installs globally without a folder, explains activati
   })
   await desktop
     .getByText(
-      'Desktop-only plugins requiring Node.js or Electron are not supported.',
+      'This desktop plugin needs full computer access before it can run. You will review its permissions when enabling it.',
       { exact: true },
     )
     .waitFor()
   assert.equal(
     await desktop
       .getByRole('button', {
-        name: 'Desktop only Desktop fixture',
+        name: 'Install Desktop fixture',
         exact: true,
       })
-      .isDisabled(),
+      .isEnabled(),
     true,
   )
   await page.keyboard.press('Escape')

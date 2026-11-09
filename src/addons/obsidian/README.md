@@ -64,8 +64,20 @@ dialogs, and menus use Hibi's shared UI. Status items show text and support
 clicks; custom status markup is not rendered. See [API integration](api/README.md)
 for vault, metadata, workspace, and editor APIs.
 
-Desktop-only packages, Node.js, Electron, and undeclared module imports are
-refused. CodeMirror and Lezer modules are shared with Hibi's editor.
+Desktop plugins need a separate **full computer access** confirmation before enabling.
+It names the plugin, author, and repository, and explains that the plugin can read
+and write any file and run programs. Hibi switches to a less isolated workspace
+while these plugins are enabled. Real Node.js and Electron modules, including
+Electron remote, share the app's DOM. CodeMirror and Lezer stay shared with
+Hibi's editor. Portable plugins keep the restricted module shim unless you grant
+full access from their Installed row.
+
+Without full-access plugins, Hibi keeps its normal sandboxed, isolated renderer.
+Open tabs, unsaved text, pane layout, and scroll positions survive mode changes.
+Disable the plugin or use **Revoke full access** to stop it and replace its
+workspace realm. Revocation cannot undo file changes or programs it already
+launched. Hibi's own plugin storage never writes back to the vault; full-access
+plugin code can write anywhere you allow it to run.
 `requestUrl` supports HTTPS GET without custom headers or a body, through
 Hibi's main-process network policy. Protocol handlers are refused. Moment is
 not a dependency and is not exported; date-format controls preview basic

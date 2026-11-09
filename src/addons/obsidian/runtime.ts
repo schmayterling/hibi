@@ -232,7 +232,21 @@ export class ObsidianHost {
         document.head.append(style)
         owner.register(() => style.remove())
       }
-      const exports = await loadScript(owner, identity, api, `${base}/main.js`)
+      let exports: unknown
+      if (descriptor.fullAccess) {
+        if (!window.hibiObsidianDesktop)
+          throw new Error(
+            'Hibi is switching to a trusted workspace for this plugin.',
+          )
+        const loaded = window.hibiObsidianDesktop.load(
+          manifest.id,
+          hash,
+          api,
+          requireObsidianHostModule,
+        )
+        owner.register(() => loaded.dispose())
+        exports = loaded.exports
+      } else exports = await loadScript(owner, identity, api, `${base}/main.js`)
       if (this.stopped) throw new Error('This plugin host has stopped.')
       const Constructor =
         typeof exports === 'function'

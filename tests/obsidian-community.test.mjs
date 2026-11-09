@@ -133,7 +133,7 @@ test('community releases use pinned assets and the folder validation/store path,
   await vault.assertUnchanged()
 })
 
-test('desktop-only and mismatched release IDs are refused before downloading executable code', async (t) => {
+test('desktop-only packages stay installable; mismatched release IDs refuse before downloading code', async (t) => {
   const { CommunityService } = await modules(t)
   const vault = await fixtureVault(t)
   const transport = await communityFixture(t)
@@ -142,10 +142,12 @@ test('desktop-only and mismatched release IDs are refused before downloading exe
     transport.fetch,
   )
   const entries = (await service.directory()).entries
-  for (const [id, reason] of [
-    ['desktop-only', /Desktop-only/],
-    ['mismatch', /does not match/],
-  ]) {
+  const desktop = await service.plugin(
+    entries.find((entry) => entry.id === 'desktop-only'),
+    new AbortController().signal,
+  )
+  assert.equal(desktop.packageData.manifest.isDesktopOnly, true)
+  for (const [id, reason] of [['mismatch', /does not match/]]) {
     transport.requests.length = 0
     await assert.rejects(
       service.plugin(
@@ -262,7 +264,7 @@ test('details fetch README only on demand and report desktop restrictions and mi
     entries.find((entry) => entry.id === 'desktop-only'),
     new AbortController().signal,
   )
-  assert.match(desktop.unsupported, /Desktop-only/)
+  assert.equal(desktop.desktopOnly, true)
   const theme = entries.find((entry) => entry.kind === 'theme')
   assert.equal(
     (await service.details(theme, new AbortController().signal)).release,

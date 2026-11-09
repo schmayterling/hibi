@@ -22,6 +22,9 @@ export interface ObsidianSessionBridge {
   abort(message: string): void
   switch(): void
 }
+let workspaceRestored = false
+export const hasRestoredWorkspace = () => workspaceRestored
+
 type Side = 'left' | 'right'
 export type WorkspaceShell = {
   split: {
@@ -432,6 +435,10 @@ export function createWorkspaceSession(
       rememberMountedViews(current())
     }
   }
+  const settle = async () => {
+    if ((await current().settle()) === false)
+      throw new Error('Could not synchronize document focus.')
+  }
   const events = ['scroll', 'pointerdown', 'keydown', 'focusout'] as const
   for (const event of events) document.addEventListener(event, remember, true)
   const removeCapture = bridge.onCapture(async () => {
@@ -449,7 +456,7 @@ export function createWorkspaceSession(
       const focused = active && current().views.getSelection(active)
       const activeEditor = focused && focused.ok ? focused.value.editor : null
       captureGeneration = suspend()
-      await current().settle()
+      await settle()
       while (current().autosaving && suspended && !disposed) await frame()
       if (disposed || !suspended || generation !== captureGeneration)
         throw invalid()
@@ -478,12 +485,23 @@ export function createWorkspaceSession(
         suspend()
         const restored = await bridge.restore()
         if (!restored || disposed) throw invalid()
+        const { loadTransferredDocument } = await import('./document-transfer')
+        const documents = await Promise.all(
+          restored.documents.map((document) =>
+            'documentTransfer' in document
+              ? loadTransferredDocument(
+                  window.hibiTransport,
+                  document as unknown as import('../../shared/document-transfer').DocumentTransfer,
+                )
+              : document,
+          ),
+        )
         flushSync(() => {
           apply(
             restoreWorkspaceUi(
               current().runtime,
               restored.ui,
-              restored.documents,
+              documents,
               current().accept,
             ),
           )
@@ -504,6 +522,7 @@ export function createWorkspaceSession(
           await frame()
         }
         if (disposed) throw invalid()
+        workspaceRestored = true
         resume()
         await frame()
         const activeId =
@@ -523,7 +542,7 @@ export function createWorkspaceSession(
           )
         if (wanted)
           sourceView(wanted)?.contentDOM.focus({ preventScroll: true })
-        await current().settle()
+        await settle()
         await bridge.ready()
       } catch (error) {
         bridge.abort(error instanceof Error ? error.message : String(error))

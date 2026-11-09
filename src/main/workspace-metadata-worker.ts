@@ -13,12 +13,25 @@ import {
 import { join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 import { sameFileIdentity } from '../shared/file-identity.ts'
+import {
+  type DetailPage,
+  validNotePosition,
+  type WorkspaceMetadataDetailSource,
+} from '../shared/metadata-stream.ts'
 import type { NoteHeading } from '../shared/note-metadata.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 import {
   parseWorkspaceMetadata,
   type WorkspaceMetadataPage,
 } from './workspace-index-metadata.ts'
+import {
+  DetailStoreWriter,
+  detailStorePattern,
+  readDetailStore,
+  readInlineDetails,
+  validDetailSource,
+  validInlineDetails,
+} from './workspace-metadata-detail-store.ts'
 import { parseWorkspaceMetadataFallback } from './workspace-metadata-fallback.ts'
 import {
   type HeadingStoreRecord,
@@ -51,7 +64,7 @@ let results: AsyncGenerator<RecordSlice> | undefined
 
 const cacheDirectory = workerData.cacheDirectory as string | undefined
 const buildIdentity = workerData.buildIdentity as string | undefined
-const schema = 5
+const schema = 6
 const headingDirectory = workerData.headingDirectory as string
 const headingLocations = new Map<
   string,
@@ -64,6 +77,15 @@ const headingLocations = new Map<
     complete: boolean
   }
 >()
+type DetailLocation = {
+  version: string
+  fingerprint: string
+  path: string
+  directory: string
+  source: WorkspaceMetadataDetailSource
+  inline?: RecordToken[]
+}
+const detailLocations = new Map<string, DetailLocation>()
 type CacheRecord = {
   schema: number
   buildIdentity: string
@@ -71,10 +93,12 @@ type CacheRecord = {
   page: WorkspaceMetadataPage
   headings?: HeadingStoreRecord
   inlineHeadings?: NoteHeading[]
+  inlineDetails?: RecordToken[]
 }
 const idPattern = /^[a-f0-9]{64}$/
 const recordPattern = /^[a-f0-9]{64}\.json$/
-const temporaryPattern = /^\.[a-f0-9]{64}-[a-f0-9-]{36}(?:\.hidx|\.hdat)?\.tmp$/
+const temporaryPattern =
+  /^\.[a-f0-9]{64}-[a-f0-9-]{36}(?:\.hidx|\.hdat|\.mdat)?\.tmp$/
 // Cache paths reach the checked folder itself, not its name, so a folder
 // renamed and replaced with a link after the check keeps every write. macOS
 // finds it by volume and file id, Linux through the open descriptor. Windows
@@ -165,7 +189,11 @@ function validInlineHeadings(
   for (const heading of headings) {
     // Heading pages return these objects as stored, so nothing else may ride along.
     if (
-      Object.keys(heading).length !== 2 ||
+      Object.keys(heading).some(
+        (key) => !['depth', 'text', 'position'].includes(key),
+      ) ||
+      (heading.position !== undefined &&
+        !validNotePosition(heading.position)) ||
       !Number.isInteger(heading.depth) ||
       heading.depth < 1 ||
       heading.depth > 6 ||
@@ -323,6 +351,19 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
         typeof value.fingerprint === 'string' &&
         page?.id === id &&
         valid(page) &&
+        page.details &&
+        validDetailSource(page.details) &&
+        page.details.key.startsWith(`${id}-`) &&
+        page.details.identity ===
+          headingIdentity({
+            id,
+            path: page.path,
+            version: page.version,
+            fingerprint: value.fingerprint,
+          }) &&
+        (value.inlineDetails === undefined ||
+          validInlineDetails(page.details, value.inlineDetails)) &&
+        (page.details.bytes > 0 || value.inlineDetails !== undefined) &&
         (!value.headings ||
           (validHeadingStore(value.headings) &&
             value.headings.key.startsWith(`${id}-`) &&
@@ -362,6 +403,61 @@ async function cached(
     value.page.version === request.version
     ? value.page
     : null
+}
+
+async function readDetails(
+  request: CachedMetadataRequest,
+  cursor: number,
+): Promise<DetailPage | null> {
+  if (
+    !idPattern.test(request.id) ||
+    !Number.isSafeInteger(cursor) ||
+    cursor < 0
+  )
+    return null
+  const local = detailLocations.get(request.id)
+  if (local) {
+    if (
+      local.path !== request.path ||
+      local.version !== request.version ||
+      local.fingerprint !== request.fingerprint
+    )
+      return null
+    if (
+      local.directory !== headingDirectory &&
+      (await cacheAvailable()) !== local.directory
+    )
+      return null
+    return local.inline !== undefined
+      ? readInlineDetails(local.source, local.inline, cursor)
+      : readDetailStore(local.directory, local.source, cursor)
+  }
+  const record = await readRecord(request.id)
+  if (
+    !record ||
+    record.fingerprint !== request.fingerprint ||
+    record.page.path !== request.path ||
+    record.page.version !== request.version ||
+    !record.page.details
+  )
+    return null
+  if (record.inlineDetails !== undefined)
+    return readInlineDetails(record.page.details, record.inlineDetails, cursor)
+  const base = await cacheAvailable()
+  return base ? readDetailStore(base, record.page.details, cursor) : null
+}
+
+async function clearDetailLocation(id: string): Promise<void> {
+  const previous = detailLocations.get(id)
+  detailLocations.delete(id)
+  if (
+    previous?.directory === headingDirectory &&
+    previous.source.bytes &&
+    previous.inline === undefined
+  )
+    await unlink(join(previous.directory, `${previous.source.key}.mdat`)).catch(
+      () => {},
+    )
 }
 
 async function readHeadings(
@@ -458,6 +554,7 @@ async function remember(
   fingerprint: string,
   headings?: HeadingStoreRecord,
   inlineHeadings?: NoteHeading[],
+  inlineDetails?: RecordToken[],
 ): Promise<boolean> {
   if (!page.id || !idPattern.test(page.id) || !page.version.startsWith('disk:'))
     return false
@@ -477,6 +574,7 @@ async function remember(
         page,
         headings,
         inlineHeadings,
+        inlineDetails,
       })
       const write = async (slice: RecordToken[]) => {
         const buffer = Buffer.from(`${JSON.stringify(slice)}\n`)
@@ -519,7 +617,22 @@ async function incomplete(input: MetadataParseInput | MetadataFileInput) {
       return null
   }
   const page = incompleteMetadataPage(input)
-  if (await remember(page, input.fingerprint)) headingLocations.delete(input.id)
+  page.details = {
+    key: `${input.id}-${randomUUID()}`,
+    count: 0,
+    identity: headingIdentity(input),
+    bytes: 0,
+    complete: false,
+  }
+  await clearDetailLocation(input.id)
+  detailLocations.set(input.id, {
+    ...input,
+    directory: headingDirectory,
+    source: page.details,
+    inline: [],
+  })
+  if (await remember(page, input.fingerprint, undefined, undefined, []))
+    headingLocations.delete(input.id)
   else
     headingLocations.set(input.id, {
       version: input.version,
@@ -565,6 +678,9 @@ async function finishBuild(remove: readonly string[]) {
       if (record?.headings)
         for (const suffix of ['hidx', 'hdat'])
           await removeEntry(base, `${record.headings.key}.${suffix}`)
+      if (record?.page.details && record.inlineDetails === undefined)
+        await removeEntry(base, `${record.page.details.key}.mdat`)
+      await clearDetailLocation(name.slice(0, -5))
       await removeEntry(base, name)
       headingLocations.delete(name.slice(0, -5))
     }
@@ -585,8 +701,18 @@ async function finishBuild(remove: readonly string[]) {
         const id = entry.name.slice(0, 64)
         const record = await readRecord(id)
         if (
-          !record?.headings ||
-          !entry.name.startsWith(`${record.headings.key}.`)
+          (!record?.headings ||
+            !entry.name.startsWith(`${record.headings.key}.`)) &&
+          !entry.name.startsWith(`${headingLocations.get(id)?.store?.key}.`)
+        )
+          await removeEntry(base, entry.name)
+      } else if (detailStorePattern.test(entry.name)) {
+        const record = await readRecord(entry.name.slice(0, 64))
+        if (
+          (!record?.page.details ||
+            entry.name !== `${record.page.details.key}.mdat`) &&
+          entry.name !==
+            `${detailLocations.get(entry.name.slice(0, 64))?.source.key}.mdat`
         )
           await removeEntry(base, entry.name)
       } else if (temporaryPattern.test(entry.name))
@@ -705,6 +831,18 @@ async function derive(
     }
     writer.add(heading)
   }
+  let detailWriter = new DetailStoreWriter(
+    directory,
+    idPattern.test(input.id)
+      ? input.id
+      : createHash('sha256').update(input.path).digest('hex'),
+    headingIdentity(input),
+    {
+      fallbackDirectory: headingDirectory,
+      inline: directory !== headingDirectory,
+    },
+  )
+  let detailsComplete = false
   let page: WorkspaceMetadataPage
   try {
     if (fallback)
@@ -723,9 +861,23 @@ async function derive(
             syntax,
             undefined,
             onHeading,
+            (entry) => detailWriter.add(entry),
+            (complete) => {
+              detailsComplete = complete
+            },
           ),
         }
       } catch (error) {
+        detailWriter.abort()
+        detailWriter = new DetailStoreWriter(
+          headingDirectory,
+          idPattern.test(input.id)
+            ? input.id
+            : createHash('sha256').update(input.path).digest('hex'),
+          headingIdentity(input),
+          { inline: false },
+        )
+        detailsComplete = false
         writer?.abort()
         writer = undefined
         inline.length = 0
@@ -734,6 +886,8 @@ async function derive(
         page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
       }
     }
+    const details = detailWriter.finish(detailsComplete && page.syntax.complete)
+    page.details = details
     const headings = writer?.finish()
     page.metadata.headings = {
       items: [],
@@ -743,8 +897,18 @@ async function derive(
     }
     if (!(await headingDirectoryAvailable(directory)) || !(await current())) {
       writer?.abort()
+      detailWriter.abort()
       return null
     }
+    await clearDetailLocation(input.id)
+    const detailLocation = {
+      version: input.version,
+      fingerprint: input.fingerprint,
+      path: input.path,
+      directory: detailWriter.directory,
+      source: details,
+    }
+    detailLocations.set(input.id, detailLocation)
     const previous = headingLocations.get(input.id)
     const location = {
       version: input.version,
@@ -761,19 +925,22 @@ async function derive(
           join(previous.directory, `${previous.store.key}.${suffix}`),
         ).catch(() => {})
     parentPort?.postMessage({ parsed: true })
-    if (directory !== headingDirectory || !headings) {
-      if (
-        await remember(
-          page,
-          input.fingerprint,
-          headings,
-          inline.length ? inline : undefined,
-        )
-      )
-        headingLocations.delete(input.id)
-      else if (inline.length) {
+    const saved =
+      (directory !== headingDirectory || !headings) &&
+      (detailWriter.directory !== headingDirectory || details.bytes === 0) &&
+      (await remember(
+        page,
+        input.fingerprint,
+        headings,
+        inline.length ? inline : undefined,
+        detailWriter.inline,
+      ))
+    if (saved) {
+      headingLocations.delete(input.id)
+      detailLocations.delete(input.id)
+    } else {
+      if (inline.length) {
         // Without a saved record, headings wait in a temporary heading file.
-        headingLocations.delete(input.id)
         writer = store(headingDirectory)
         for (const heading of inline) writer.add(heading)
         headingLocations.set(input.id, {
@@ -782,9 +949,27 @@ async function derive(
           store: writer.finish(),
         })
       }
+      if (detailWriter.inline !== undefined) {
+        const temporary = new DetailStoreWriter(
+          headingDirectory,
+          idPattern.test(input.id)
+            ? input.id
+            : createHash('sha256').update(input.path).digest('hex'),
+          headingIdentity(input),
+          { inline: false },
+        )
+        temporary.write(detailWriter.inline, details.count)
+        page.details = temporary.finish(details.complete)
+        detailLocations.set(input.id, {
+          ...detailLocation,
+          directory: headingDirectory,
+          source: page.details,
+        })
+      }
     }
     return page
   } catch (error) {
+    detailWriter.abort()
     writer?.abort()
     throw error
   }
@@ -846,6 +1031,8 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
     results = undefined
     if (request.kind === 'incomplete') {
       value = await incomplete(request.input)
+    } else if (request.kind === 'readDetails') {
+      value = await readDetails(request.input, request.cursor)
     } else if (request.kind === 'readHeadings') {
       value = await readHeadings(request.input, request.offset, request.limit)
     } else if (request.kind === 'beginBuild') {

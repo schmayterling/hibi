@@ -5,6 +5,10 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
+import {
+  type DetailPage,
+  validateRecordTokens,
+} from '../shared/metadata-stream.ts'
 import type { WorkspacePage } from '../shared/workspace.ts'
 import type { WorkspaceMetadataPage } from './workspace-index-metadata.ts'
 import {
@@ -70,12 +74,14 @@ export type MetadataWorkerRequest =
       offset: number
       limit: number
     }
+  | { kind: 'readDetails'; input: CachedMetadataRequest; cursor: number }
   | { kind: 'parseClear' }
   | { kind: 'resultChunk' }
   | { kind: 'incomplete'; input: MetadataParseInput | MetadataFileInput }
 type MetadataResult =
   | WorkspaceMetadataPage
   | HeadingPage
+  | DetailPage
   | (WorkspaceMetadataPage | null)[]
   | boolean
   | CacheNames
@@ -288,6 +294,15 @@ export class WorkspaceMetadataParser {
     if (!active()) return null
     const worker = this.worker as Worker
     let value = await this.exchange(worker, request)
+    if (request.kind === 'readDetails') {
+      if (value === null) return null
+      if (!value || typeof value !== 'object' || !('source' in value))
+        throw new TypeError('Invalid metadata detail page')
+      validateRecordTokens(value.tokens)
+      return active() ? value : null
+    }
+    if (value && typeof value === 'object' && 'source' in value)
+      throw new TypeError('Unexpected metadata detail page')
     if (!value || typeof value !== 'object' || !('tokens' in value))
       return active() ? value : null
     const reader = new RecordReader(this.canonical, true)
@@ -309,7 +324,12 @@ export class WorkspaceMetadataParser {
         if (value.done)
           return active() ? (reader.finish() as MetadataResult) : null
         const next = await this.exchange(worker, { kind: 'resultChunk' })
-        if (!next || typeof next !== 'object' || !('tokens' in next))
+        if (
+          !next ||
+          typeof next !== 'object' ||
+          !('tokens' in next) ||
+          'source' in next
+        )
           throw new TypeError('Missing metadata slice')
         value = next
       }
@@ -537,6 +557,29 @@ export class WorkspaceMetadataParser {
         return null
       }
     })) as HeadingPage | null
+  }
+
+  /** One bounded token frame. The caller pins source identity across pages. */
+  async readDetails(
+    input: CachedMetadataRequest,
+    cursor: number,
+    current: () => boolean,
+  ): Promise<DetailPage | null> {
+    if (!Number.isSafeInteger(cursor) || cursor < 0)
+      throw new RangeError('Invalid metadata detail cursor')
+    return (await this.enqueue(current, async (active) => {
+      try {
+        return await this.send({ kind: 'readDetails', input, cursor }, active)
+      } catch (error) {
+        if (
+          !this.resourceFailure(error) ||
+          !(error as { metadataWorkerReady?: boolean }).metadataWorkerReady
+        )
+          throw error
+        if (this.worker) this.fail(this.worker, error as Error)
+        return null
+      }
+    })) as DetailPage | null
   }
 
   /** At most 64 descriptors per call; null entries must be parsed normally. */

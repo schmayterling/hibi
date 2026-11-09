@@ -169,7 +169,7 @@ test('api 3 uses one format and caller-owned compiled trust', () => {
   assert.throws(() => compiled({ apiVersion: 4 }), /API version/)
 })
 
-test('all 42 json manifests match their compatibility shims without entry or native metadata', async () => {
+test('all 43 json manifests match their compatibility shims without entry or native metadata', async () => {
   const parent = join(root, 'src/addons')
   const folders = []
   for (const folder of await readdir(parent, { withFileTypes: true })) {
@@ -199,7 +199,7 @@ test('all 42 json manifests match their compatibility shims without entry or nat
   const { default: manifests } = await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0].contents).toString('base64')}`
   )
-  assert.equal(manifests.length, 42)
+  assert.equal(manifests.length, 43)
   for (const [index, manifest] of manifests.entries()) {
     const { path } = folders[index]
     const input = JSON.parse(

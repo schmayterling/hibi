@@ -23,6 +23,9 @@ import { AddonGarden, useAddonDirectory } from './AddonGarden'
 import { addonRegistry } from './addon-registry'
 
 const AddonReadme = lazy(() => import('./AddonReadme'))
+const ObsidianCommunity = lazy(
+  () => import('../../addons/obsidian/CommunityBrowser'),
+)
 
 export function useAddonReadme() {
   const dialogs = useDialogs()
@@ -147,6 +150,7 @@ export function AddonSettings({
   const [category, setCategory] = useState<Category | null>(null)
   const [tab, setTab] = useState<'installed' | 'garden'>('installed')
   const [busy, setBusy] = useState(false)
+  const [communityOpen, setCommunityOpen] = useState(false)
   // Hibi garden may have an API 3 version of an outdated install.
   const { directory, retry } = useAddonDirectory(
     tab === 'garden' || outdated.length > 0,
@@ -553,6 +557,22 @@ export function AddonSettings({
           </Panel>
         )}
       </div>
+      <section aria-labelledby="obsidian-community-heading">
+        <h2 id="obsidian-community-heading">Obsidian community</h2>
+        {communityOpen ? (
+          <Suspense fallback={<p role="status">Loading Obsidian community…</p>}>
+            <ObsidianCommunity
+              pluginsEnabled={enabled('obsidian')}
+              themesEnabled={enabled('obsidian-themes')}
+              enable={(id) => setEnabled(id, true)}
+            />
+          </Suspense>
+        ) : (
+          <Button onClick={() => setCommunityOpen(true)}>
+            Browse community plugins and themes
+          </Button>
+        )}
+      </section>
       <AddonSecuritySettings />
     </>
   )

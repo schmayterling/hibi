@@ -2058,6 +2058,23 @@ if (!app.requestSingleInstanceLock()) {
         )
       })
       handle(
+        SIDELOAD_CHANNELS.obsidianCommunity,
+        async (event, action: unknown, input: unknown) => {
+          trustedWindow(event)
+          const controller = new AbortController()
+          const closed = () => controller.abort()
+          event.sender.once('destroyed', closed)
+          try {
+            const { communityAction } = await import(
+              '../addons/obsidian/community-native'
+            )
+            return await communityAction(action, input, controller.signal)
+          } finally {
+            event.sender.removeListener('destroyed', closed)
+          }
+        },
+      )
+      handle(
         SIDELOAD_CHANNELS.directoryInstall,
         (event, id: unknown, openSettings: unknown) =>
           runFileOperation(event, (window) =>

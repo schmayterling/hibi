@@ -1,0 +1,15 @@
+{
+  "tag_name": "1.0.0",
+  "draft": false,
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "manifest.json",
+      "browser_download_url": "https://github.com/fixture/host-smoke/releases/download/1.0.0/manifest.json"
+    },
+    {
+      "name": "main.js",
+      "browser_download_url": "https://github.com/fixture/host-smoke/releases/download/1.0.0/main.js"
+    }
+  ]
+}

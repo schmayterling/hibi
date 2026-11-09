@@ -462,6 +462,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(SIDELOAD_CHANNELS.install, url, openSettings),
     getAddonDirectory: (refresh) =>
       ipcRenderer.invoke(SIDELOAD_CHANNELS.directory, refresh),
+    obsidianCommunity: (action, input) =>
+      ipcRenderer.invoke(SIDELOAD_CHANNELS.obsidianCommunity, action, input),
     installDirectoryAddon: (id, openSettings) =>
       ipcRenderer.invoke(SIDELOAD_CHANNELS.directoryInstall, id, openSettings),
     onAddonGardenRequest: (callback) => {

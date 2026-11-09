@@ -5,7 +5,17 @@ import { runFileDialog } from '../../main/file-operation-dialog'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { createMetadataNative } from './api/metadata/native'
 import { closeVaultLists, createVaultNative } from './api/vault/native'
-import { validPluginId, wrapObsidianPlugin } from './package'
+import {
+  cancelCommunityRequest,
+  communityService,
+  communityTask,
+  stopCommunityInstalls,
+} from './community-native'
+import {
+  type CommunityPluginSource,
+  validPluginId,
+  wrapObsidianPlugin,
+} from './package'
 import {
   discoverObsidianPlugins,
   ObsidianStore,
@@ -14,6 +24,16 @@ import {
 } from './store'
 
 const stores = new Map<string, ObsidianStore>()
+const communityCandidates = new Map<
+  string,
+  {
+    vaultId: string
+    createdAt: number
+    check: () => void
+    packageData: Awaited<ReturnType<typeof readObsidianPackage>>
+    source: CommunityPluginSource
+  }
+>()
 
 export async function obsidianStoreForVault(vault: string) {
   const canonical = await realpath(vault)
@@ -82,11 +102,21 @@ async function install(
   }
   place.check()
   const packageData = await readObsidianPackage(source)
+  return trustPackage(place, packageData)
+}
+
+async function trustPackage(
+  place: Awaited<ReturnType<typeof captured>>,
+  packageData: Awaited<ReturnType<typeof readObsidianPackage>>,
+  source?: CommunityPluginSource,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
   const verdict = await runFileDialog(() =>
     dialog.showMessageBox({
       type: 'warning',
       message: `Install ${packageData.manifest.name}?`,
-      detail: `${packageData.manifest.description}\n\nObsidian plugins run code inside Hibi and can read or change your notes and interface. Install only plugins you trust. This copy starts disabled. Hibi never writes to .obsidian.\n\nSHA-256: ${packageData.hash}`,
+      detail: `${packageData.manifest.description}\n\nAuthor: ${source?.author ?? packageData.manifest.author}${source ? `\nRepository: ${source.repo}\nRelease: ${source.release}` : ''}\nRequires Obsidian ${packageData.manifest.minAppVersion} or later. Hibi provides a partial compatibility API.\n\nObsidian plugins run with Hibi's renderer access and can read or change your notes and interface. Install only plugins you trust. This copy starts disabled. Hibi never writes to .obsidian.\n\nSHA-256: ${packageData.hash}`,
       buttons: ['Cancel', 'Trust and install'],
       defaultId: 0,
       cancelId: 0,
@@ -94,7 +124,12 @@ async function install(
   )
   place.check()
   if (verdict.response !== 1) return null
-  return place.store.install(packageData, place.check)
+  const check = () => {
+    signal?.throwIfAborted()
+    place.check()
+  }
+  check()
+  return place.store.install(packageData, check, source)
 }
 
 /** Called only by the lazy app-protocol route after addon/vault activation checks. */
@@ -157,7 +192,11 @@ function vaultMethod(
 
 export default {
   id: 'obsidian',
-  stop: closeVaultLists,
+  stop() {
+    stopCommunityInstalls()
+    communityCandidates.clear()
+    closeVaultLists()
+  },
   queries: {
     vaultInfo: vaultQuery('vaultInfo'),
     vaultStat: vaultQuery('vaultStat'),
@@ -187,9 +226,71 @@ export default {
       return value
     },
   },
+  profileMethods: {
+    async downloadCommunity(input, context) {
+      const place = await captured(input, context)
+      return communityTask(
+        input,
+        async (signal) => {
+          for (const [key, candidate] of communityCandidates)
+            if (Date.now() - candidate.createdAt > 120000)
+              communityCandidates.delete(key)
+          if (communityCandidates.size >= 6)
+            throw new Error(
+              'Too many downloaded plugins. Finish or cancel an install first.',
+            )
+          const directory = communityService()
+          const entry = await directory.entry(
+            'plugin',
+            pluginId(place.data),
+            signal,
+          )
+          const result = await directory.plugin(entry, signal)
+          signal.throwIfAborted()
+          place.check()
+          const key = (input as { requestId: string }).requestId
+          communityCandidates.set(key, {
+            ...result,
+            vaultId: place.identity,
+            check: place.check,
+            createdAt: Date.now(),
+          })
+          return {
+            key,
+            manifest: result.packageData.manifest,
+            hash: result.packageData.hash,
+            source: result.source,
+          }
+        },
+        true,
+      )
+    },
+    async cancelCommunity(input) {
+      const result = cancelCommunityRequest(input)
+      communityCandidates.delete((input as { requestId: string }).requestId)
+      return result
+    },
+  },
   methods: {
     vaultCreateFolder: vaultMethod('vaultCreateFolder'),
     vaultAction: vaultMethod('vaultAction'),
+    async installCommunity(input, context) {
+      const place = await captured(input, context)
+      const key = (input as { key?: unknown }).key
+      if (typeof key !== 'string')
+        throw new Error('Download this plugin again.')
+      const candidate = communityCandidates.get(key)
+      communityCandidates.delete(key)
+      if (
+        !candidate ||
+        candidate.vaultId !== place.identity ||
+        candidate.packageData.manifest.id !== pluginId(place.data) ||
+        Date.now() - candidate.createdAt > 120000
+      )
+        throw new Error('This download expired. Download the plugin again.')
+      candidate.check()
+      return trustPackage(place, candidate.packageData, candidate.source)
+    },
     install: (input, context) => install(input, context, false),
     installVault: (input, context) => install(input, context, true),
     async enable(input, context) {

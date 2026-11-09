@@ -12,8 +12,9 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { InstalledPlugin } from './package'
+import type { CommunityPluginSource, InstalledPlugin } from './package'
 import {
+  parseCommunityPluginSource,
   parseObsidianManifest,
   pluginLimits,
   validatePluginCss,
@@ -35,7 +36,7 @@ async function directory(path: string) {
   return stat
 }
 
-async function makeDirectory(path: string): Promise<void> {
+export async function makeDirectory(path: string): Promise<void> {
   try {
     await directory(path)
   } catch (error) {
@@ -131,16 +132,32 @@ export async function readObsidianPackage(source: string) {
     join(source, 'manifest.json'),
     pluginLimits['manifest.json'],
   )
-  const manifest = parseObsidianManifest(JSON.parse(decode(manifestBytes)))
   const main = await readPluginFile(
     join(source, 'main.js'),
     pluginLimits['main.js'],
   )
-  decode(main)
   const styles = await optionalFile(
     join(source, 'styles.css'),
     pluginLimits['styles.css'],
   )
+  return readObsidianPackageBytes(manifestBytes, main, styles)
+}
+
+/** Folder and community installs share byte limits, fatal UTF-8, manifest/CSS validation and hashing. */
+export function readObsidianPackageBytes(
+  manifestBytes: Buffer,
+  main: Buffer,
+  styles: Buffer | null,
+) {
+  for (const [name, bytes] of [
+    ['manifest.json', manifestBytes],
+    ['main.js', main],
+    ['styles.css', styles],
+  ] as const)
+    if (bytes && bytes.length > pluginLimits[name])
+      throw new Error('Plugin file exceeds its size limit.')
+  const manifest = parseObsidianManifest(JSON.parse(decode(manifestBytes)))
+  decode(main)
   if (styles) validatePluginCss(decode(styles))
   return {
     manifest,
@@ -288,6 +305,9 @@ export class ObsidianStore {
       hash: value.hash,
       enabled: value.enabled,
       hasStyles: value.hasStyles,
+      ...(value.source
+        ? { source: parseCommunityPluginSource(value.source) }
+        : {}),
     }
   }
 
@@ -316,6 +336,7 @@ export class ObsidianStore {
   install(
     source: Awaited<ReturnType<typeof readObsidianPackage>>,
     check: () => void = () => {},
+    community?: CommunityPluginSource,
   ) {
     return this.mutate(async () => {
       await this.prepare()
@@ -372,6 +393,7 @@ export class ObsidianStore {
         hash: source.hash,
         enabled: false,
         hasStyles: source.styles !== null,
+        ...(community ? { source: parseCommunityPluginSource(community) } : {}),
       }
       await atomicJson(join(state, 'package.json'), record, check)
       return record

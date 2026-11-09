@@ -14,6 +14,45 @@ export interface InstalledPlugin {
   hash: string
   enabled: boolean
   hasStyles: boolean
+  source?: CommunityPluginSource
+}
+
+export type CommunityPluginSource = {
+  repo: string
+  author?: string
+  release: string
+  hashes: { manifest: string; main: string; styles: string | null }
+}
+
+export function parseCommunityPluginSource(
+  value: unknown,
+): CommunityPluginSource {
+  if (!value || typeof value !== 'object')
+    throw new Error('Invalid community plugin source.')
+  const source = value as CommunityPluginSource
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/.test(source.repo) ||
+    typeof source.repo !== 'string' ||
+    source.repo.length > 200 ||
+    ['.', '..'].includes(source.repo.split('/')[1]!) ||
+    typeof source.release !== 'string' ||
+    !source.release ||
+    source.release.length > 200 ||
+    !source.hashes ||
+    !/^[a-f0-9]{64}$/.test(source.hashes.manifest) ||
+    !/^[a-f0-9]{64}$/.test(source.hashes.main) ||
+    (source.hashes.styles !== null &&
+      !/^[a-f0-9]{64}$/.test(source.hashes.styles))
+  )
+    throw new Error('Invalid community plugin source.')
+  return {
+    repo: source.repo,
+    release: source.release,
+    hashes: { ...source.hashes },
+    ...(typeof source.author === 'string'
+      ? { author: source.author.slice(0, 500) }
+      : {}),
+  }
 }
 
 export const pluginLimits = {

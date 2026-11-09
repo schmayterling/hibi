@@ -1,0 +1,23 @@
+[
+  {
+    "id": "host-smoke",
+    "name": "Host smoke",
+    "author": "Fixture author",
+    "description": "A portable fixture plugin.",
+    "repo": "fixture/host-smoke"
+  },
+  {
+    "id": "desktop-only",
+    "name": "Desktop fixture",
+    "author": "Another author",
+    "description": "A desktop-only fixture.",
+    "repo": "fixture/desktop-only"
+  },
+  {
+    "id": "mismatch",
+    "name": "Mismatch fixture",
+    "author": "Fixture author",
+    "description": "A mismatched release fixture.",
+    "repo": "fixture/mismatch"
+  }
+]

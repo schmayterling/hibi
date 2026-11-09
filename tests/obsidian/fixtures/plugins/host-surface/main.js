@@ -123,6 +123,8 @@ module.exports = class HostSurface extends Plugin {
       ribbon: 0,
       modalOpened: 0,
       modalClosed: 0,
+      modalCallback: 0,
+      menuHidden: 0,
       menu: 0,
       keys: 0,
       delayed: 0,
@@ -215,17 +217,48 @@ module.exports = class HostSurface extends Plugin {
         fixture.modalClosed++
       }
     }
-    fixture.openModal = () =>
-      new FixtureModal(this.app).setTitle('Fixture modal').open()
-    fixture.openMenu = () =>
-      new Menu()
-        .addItem((item) =>
-          item
-            .setTitle('Fixture menu item')
-            .setIcon('check')
-            .onClick(() => fixture.menu++),
-        )
-        .showAtPosition({ x: 200, y: 200 })
+    const modal = new FixtureModal(this.app).setTitle('Fixture modal')
+    fixture.modalMethods =
+      typeof modal.setContent === 'function' &&
+      typeof modal.setCloseCallback === 'function'
+    if (fixture.modalMethods) {
+      const content = document.createDocumentFragment()
+      content.createEl('strong', { text: 'Seeded modal fragment' })
+      modal.setContent(content).setCloseCallback(() => {
+        fixture.modalCallback++
+      })
+    }
+    fixture.openModal = () => modal.open()
+    const menu = new Menu().addItem((item) =>
+      item
+        .setTitle('Fixture menu item')
+        .setIcon('check')
+        .onClick(() => {
+          fixture.menu++
+        }),
+    )
+    fixture.menuComponent = menu instanceof Component
+    if (typeof menu.onHide === 'function')
+      menu.onHide(() => {
+        fixture.menuHidden++
+      })
+    fixture.menuShowReturns = menu.showAtPosition({ x: 200, y: 200 }) === menu
+    fixture.menuHideReturns = menu.hide() === menu
+    fixture.openMenu = () => menu.showAtPosition({ x: 200, y: 200 })
+    const fragment = document.createDocumentFragment()
+    const strong = fragment.createEl('strong', { text: 'Fragment notice' })
+    const rich = new Notice(fragment, 0)
+    fixture.noticeShape =
+      !!rich.containerEl &&
+      rich.noticeEl === rich.messageEl &&
+      !!rich.messageEl?.contains(strong)
+    const replacement = document.createDocumentFragment()
+    const emphasis = replacement.createEl('em', {
+      text: 'Updated fragment notice',
+    })
+    rich.setMessage(replacement)
+    fixture.noticeFragment = !!rich.messageEl?.contains(emphasis)
+    rich.hide()
     fixture.notice = new Notice('Fixture notice', 0)
     try {
       this.registerObsidianProtocolHandler('fixture', () => {})

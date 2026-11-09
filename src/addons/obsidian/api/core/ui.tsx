@@ -1,8 +1,8 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { AddonContext, DialogHandle } from '../../../api'
 import type { App, PluginInstance } from '../types'
-import type { Component } from './component'
-import { ownElement } from './dom'
+import { Component } from './component'
+import { childElement, ownElement } from './dom'
 import { reportError } from './events'
 import { getIcon } from './icons'
 import { Scope } from './keymap'
@@ -49,6 +49,23 @@ export class PluginSettingTab {
   hide(): void {}
 }
 
+let noticeRegion: HTMLDivElement | null = null
+let closeActiveMenu: (() => void) | null = null
+function notices(hibi: AddonContext): HTMLDivElement {
+  if (!noticeRegion?.isConnected) {
+    noticeRegion = document.createElement('div')
+    noticeRegion.className = 'hibi-obsidian-notices'
+    noticeRegion.popover = 'manual'
+    noticeRegion.dataset.position = hibi.toasts.getPreferences().position
+    document.body.append(noticeRegion)
+    noticeRegion.showPopover()
+  }
+  return noticeRegion
+}
+function observe(value: unknown) {
+  if (value instanceof Promise) void value.catch(reportError)
+}
+
 type UiContext = {
   hibi: AddonContext
   owner: Component
@@ -58,26 +75,44 @@ type UiContext = {
 export function createUiApi(context: UiContext) {
   const { hibi, owner, app } = context
   class Notice {
-    noticeEl = ownElement(document.createElement('div'), owner)
-    private toast: ReturnType<AddonContext['toasts']['show']>
-    constructor(message: string | DocumentFragment, timeout = 5000) {
-      this.noticeEl.textContent =
-        typeof message === 'string' ? message : message.textContent
-      this.toast = hibi.toasts.show({
-        message: this.noticeEl.textContent ?? '',
-        duration: timeout,
+    private lifecycle = new Component()
+    containerEl = ownElement(document.createElement('div'), this.lifecycle)
+    messageEl = childElement(this.containerEl, 'div', 'notice-message')
+    noticeEl = this.messageEl
+    private timer: number | undefined
+    private region: HTMLDivElement
+    constructor(message: string | DocumentFragment, duration = 5000) {
+      if (owner.isUnloaded) throw new Error('This plugin has unloaded.')
+      this.containerEl.className = 'notice'
+      this.containerEl.setAttribute('role', 'status')
+      this.setMessage(message)
+      const close = childElement(this.containerEl, 'button', 'notice-close')
+      close.type = 'button'
+      close.textContent = '×'
+      close.setAttribute('aria-label', 'Dismiss notification')
+      this.lifecycle.registerDomEvent(close, 'click', () => this.hide())
+      // Native popover preserves live plugin DOM fragments and owns their teardown.
+      this.region = notices(hibi)
+      this.region.append(this.containerEl)
+      this.lifecycle.register(() => {
+        clearTimeout(this.timer)
+        this.containerEl.remove()
+        if (!this.region.childElementCount) {
+          if (noticeRegion === this.region) noticeRegion = null
+          if (this.region.matches(':popover-open')) this.region.hidePopover()
+          this.region.remove()
+        }
       })
-      owner.register(() => this.hide())
+      owner.addChild(this.lifecycle)
+      if (duration !== 0)
+        this.timer = window.setTimeout(() => this.hide(), duration)
     }
     setMessage(message: string | DocumentFragment): this {
-      this.noticeEl.textContent =
-        typeof message === 'string' ? message : message.textContent
-      this.toast.update({ message: this.noticeEl.textContent ?? '' })
+      this.messageEl.replaceChildren(message)
       return this
     }
-    hide() {
-      this.toast.dismiss()
-      this.noticeEl.remove()
+    hide(): void {
+      owner.removeChild(this.lifecycle)
     }
   }
 
@@ -85,22 +120,60 @@ export function createUiApi(context: UiContext) {
     app = app
     scope = new Scope(app.scope)
     containerEl = ownElement(document.createElement('div'), owner)
-    modalEl = this.containerEl.createDiv('modal-content')
-    titleEl = this.modalEl.createDiv('modal-title')
-    contentEl = this.modalEl.createDiv('modal-body')
+    modalEl = childElement(this.containerEl, 'div', 'modal-content')
+    titleEl = childElement(this.modalEl, 'div', 'modal-title')
+    contentEl = childElement(this.modalEl, 'div', 'modal-body')
     private handle: DialogHandle<void> | null = null
     private opened = false
-    private mount = () => this.onOpen()
+    private closed: () => unknown = () => {}
+    private syncTitle = () => {
+      const dialog = this.containerEl.closest('dialog')
+      if (!dialog) return
+      const labelId = dialog.getAttribute('aria-labelledby')
+      const label = labelId ? document.getElementById(labelId) : null
+      const title = this.titleEl.textContent || context.name
+      if (label && dialog.contains(label)) label.textContent = title
+      else dialog.setAttribute('aria-label', title)
+    }
+    private mount = () => {
+      this.syncTitle()
+      try {
+        observe(this.onOpen())
+      } catch (error) {
+        reportError(error)
+      }
+    }
     constructor(_app: App) {
+      this.titleEl.hidden = true
+      const observer = new MutationObserver(this.syncTitle)
+      observer.observe(this.titleEl, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      })
+      owner.register(() => observer.disconnect())
       owner.register(() => this.close())
     }
-    onOpen(): void {}
+    onOpen(): void | Promise<void> {}
     onClose(): void {}
     setTitle(title: string): this {
       this.titleEl.textContent = title
+      this.syncTitle()
       return this
     }
+    setContent(content: string | DocumentFragment): this {
+      this.contentEl.replaceChildren(content)
+      return this
+    }
+    setCloseCallback(callback: () => unknown): this {
+      this.closed = callback
+      return this
+    }
+    onHistoryBack(): void {
+      this.close()
+    }
     open(): void {
+      if (owner.isUnloaded) throw new Error('This plugin has unloaded.')
       if (this.handle) return
       this.opened = true
       app.keymap.pushScope(this.scope)
@@ -111,7 +184,11 @@ export function createUiApi(context: UiContext) {
         ),
       })
       this.handle = handle
-      void handle.result.then(() => this.finish()).catch(reportError)
+      void handle.result
+        .then(() => {
+          if (this.handle === handle) this.finish()
+        })
+        .catch(reportError)
     }
     private finish(): void {
       if (!this.opened) return
@@ -119,15 +196,19 @@ export function createUiApi(context: UiContext) {
       this.handle = null
       app.keymap.popScope(this.scope)
       this.containerEl.remove()
-      this.onClose()
+      try {
+        this.onClose()
+      } finally {
+        observe(this.closed())
+      }
     }
     close(): void {
       const handle = this.handle
-      this.handle = null
+      if (!handle) return
       try {
-        handle?.close()
+        handle.close()
       } finally {
-        this.finish()
+        if (this.handle === handle) this.finish()
       }
     }
   }
@@ -139,20 +220,20 @@ export function createUiApi(context: UiContext) {
     checked = false
     section = ''
     callback: (event: MouseEvent | KeyboardEvent) => unknown = () => {}
-    setTitle(title: string): this {
-      this.title = title
+    setTitle(title: string | DocumentFragment): this {
+      this.title = typeof title === 'string' ? title : (title.textContent ?? '')
       return this
     }
-    setIcon(icon: string): this {
-      this.icon = icon
+    setIcon(icon: string | null): this {
+      this.icon = icon ?? ''
       return this
     }
     setDisabled(disabled: boolean): this {
       this.disabled = disabled
       return this
     }
-    setChecked(checked: boolean): this {
-      this.checked = checked
+    setChecked(checked: boolean | null): this {
+      this.checked = checked === true
       return this
     }
     setSection(section: string): this {
@@ -164,11 +245,13 @@ export function createUiApi(context: UiContext) {
       return this
     }
   }
-  class Menu {
+  class Menu extends Component {
     private items: (MenuItem | null)[] = []
     private handle: ReturnType<AddonContext['menus']['open']> | null = null
+    private hidden: () => unknown = () => {}
     constructor(_app?: App) {
-      owner.register(() => this.hide())
+      super()
+      owner.addChild(this)
     }
     addItem(callback: (item: MenuItem) => unknown): this {
       const item = new MenuItem()
@@ -180,11 +263,20 @@ export function createUiApi(context: UiContext) {
       this.items.push(null)
       return this
     }
-    showAtMouseEvent(event: MouseEvent): void {
-      this.showAtPosition({ x: event.clientX, y: event.clientY })
+    onHide(callback: () => unknown): void {
+      this.hidden = callback
     }
-    showAtPosition(position: { x: number; y: number }): void {
-      this.hide()
+    showAtMouseEvent(event: MouseEvent): this {
+      return this.showAtPosition({ x: event.clientX, y: event.clientY })
+    }
+    showAtPosition(position: { x: number; y: number }, doc = document): this {
+      if (owner.isUnloaded) throw new Error('This plugin has unloaded.')
+      if (doc !== document)
+        throw new Error('Menus in other windows are not supported by Hibi.')
+      if (this.handle) this.hide()
+      closeActiveMenu?.()
+      this.load()
+      owner.addChild(this)
       let separator = false
       let section = ''
       const items = this.items.flatMap((item, index) => {
@@ -204,12 +296,16 @@ export function createUiApi(context: UiContext) {
             separatorBefore,
             ...(svg ? { icon: () => <DomMount element={svg} /> } : {}),
             onSelect: async () => {
-              await item.callback(
-                app.lastEvent instanceof KeyboardEvent ||
-                  app.lastEvent instanceof MouseEvent
-                  ? app.lastEvent
-                  : new MouseEvent('click'),
-              )
+              try {
+                await item.callback(
+                  app.lastEvent instanceof KeyboardEvent ||
+                    app.lastEvent instanceof MouseEvent
+                    ? app.lastEvent
+                    : new MouseEvent('click'),
+                )
+              } finally {
+                this.hide()
+              }
             },
           },
         ]
@@ -219,12 +315,57 @@ export function createUiApi(context: UiContext) {
         anchor: position,
         items,
       })
+      const close = () => {
+        this.hide()
+      }
+      closeActiveMenu = close
+      this.register(() => {
+        if (closeActiveMenu === close) closeActiveMenu = null
+        const handle = this.handle
+        this.handle = null
+        if (handle) {
+          try {
+            handle.close()
+          } finally {
+            observe(this.hidden())
+          }
+        }
+      })
+      this.registerDomEvent(
+        document,
+        'keydown',
+        (event) => {
+          if (event.key === 'Escape') {
+            this.hide()
+            event.preventDefault()
+            event.stopPropagation()
+          }
+        },
+        true,
+      )
+      this.registerDomEvent(
+        document,
+        'pointerdown',
+        (event) => {
+          const target = event.target
+          if (!(target instanceof Element) || !target.closest('[role="menu"]'))
+            this.hide()
+        },
+        true,
+      )
+      return this
     }
-    hide(): void {
-      this.handle?.close()
-      this.handle = null
+    hide(): this {
+      owner.removeChild(this)
+      this.unload()
+      return this
+    }
+    close(): void {
+      this.hide()
+    }
+    onHistoryBack(): void {
+      this.hide()
     }
   }
-
   return { Notice, Modal, Menu, MenuItem, PluginSettingTab }
 }

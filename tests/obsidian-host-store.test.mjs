@@ -160,10 +160,50 @@ test('stored package integrity is checked before enabling or serving', async (t)
   const store = new ObsidianStore(root, fixture.vault)
   const source = await readObsidianPackage(fixture.folder)
   await store.install(source)
+  await store.setEnabled('host-smoke', true)
   await writeFile(
     join(root, 'packages', 'host-smoke', source.hash, 'main.js'),
     'module.exports = 123',
   )
   await assert.rejects(store.setEnabled('host-smoke', true), /hash/)
+  await store.setEnabled('host-smoke', false)
+  assert.equal((await store.list())[0].enabled, false)
   await fixture.assertUnchanged()
+})
+
+test('refused symlink storage creates no folders inside the vault', async (t) => {
+  const server = await createServer({
+    configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom',
+  })
+  t.after(() => server.close())
+  const { ObsidianStore, readObsidianPackage } = await server.ssrLoadModule(
+    '/src/addons/obsidian/store.ts',
+  )
+  const fixture = await fixtureVault(t)
+  const linked = join(fixture.root, 'profile-link')
+  await symlink(fixture.vault, linked, 'dir')
+  const store = new ObsidianStore(join(linked, 'injected'), fixture.vault)
+  const source = await readObsidianPackage(fixture.folder)
+  await assert.rejects(store.install(source), /regular|symlink|storage/i)
+  await fixture.assertUnchanged()
+})
+
+test('CSS validation refuses escaped CRLF imports and unterminated comments', async (t) => {
+  const server = await createServer({
+    configFile: false,
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom',
+  })
+  t.after(() => server.close())
+  const { validatePluginCss } = await server.ssrLoadModule(
+    '/src/addons/obsidian/package.ts',
+  )
+  const escaped =
+    '@' + String.fromCharCode(92) + '69\r\nmport "//example.test/x.css";'
+  assert.throws(() => validatePluginCss(escaped), /CSS/)
+  assert.throws(() => validatePluginCss('/* unfinished comment'), /CSS/)
 })

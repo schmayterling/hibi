@@ -1,5 +1,10 @@
 import { type EventRef, reportError } from './events.ts'
 
+type DomEvents = HTMLElementEventMap &
+  DocumentEventMap &
+  WindowEventMap &
+  Record<string, Event>
+
 export class Component {
   private state: 'new' | 'loaded' | 'unloaded' = 'new'
   private children = new Set<Component>()
@@ -83,10 +88,10 @@ export class Component {
     this.register(() => ref.events.offref(ref))
   }
 
-  registerDomEvent<K extends keyof HTMLElementEventMap>(
+  registerDomEvent<K extends string>(
     el: EventTarget,
     type: K,
-    callback: (event: HTMLElementEventMap[K]) => unknown,
+    callback: (event: DomEvents[K]) => unknown,
     options?: boolean | AddEventListenerOptions,
   ): void {
     const listener = callback as EventListener

@@ -149,6 +149,15 @@ export class ToggleComponent extends BaseComponent {
     this.toggleEl.checked = value
     return this
   }
+  setTooltip(text: string): this {
+    this.toggleEl.title = text
+    return this
+  }
+  onClick(): void {
+    if (this.disabled) return
+    this.setValue(!this.getValue())
+    observeResult(this.changed(this.getValue()))
+  }
   onChange(callback: (value: boolean) => unknown): this {
     this.changed = callback
     return this
@@ -199,9 +208,13 @@ export class SliderComponent extends BaseComponent {
     this.sliderEl = element
     listen(element, 'input', () => {
       if (this.dynamicTooltip) element.title = element.value
-      return this.changed(this.getValue())
+      if (this.instant) return this.changed(this.getValue())
+    })
+    listen(element, 'change', () => {
+      if (!this.instant) return this.changed(this.getValue())
     })
   }
+  private instant = true
   private dynamicTooltip = false
   getValue() {
     return this.sliderEl.valueAsNumber
@@ -211,12 +224,18 @@ export class SliderComponent extends BaseComponent {
     if (this.dynamicTooltip) this.sliderEl.title = String(value)
     return this
   }
-  setLimits(min: number, max: number, step: number | 'any'): this {
-    Object.assign(this.sliderEl, {
-      min: String(min),
-      max: String(max),
-      step: String(step),
-    })
+  setLimits(
+    min: number | null,
+    max: number | null,
+    step: number | 'any',
+  ): this {
+    for (const [name, value] of [
+      ['min', min],
+      ['max', max],
+    ] as const)
+      if (value === null) this.sliderEl.removeAttribute(name)
+      else this.sliderEl.setAttribute(name, String(value))
+    this.sliderEl.step = String(step)
     return this
   }
   setDynamicTooltip(): this {
@@ -224,7 +243,8 @@ export class SliderComponent extends BaseComponent {
     this.sliderEl.title = this.sliderEl.value
     return this
   }
-  setInstant(_instant: boolean): this {
+  setInstant(instant: boolean): this {
+    this.instant = instant
     return this
   }
   onChange(callback: (value: number) => unknown): this {
@@ -270,6 +290,53 @@ export class ColorComponent extends BaseComponent {
           .join(''),
     )
   }
+  getValueHsl() {
+    const rgb = this.getValueRgb()
+    const r = rgb.r / 255,
+      g = rgb.g / 255,
+      b = rgb.b / 255
+    const max = Math.max(r, g, b),
+      min = Math.min(r, g, b)
+    const delta = max - min,
+      light = (max + min) / 2
+    const hue = !delta
+      ? 0
+      : max === r
+        ? ((g - b) / delta) % 6
+        : max === g
+          ? (b - r) / delta + 2
+          : (r - g) / delta + 4
+    return {
+      h: Math.round((hue * 60 + 360) % 360),
+      s: Math.round(delta ? (delta / (1 - Math.abs(2 * light - 1))) * 100 : 0),
+      l: Math.round(light * 100),
+    }
+  }
+  setValueHsl({ h, s, l }: { h: number; s: number; l: number }): this {
+    const hue = (((h % 360) + 360) % 360) / 60
+    const saturation = Math.max(0, Math.min(100, s)) / 100
+    const light = Math.max(0, Math.min(100, l)) / 100
+    const chroma = (1 - Math.abs(2 * light - 1)) * saturation
+    const x = chroma * (1 - Math.abs((hue % 2) - 1))
+    const [r = 0, g = 0, b = 0] =
+      hue < 1
+        ? [chroma, x, 0]
+        : hue < 2
+          ? [x, chroma, 0]
+          : hue < 3
+            ? [0, chroma, x]
+            : hue < 4
+              ? [0, x, chroma]
+              : hue < 5
+                ? [x, 0, chroma]
+                : [chroma, 0, x]
+    const offset = light - chroma / 2
+    return this.setValueRgb({
+      r: (r + offset) * 255,
+      g: (g + offset) * 255,
+      b: (b + offset) * 255,
+    })
+  }
   onChange(callback: (value: string) => unknown): this {
     this.changed = callback
     return this
@@ -278,6 +345,11 @@ export class ColorComponent extends BaseComponent {
 
 export class SearchComponent extends TextComponent {
   clearButtonEl: HTMLButtonElement
+  override setDisabled(disabled: boolean): this {
+    super.setDisabled(disabled)
+    this.clearButtonEl.disabled = disabled
+    return this
+  }
   constructor(container: HTMLElement) {
     super(container)
     this.inputEl.type = 'search'

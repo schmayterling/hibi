@@ -177,6 +177,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // megabyte of code, in one pass over the source tree adds 1,207 (#964).
   // Listing the built-in Obsidian themes addon (off by default) in the addon
   // catalog adds its manifest's 369 bytes; its code loads only when enabled.
+  // Registering the minimal, off-by-default Obsidian plugins catalog entry adds
+  // 1,332 bytes (paired builds: 694,970 -> 696,302; identical initial module sets).
+  // Plugin code stays lazy, including the services registered by other lanes.
+  const obsidianPluginCatalogBytes = 1332
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -222,10 +226,12 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         97 +
         40 +
         1207 +
-        369,
+        369 +
+        obsidianPluginCatalogBytes,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
+  assert.doesNotMatch(modules, /src\/addons\/obsidian(?:\/|-themes\/)/)
   assert.doesNotMatch(
     modules,
     /src\/(?:renderer\/src\/local-diagnostics-report|shared\/local-diagnostics(?:-budget)?)\.ts/,

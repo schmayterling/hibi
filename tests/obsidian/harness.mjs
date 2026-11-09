@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  readlink,
   realpath,
   rm,
   writeFile,
@@ -67,8 +68,20 @@ export async function fixtureVault(
     overlay,
     folder,
     plugin,
-    assertUnchanged: async () =>
-      assert.deepEqual(await snapshot(vault), before),
+    assertUnchanged: async () => {
+      const actual = await snapshot(vault)
+      const paths = [
+        ...new Set([...Object.keys(before), ...Object.keys(actual)]),
+      ]
+      assert.deepEqual(
+        paths.filter(
+          (path) =>
+            JSON.stringify(before[path]) !== JSON.stringify(actual[path]),
+        ),
+        [],
+        'Vault files or folders changed.',
+      )
+    },
   }
 }
 
@@ -78,7 +91,11 @@ async function snapshot(root, prefix = '') {
     withFileTypes: true,
   })) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name
-    if (entry.isDirectory()) Object.assign(result, await snapshot(root, path))
+    if (entry.isDirectory()) {
+      result[`${path}/`] = null
+      Object.assign(result, await snapshot(root, path))
+    } else if (entry.isSymbolicLink())
+      result[path] = { link: await readlink(join(root, path)) }
     else result[path] = (await readFile(join(root, path))).toString('hex')
   }
   return result

@@ -140,7 +140,7 @@ export function createVaultNative(
           target: place.target,
           sequence: workspaceChangeCursor().sequence,
           name: basename(place.root),
-          configDir: settings?.directory ?? '.obsidian',
+          ...(settings?.directory ? { configDir: settings.directory } : {}),
           settings,
           activePath: relativePath(getDocumentPath()),
           documents: getOpenDocumentVersions().flatMap((item) => {

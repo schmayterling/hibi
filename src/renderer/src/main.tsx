@@ -2136,41 +2136,19 @@ function App() {
     tabId: string,
     side: PaneSide,
   ): Promise<void> {
-    if (busyRef.current)
-      return wait('link', (go) => go && openLink(href, tabId, side))
-    const split = splitTabsRef.current
-    if (split) {
-      if (split[side] !== tabId) return
-      await focusSplitTab(side)
-      const current = splitTabsRef.current
-      if (
-        !current ||
-        current[side] !== tabId ||
-        current.active !== side ||
-        focusPending.current
-      )
-        return
-    } else if (side !== 'left') return
-    if (busyRef.current) return openLink(href, tabId, side)
-    const target = currentDocument.current
-    if (!target || target.tabId !== tabId) return
-    // The formatted view follows heading links itself.
-    if (href.startsWith('#')) return
-    const fragment = href.indexOf('#')
-    void applyDocumentOperation(
-      async () => {
-        const next = await window.hibi.openDocumentLink(href, target.revision)
-        if (next && fragment > 0)
-          setLinkAnchor({
-            tabId: next.tabId,
-            revision: next.revision,
-            anchor: href.slice(fragment),
-          })
-        return next
-      },
-      true,
-      true,
-    )
+    const { openWorkspaceLink } = await import('./workspace-subpath')
+    return openWorkspaceLink(href, tabId, side, {
+      busy: busyRef,
+      split: splitTabsRef,
+      focusPending,
+      document: currentDocument,
+      wait,
+      focus: focusSplitTab,
+      open: (operation) => applyDocumentOperation(operation, true, true),
+      anchor: setLinkAnchor,
+      hashtags: enabledAddons.has('tags'),
+      projections: addonHost.markdownExtensions,
+    })
   }
 
   function navigate(direction: 'back' | 'forward') {

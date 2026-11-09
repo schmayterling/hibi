@@ -336,7 +336,13 @@ function validDetailEntry(entry: unknown): entry is NoteCacheEntry {
     case 'embed':
       return link
     case 'frontmatterLink':
-      return link && typeof value.key === 'string'
+      return (
+        link &&
+        typeof value.key === 'string' &&
+        (value.syntax === undefined ||
+          value.syntax === 'wiki' ||
+          value.syntax === 'markdown')
+      )
     case 'tag':
       return typeof value.tag === 'string'
     case 'block':

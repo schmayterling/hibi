@@ -29,7 +29,11 @@ export type NoteCacheFrontmatter = {
   values: Record<string, unknown>
   position: Pos
 }
-export type NoteCacheFrontmatterLink = NoteCacheLink & { key: string }
+export type NoteCacheFrontmatterLink = NoteCacheLink & {
+  key: string
+  /** Cooked YAML can hide delimiters in the raw source spelling. */
+  syntax?: 'wiki' | 'markdown'
+}
 
 export type NoteCacheValues = {
   heading: NoteCacheHeading

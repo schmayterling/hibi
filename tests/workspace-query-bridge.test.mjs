@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 
 test('installed addon queries workspace metadata through scoped bridge', {
   timeout: 45000,
@@ -15,9 +15,12 @@ test('installed addon queries workspace metadata through scoped bridge', {
   await mkdir(folder, { recursive: true })
   await writeFile(
     join(workspace, 'a.md'),
-    '---\nstatus: done\n---\n# Alpha\n\n[Bravo](b.md)\n\n#topic\n',
+    '\ufeff---\r\nstatus: done\r\nnested: {items: [one, {count: 2}]}\r\n---\r\n# Alpha 😀\r\n\r\n[Bravo](b.md)\r\n\r\n#topic ^block-id\r\n\r\n[jump](#^block-id) [[b#^target|cross]]\r\n',
   )
-  await writeFile(join(workspace, 'b.md'), '# Bravo\n')
+  await writeFile(
+    join(workspace, 'b.md'),
+    '# Bravo\n\nTarget paragraph ^target\n',
+  )
   await writeFile(
     join(folder, 'hibi-addon.json'),
     JSON.stringify({
@@ -41,6 +44,12 @@ test('installed addon queries workspace metadata through scoped bridge', {
         window.queryProbe = {
           snapshot: () => context.workspace.changeSnapshot(),
           query: request => context.workspace.query(request),
+          openFile: path => context.workspace.openFile(path),
+          metadata: async request => {
+            const entries = []
+            for await (const entry of context.workspace.metadata(request)) entries.push(entry)
+            return entries
+          },
         }
       },
       stop() { delete window.queryProbe },
@@ -104,6 +113,31 @@ test('installed addon queries workspace metadata through scoped bridge', {
   )
   assert.equal(property.ok, true)
   assert.deepEqual(property.value.items, ['a.md'])
+  const metadata = await page.evaluate(
+    (captured) =>
+      window.queryProbe.metadata({ target: captured, path: 'a.md' }),
+    target,
+  )
+  const heading = metadata.find(({ kind }) => kind === 'heading').value
+  assert.equal(heading.text, 'Alpha 😀')
+  assert.deepEqual(heading.position.start, { line: 4, col: 0, offset: 61 })
+  const frontmatter = metadata.find(({ kind }) => kind === 'frontmatter').value
+  assert.deepEqual(frontmatter.values.nested, { items: ['one', { count: 2 }] })
+  const block = metadata.find(({ kind }) => kind === 'block').value
+  assert.equal(block.id, 'block-id')
+  const resolved = await page.evaluate(
+    (captured) =>
+      window.queryProbe.query({
+        target: captured,
+        kind: 'resolve-subpath',
+        path: 'a.md',
+        subpath: '#^block-id',
+      }),
+    target,
+  )
+  assert.equal(resolved.ok, true)
+  assert.equal(resolved.value.resolved.type, 'block')
+  assert.deepEqual(resolved.value.resolved.position, block.position)
   const text = await page.evaluate(async (captured) => {
     const items = []
     let cursor, result
@@ -122,4 +156,40 @@ test('installed addon queries workspace metadata through scoped bridge', {
   }, target)
   assert.equal(text.ok, true)
   assert.deepEqual(text.value.items, ['a.md'])
+  await page.evaluate(() => window.queryProbe.openFile('a.md'))
+  await page.waitForFunction(
+    async () => (await window.hibi.getDocument()).name === 'a.md',
+  )
+  await waitForDocumentEditor(app, page)
+  await page.getByRole('link', { name: 'jump', exact: true }).waitFor()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true })
+  })
+  await page
+    .getByRole('link', { name: 'jump', exact: true })
+    .click({ modifiers: ['Shift'] })
+  await page.waitForFunction(() => {
+    const view = document.querySelector('.rich-pane .cm-content')?.cmTile?.root
+      .view
+    return (
+      view &&
+      view.state.selection.main.head ===
+        view.state.doc.toString().indexOf('#topic')
+    )
+  })
+  await page
+    .getByRole('link', { name: 'cross', exact: true })
+    .click({ modifiers: ['Shift'] })
+  await page.waitForFunction(async () => {
+    if ((await window.hibi.getDocument()).name !== 'b.md') return false
+    const view = document.querySelector('.rich-pane .cm-content')?.cmTile?.root
+      .view
+    return (
+      view &&
+      view.state.selection.main.head ===
+        view.state.doc.toString().indexOf('Target paragraph')
+    )
+  })
 })

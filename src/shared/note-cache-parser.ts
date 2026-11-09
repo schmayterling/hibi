@@ -781,7 +781,17 @@ export function* noteCacheEntries(
       if (value) {
         const embed = node.name === 'Image' || node.name === 'WikiEmbed'
         yield property !== undefined
-          ? { kind: 'frontmatterLink', value: { ...value, key: property } }
+          ? {
+              kind: 'frontmatterLink',
+              value: {
+                ...value,
+                key: property,
+                syntax:
+                  node.name === 'WikiLink' || node.name === 'WikiEmbed'
+                    ? 'wiki'
+                    : 'markdown',
+              },
+            }
           : { kind: embed ? 'embed' : 'link', value }
       }
       return

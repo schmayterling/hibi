@@ -1334,7 +1334,10 @@ export function indexWorkspace(
   return indexJob.request(captured)
 }
 
-function metadataDrafts(selected: string): Map<string, IndexDraft> {
+function metadataDrafts(
+  selected: string,
+  requestedPath?: string,
+): Map<string, IndexDraft> {
   const dirty = new Set(
     getDocumentTabs()
       .filter((tab) => tab.dirty)
@@ -1349,12 +1352,14 @@ function metadataDrafts(selected: string): Map<string, IndexDraft> {
   for (const version of getOpenDocumentVersions()) {
     const path = relativePath(selected, version.file)
     if (
-      !dirty.has(version.tabId) ||
+      (requestedPath === undefined && !dirty.has(version.tabId)) ||
       !path ||
       !isDocumentName(basename(path), true) ||
-      !relevantWatchPath(path) ||
-      path.split('/').includes('node_modules') ||
-      ignoredPaths?.ignores(path)
+      (requestedPath !== undefined
+        ? path !== requestedPath
+        : !relevantWatchPath(path) ||
+          path.split('/').includes('node_modules') ||
+          ignoredPaths?.ignores(path))
     )
       continue
     drafts.set(path, {
@@ -1366,7 +1371,6 @@ function metadataDrafts(selected: string): Map<string, IndexDraft> {
   return drafts
 }
 
-/** Heading text stays on disk; only this requested page crosses the worker boundary. */
 export async function workspaceMetadataHeadings(
   path: string,
   syntax: WorkspaceSyntax,
@@ -1374,14 +1378,49 @@ export async function workspaceMetadataHeadings(
   limit: number,
   current: () => boolean,
 ) {
+  const result = await readWorkspaceNoteMetadata(
+    path,
+    syntax,
+    current,
+    (input, active) =>
+      metadataParser.readHeadings(input, offset, limit, active),
+  )
+  return result?.value ?? null
+}
+
+/** Rich metadata is streamed from this note's worker record, never a whole-vault snapshot. */
+export async function workspaceMetadataDetails(
+  path: string,
+  syntax: WorkspaceSyntax,
+  cursor: number,
+  current: () => boolean,
+) {
+  const result = await readWorkspaceNoteMetadata(
+    path,
+    syntax,
+    current,
+    (input, active) => metadataParser.readDetails(input, cursor, active),
+  )
+  return result ? { ...result.value, version: result.version } : null
+}
+
+async function readWorkspaceNoteMetadata<T>(
+  path: string,
+  syntax: WorkspaceSyntax,
+  current: () => boolean,
+  read: (
+    input: import('./workspace-metadata-parser').CachedMetadataRequest,
+    active: () => boolean,
+  ) => Promise<T | null>,
+): Promise<{ value: T; version: string } | null> {
   const selected = root
   if (!selected) return null
   const revision = indexRevision
   const active = () =>
     current() && root === selected && indexRevision === revision
-  const draft = metadataDrafts(selected).get(path)
+  const draft = metadataDrafts(selected, path).get(path)
   try {
-    const file = draft?.file ?? (await resolveWorkspaceFile(selected, path))
+    const file = draft?.file ?? (await resolveWorkspaceEntry(selected, path))
     if (!active()) return null
     const version = draft
       ? `draft:${draft.tabId}:${draft.contentVersion}`
@@ -1395,14 +1434,9 @@ export async function workspaceMetadataHeadings(
       version,
       fingerprint: syntax.fingerprint,
     }
-    const page = await metadataParser.readHeadings(
-      cached,
-      offset,
-      limit,
-      active,
-    )
+    let value = await read(cached, active)
     if (!active()) return null
-    if (page) return page
+    if (value) return { value, version }
     const input = {
       id,
       path,
@@ -1417,7 +1451,8 @@ export async function workspaceMetadataHeadings(
           active,
         )
     if (!parsed || !active()) return null
-    return await metadataParser.readHeadings(cached, offset, limit, active)
+    value = await read(cached, active)
+    return value && active() ? { value, version } : null
   } catch (error) {
     if (!active() || (error as NodeJS.ErrnoException).code === 'ENOENT')
       return null
@@ -1596,7 +1631,7 @@ export async function workspaceMetadataFile(
     [path],
     selected,
     syntax,
-    metadataDrafts(selected),
+    metadataDrafts(selected, path),
     cachedRoot === selected ? cachedPages : new Map(),
     active,
   )

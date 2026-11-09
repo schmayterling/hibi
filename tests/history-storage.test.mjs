@@ -295,6 +295,110 @@ test('both saved reads reject malformed ids even when indexed with an existing f
   assert.equal(state.reads, 0)
 })
 
+test('autosaves make room before saves asked for, oldest first', async (t) => {
+  const { api, file } = await runtime(t)
+  await api.recordVersions(file, ['asked for first'])
+  await api.recordVersions(file, ['asked for second'])
+  for (let n = 0; n < 150; n++)
+    await api.recordVersions(file, [`autosave ${n}`], true)
+  const versions = await api.listVersions(file)
+  assert.equal(versions.length, 100)
+  const oldest = versions.slice(-2)
+  assert.equal(await api.previewVersion(file, oldest[1].id), 'asked for first')
+  assert.equal(await api.previewVersion(file, oldest[0].id), 'asked for second')
+  assert.equal(await api.previewVersion(file, versions[0].id), 'autosave 149')
+  assert.equal(await api.previewVersion(file, versions[97].id), 'autosave 52')
+})
+
+test('saves asked for go only once no autosave is left, and the newest two always stay', async (t) => {
+  const { api, file } = await runtime(t)
+  for (let n = 0; n < 99; n++) await api.recordVersions(file, [`asked ${n}`])
+  await api.recordVersions(file, ['autosave'], true)
+  await api.recordVersions(file, ['asked last'])
+  await api.recordVersions(file, ['autosave newest'], true)
+  const versions = await api.listVersions(file)
+  assert.equal(versions.length, 100)
+  assert.equal(
+    await api.previewVersion(file, versions[0].id),
+    'autosave newest',
+  )
+  assert.equal(await api.previewVersion(file, versions[1].id), 'asked last')
+  assert.equal(await api.previewVersion(file, versions.at(-1).id), 'asked 1')
+})
+
+test('a save asked for of text autosave just wrote counts as asked for', async (t) => {
+  const { api, file } = await runtime(t)
+  await api.recordVersions(file, ['opened', 'keep this'], true)
+  await api.recordVersions(file, ['keep this', 'keep this'])
+  for (let n = 0; n < 150; n++)
+    await api.recordVersions(file, [`autosave ${n}`], true)
+  const kept = await Promise.all(
+    (await api.listVersions(file)).map(({ id }) =>
+      api.previewVersion(file, id),
+    ),
+  )
+  assert.ok(kept.includes('keep this'))
+})
+
+test('over the byte limit, the autosave before the newest goes before a save asked for', async (t) => {
+  const { api, file } = await runtime(t)
+  const text = (mark) => mark + 'x'.repeat(8 * mib)
+  await api.recordVersions(file, [text('asked')])
+  await api.recordVersions(file, [text('first')], true)
+  await api.recordVersions(file, [text('second')], true)
+  const kept = await Promise.all(
+    (await api.listVersions(file)).map(async ({ id }) => {
+      for await (const chunk of api.readVersionChunks(file, id))
+        return chunk.slice(0, 6)
+    }),
+  )
+  assert.deepEqual(kept, ['second', 'askedx'])
+})
+
+test('a save asked for keeps the autosave it replaced, still flagged as one', async (t) => {
+  const { api, file } = await runtime(t)
+  const text = (mark) => mark + 'x'.repeat(8 * mib)
+  await api.recordVersions(file, [text('asked')])
+  await api.recordVersions(file, [text('first')], true)
+  await api.recordVersions(file, [text('first'), text('later')])
+  const versions = await api.listVersions(file)
+  const kept = await Promise.all(
+    versions.map(async ({ id }) => {
+      for await (const chunk of api.readVersionChunks(file, id))
+        return chunk.slice(0, 5)
+    }),
+  )
+  assert.deepEqual(kept, ['later', 'first'])
+  assert.deepEqual(
+    versions.map(({ automatic }) => automatic),
+    [undefined, true],
+  )
+})
+
+test('autosaves a pause apart thin out, so a long afternoon leaves earlier days reachable', async (t) => {
+  const { api, file } = await runtime(t)
+  let now = Date.UTC(2026, 10, 1, 9)
+  t.mock.method(Date, 'now', () => now)
+  await api.recordVersions(file, ['monday', 'monday end'], true)
+  now += 24 * 60 * 60 * 1000
+  // Three hours of typing with a pause every 30 s, and no save asked for.
+  for (let n = 0; n < 360; n++) {
+    now += 30000
+    await api.recordVersions(file, [`pause ${n}`], true)
+  }
+  const versions = await api.listVersions(file)
+  assert.ok(versions.length <= 100)
+  const kept = await Promise.all(
+    versions.map(({ id }) => api.previewVersion(file, id)),
+  )
+  assert.ok(kept.includes('monday end'), 'the last text of an earlier day')
+  assert.equal(kept[0], 'pause 359')
+  // Listed about every 3 minutes, so a version stays within reach of each.
+  const times = versions.map(({ savedAt }) => savedAt).sort((a, b) => a - b)
+  const gaps = times.slice(3).map((time, i) => time - times[i + 2])
+  assert.ok(Math.max(...gaps) <= 6 * 60 * 1000, String(Math.max(...gaps)))
+})
+
 test('a version autosave wrote is flagged; the text it replaced and saves asked for are not', async (t) => {
   const { api, file } = await runtime(t)
   await api.recordVersions(file, ['opened', 'autosaved'], true)

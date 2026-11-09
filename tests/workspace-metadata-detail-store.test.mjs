@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import promises, {
+  mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
@@ -237,6 +239,29 @@ test('metadata-only record reads skip resident inline details while detail reads
   }
   assert.deepEqual(projected.finish(), { page: value.page, inlineDetails: [] })
   assert.deepEqual(complete.finish(), value)
+})
+
+test('a folder linked away before the first write keeps no detail temp in the link target', async (t) => {
+  const path = await directory(t)
+  const cache = join(path, 'cache')
+  const outside = join(path, 'outside')
+  await mkdir(cache)
+  await mkdir(outside)
+  const writer = new DetailStoreWriter(cache, id, identity)
+  await rename(cache, join(path, 'moved'))
+  await symlink(
+    outside,
+    cache,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  )
+  assert.throws(() => {
+    writer.add({
+      kind: 'frontmatter',
+      value: { values: { huge: 'x'.repeat(100000) }, position },
+    })
+    writer.finish(true)
+  }, /Invalid metadata record/)
+  assert.deepEqual(await readdir(outside), [])
 })
 
 test('detail file lstat/open race never opens symlink target', async (t) => {

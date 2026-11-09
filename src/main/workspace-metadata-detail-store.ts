@@ -67,6 +67,7 @@ export class DetailStoreWriter {
   private allowInline: boolean
   private temporary: string
   private stored: string | undefined
+  private created: import('node:fs').BigIntStats | undefined
 
   constructor(
     directory: string,
@@ -105,6 +106,7 @@ export class DetailStoreWriter {
     this.temporary = join(this.directory, `.${this.record.key}.mdat.tmp`)
     this.fd = openSync(this.temporary, 'wx', 0o600)
     this.stored = this.temporary
+    this.created = fstatSync(this.fd, { bigint: true })
     if (
       !sameFileIdentity(
         statSync(this.directory, { bigint: true }),
@@ -212,11 +214,14 @@ export class DetailStoreWriter {
     this.stored = undefined
     if (!stored) return
     try {
+      // Our own new file goes even when the folder became a link after it was made.
       if (
         sameFileIdentity(
           lstatSync(this.directory, { bigint: true }),
           this.folder,
-        )
+        ) ||
+        (this.created &&
+          sameFileIdentity(lstatSync(stored, { bigint: true }), this.created))
       )
         unlinkSync(stored)
     } catch {}

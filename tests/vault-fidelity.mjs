@@ -37,7 +37,7 @@ export const syntax = [
   paragraph,
   '',
   '[[nested/Target|alias]] [[nested/Target#Heading|heading]] [[nested/Target#^block-id]]',
-  '![[nested/Target#Heading]] ![[attachments/pixel.svg|48]]',
+  '![[nested/Target#Heading]] ![[attachments/pixel.svg|48]] ![pixel](attachments/pixel.svg "keep title")',
   '',
   'Keep this block. ^keep-id',
   '',
@@ -206,6 +206,15 @@ export function snapshotManifest(snapshot) {
 // Changes are exact bytes at named paths, including expected creates and deletes.
 export function diffVault(before, after, changes = {}) {
   const violations = []
+  const configs = new Set(['.obsidian'])
+  for (const path of before.keys()) {
+    if (
+      /^\.[^/]+\/(?:app|appearance)\.json$/.test(path) &&
+      !path.startsWith('.hibi/') &&
+      !path.startsWith('.trash/')
+    )
+      configs.add(path.split('/')[0])
+  }
   const paths = new Set([
     ...before.keys(),
     ...after.keys(),
@@ -214,7 +223,7 @@ export function diffVault(before, after, changes = {}) {
   for (const path of [...paths].sort()) {
     const original = before.get(path)
     const actual = after.get(path)
-    const protectedPath = path === '.obsidian' || path.startsWith('.obsidian/')
+    const protectedPath = configs.has(path.split('/')[0])
     const allowed = !protectedPath && Object.hasOwn(changes, path)
     const expected = allowed ? changes[path] : original
     const same =

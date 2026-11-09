@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -108,6 +115,21 @@ test('expected creates, moves, deletes and missing operations are checked exactl
   assert.equal(
     diffVault(before, await snapshotVault(root), changes)[0].path,
     'new/moved.md',
+  )
+})
+
+test('custom obsidian configuration cannot be allowlisted', async (t) => {
+  const root = await fixture(t)
+  await fixtureVault(root)
+  await rename(join(root, '.obsidian'), join(root, '.profile'))
+  const before = await snapshotVault(root)
+  const path = '.profile/plugins/fixture-plugin/data.json'
+  const changed = { kind: 'file', bytes: Buffer.from('{}') }
+  await writeFile(join(root, path), changed.bytes)
+  assert.equal(
+    diffVault(before, await snapshotVault(root), { [path]: changed })[0]
+      ?.reason,
+    'protected obsidian state changed',
   )
 })
 

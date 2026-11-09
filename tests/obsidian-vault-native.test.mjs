@@ -15,7 +15,7 @@ import test from 'node:test'
 import { createServer } from 'vite'
 import { fixtureVault } from './obsidian/harness.mjs'
 
-let server, createVaultNative, cacheRoot
+let server, createVaultNative, closeVaultLists, cacheRoot
 const target = { workspaceId: 'fixture', workspaceGeneration: 1 }
 const state = {
   current: true,
@@ -37,6 +37,7 @@ test.before(async () => {
   }
   server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true },
     cacheDir: cacheRoot,
     ssr: { noExternal: ['electron'] },
     server: { middlewareMode: true, hmr: false, ws: false },
@@ -58,11 +59,12 @@ test.before(async () => {
       },
     ],
   })
-  ;({ createVaultNative } = await server.ssrLoadModule(
+  ;({ createVaultNative, closeVaultLists } = await server.ssrLoadModule(
     '/src/addons/obsidian/api/vault/native.ts',
   ))
 })
 test.after(async () => {
+  await closeVaultLists()
   await server.close()
   await rm(cacheRoot, { recursive: true, force: true })
   delete globalThis.__vaultNativeTest
@@ -209,6 +211,66 @@ test('native mutations use shared actions and refuse config paths, escapes, syml
   )
   await rm(join(env.vault, 'folder'), { recursive: true })
   assert.equal(await readFile(join(env.root, 'outside.md'), 'utf8'), 'outside')
+  await env.assertUnchanged()
+})
+
+test('native file pages include attachments and UI-ignored trees without following hidden entries or symlinks', async (t) => {
+  const env = await fixture(t)
+  await mkdir(join(env.vault, 'assets'))
+  await mkdir(join(env.vault, 'node_modules'))
+  await writeFile(join(env.vault, 'node_modules', 'kept.txt'), 'visible')
+  for (let index = 0; index < 205; index++)
+    await writeFile(
+      join(env.vault, 'assets', `${index}.bin`),
+      new Uint8Array([index % 256, 0, 255]),
+    )
+  await writeFile(join(env.vault, '.hidden.md'), 'hidden')
+  await symlink(join(env.vault, 'assets'), join(env.vault, 'alias'))
+  const paths = [],
+    cursors = new Set()
+  let cursor = null
+  do {
+    const page = await env.queries.vaultList({
+      ...env.input,
+      sequence: 1,
+      ...(cursor ? { cursor } : {}),
+    })
+    assert.ok(page.entries.length <= 100)
+    paths.push(...page.entries.map((entry) => entry.path))
+    cursor = page.nextCursor
+    if (cursor) cursors.add(cursor)
+  } while (cursor)
+  assert.equal(new Set(paths).size, 209)
+  assert.ok(cursors.size > 0)
+  assert.ok(paths.includes('assets/204.bin'))
+  assert.ok(paths.includes('node_modules/kept.txt'))
+  assert.ok(
+    !paths.some((path) => path.startsWith('.') || path.startsWith('alias')),
+  )
+  const shallow = await env.queries.vaultList({
+    ...env.input,
+    sequence: 1,
+    recursive: false,
+  })
+  assert.deepEqual(
+    new Set(shallow.entries.map((entry) => entry.path)),
+    new Set(['assets', 'node_modules', 'untouched.md']),
+  )
+  const partial = await env.queries.vaultList({ ...env.input, sequence: 1 })
+  assert.ok(partial.nextCursor)
+  await closeVaultLists()
+  await assert.rejects(
+    env.queries.vaultList({
+      ...env.input,
+      sequence: 1,
+      cursor: partial.nextCursor,
+    }),
+    /stale/,
+  )
+  await rm(join(env.vault, 'alias'))
+  await rm(join(env.vault, '.hidden.md'))
+  await rm(join(env.vault, 'assets'), { recursive: true })
+  await rm(join(env.vault, 'node_modules'), { recursive: true })
   await env.assertUnchanged()
 })
 

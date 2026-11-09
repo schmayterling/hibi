@@ -2,11 +2,23 @@ import {
   type FileHandle,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   realpath,
+  rm,
   unlink,
+  writeFile,
 } from 'node:fs/promises'
-import { basename, dirname, extname, isAbsolute, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  sep,
+} from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { type BrowserWindow, dialog } from 'electron'
 import type { AttachmentResult, DocumentMedia } from '../shared/media'
@@ -19,8 +31,9 @@ import {
 import { DocumentMediaServer, openMedia } from './document-media'
 import { isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
-import { isLocalMediaPath, resolveDocumentMediaPath } from './images'
+import { imageMime, isLocalMediaPath, resolveDocumentMediaPath } from './images'
 import { loadWorkspace, workspaceRoot } from './workspace'
+import { obsidianAttachmentDirectory } from './workspace-obsidian'
 
 const extensions = [
   'png',
@@ -106,6 +119,44 @@ export async function attachMedia(
   }
   if (!Array.isArray(values) || !values.length || values.length > 32)
     throw new Error('Choose up to 32 images or videos at a time.')
+  if (values.some((value) => typeof value !== 'string')) {
+    const inputs = values.map((value: unknown) => {
+      if (typeof value === 'string') return filePath(value)
+      const image = value as { name?: unknown; bytes?: unknown } | null
+      if (
+        !image ||
+        typeof image.name !== 'string' ||
+        !image.name ||
+        image.name.length > 255 ||
+        /[\\/\0\r\n]/.test(image.name) ||
+        image.name === '.' ||
+        image.name === '..' ||
+        !(image.bytes instanceof Uint8Array) ||
+        !image.bytes.length ||
+        image.bytes.length > 16 * 1024 * 1024 ||
+        !imageMime(Buffer.from(image.bytes))
+      )
+        throw new Error('Paste an image smaller than 16 MiB.')
+      return { name: image.name, bytes: Buffer.from(image.bytes) }
+    })
+    const temporary = await mkdtemp(join(tmpdir(), 'hibi-pasted-image-'))
+    try {
+      const paths: string[] = []
+      for (const [index, image] of inputs.entries()) {
+        if (typeof image === 'string') paths.push(image)
+        else {
+          const folder = join(temporary, String(index))
+          await mkdir(folder)
+          const path = join(folder, image.name)
+          await writeFile(path, image.bytes, { flag: 'wx', mode: 0o600 })
+          paths.push(path)
+        }
+      }
+      return await attachMedia(window, paths, revision)
+    } finally {
+      await rm(temporary, { recursive: true, force: true })
+    }
+  }
   const paths = values.map(filePath)
   // Validate the whole selection before prompting to save or creating attachments.
   for (const path of paths) await (await openAttachmentMedia(path)).file.close()
@@ -115,7 +166,10 @@ export async function attachMedia(
   if (revision !== getDocument().revision)
     throw new Error('The document changed. Try attaching the file again.')
   const note = getDocumentPath()!
-  const directory = join(dirname(note), 'assets')
+  const root = workspaceRoot()
+  const directory =
+    (root && (await obsidianAttachmentDirectory(root, note))) ||
+    join(dirname(note), 'assets')
   await mkdir(directory, { recursive: true })
   if (
     (await lstat(directory)).isSymbolicLink() ||
@@ -163,9 +217,19 @@ export async function attachMedia(
         } finally {
           await target.close()
         }
+        const alt = basename(path, extname(path))
+        const link =
+          root &&
+          (await (
+            await import('./workspace-obsidian-links')
+          ).createdObsidianLink(root, note, join(directory, name), alt, true))
         attachments.push({
-          url: `assets/${encodeURIComponent(name)}`,
-          alt: basename(path, extname(path)),
+          url: relative(dirname(note), join(directory, name))
+            .split(sep)
+            .map(encodeURIComponent)
+            .join('/'),
+          alt,
+          ...(link ? { markdown: link.markdown } : {}),
         })
       } finally {
         await file.close()

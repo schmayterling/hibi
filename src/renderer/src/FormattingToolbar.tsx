@@ -289,7 +289,7 @@ function InsertForm({
 
 const mediaNotInserted = () =>
   new Error(
-    'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
+    'The note changed before the files could be inserted. They are saved in the attachment folder. Drop them again to add them to the note.',
   )
 
 /** Takes the place to insert at; its result puts the saved files there. */
@@ -379,7 +379,11 @@ export function useFormattingToolbar(
               inserted =
                 sourceSelection?.insertMarkdown(
                   latest.current.format?.insertMedia?.(attachments) ??
-                    attachmentMarkdown(attachments),
+                    attachments
+                      .map(
+                        (item) => item.markdown ?? attachmentMarkdown([item]),
+                      )
+                      .join('\n\n'),
                 ) ?? false
             if (!inserted) throw mediaNotInserted()
           }
@@ -416,8 +420,15 @@ export function useFormattingToolbar(
   const editLink = useCallback(
     async (captured: ReturnType<SourceFormatting['capture']>) => {
       if (latest.current.disabled) return
-      const result = await linkDialog(await captured.href, captured.text)
-      if (result) captured.run(result.remove ? 'unlink' : 'link', result)
+      const href = await captured.href
+      const result = await linkDialog(href, captured.text)
+      if (!result) return
+      const link =
+        href === null && !result.remove
+          ? await window.hibi.formatDocumentLink(result.url, result.alt)
+          : null
+      if (link) captured.insertMarkdown(link.markdown)
+      else captured.run(result.remove ? 'unlink' : 'link', result)
     },
     [linkDialog],
   )

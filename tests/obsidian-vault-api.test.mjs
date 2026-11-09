@@ -24,6 +24,7 @@ test.before(async () => {
   cacheRoot = await mkdtemp(join(tmpdir(), 'hibi-vault-api-cache-'))
   server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true },
     cacheDir: cacheRoot,
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
@@ -161,9 +162,16 @@ async function environment(t) {
           if (method === 'vaultList') {
             calls.lists++
             const offset = Number(request.cursor || 0)
+            const prefix = request.path ? `${request.path}/` : ''
+            const items = all.filter(
+              (entry) =>
+                entry.path.startsWith(prefix) &&
+                (request.recursive !== false ||
+                  !entry.path.slice(prefix.length).includes('/')),
+            )
             return {
-              entries: all.slice(offset, offset + 2),
-              nextCursor: offset + 2 < all.length ? String(offset + 2) : null,
+              entries: items.slice(offset, offset + 2),
+              nextCursor: offset + 2 < items.length ? String(offset + 2) : null,
               sequence: 1,
             }
           }
@@ -397,6 +405,27 @@ test('file manager encodes root links separately from fragments and follows new-
   env.state.settings.newFileFolderPath = 'missing'
   assert.throws(() => manager.getNewFileParent('untouched.md'), /unavailable/)
   await rm(join(env.fixture.vault, 'folder'), { recursive: true })
+  await env.fixture.assertUnchanged()
+})
+
+test('content-only events add and remove UI-hidden attachment descriptors', async (t) => {
+  const env = await environment(t)
+  const events = []
+  env.vault.on('create', (file) => events.push(['create', file.path]))
+  env.vault.on('delete', (file) => events.push(['delete', file.path]))
+  await writeFile(
+    join(env.fixture.vault, 'external.png'),
+    new Uint8Array([0, 255]),
+  )
+  await env.vault.refresh(['external.png'])
+  assert.ok(env.vault.getFileByPath('external.png') instanceof api.TFile)
+  await rm(join(env.fixture.vault, 'external.png'))
+  await env.vault.refresh(['external.png'])
+  assert.equal(env.vault.getFileByPath('external.png'), null)
+  assert.deepEqual(events, [
+    ['create', 'external.png'],
+    ['delete', 'external.png'],
+  ])
   await env.fixture.assertUnchanged()
 })
 

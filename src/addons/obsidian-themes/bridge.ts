@@ -119,6 +119,27 @@ const carried = [
   ),
 ]
 
+const guard = [
+  'display: block',
+  'visibility: visible',
+  'opacity: 1',
+  'filter: none',
+  'backdrop-filter: none',
+  'transform: none',
+  'translate: none',
+  'scale: none',
+  'rotate: none',
+  'zoom: 1',
+  'clip-path: none',
+  'mask: none',
+  'contain: none',
+  'content-visibility: visible',
+  'pointer-events: auto',
+  'perspective: none',
+]
+  .map((rule) => `${rule} !important;`)
+  .join(' ')
+
 export type VaultAppearance = {
   accentColor?: string
   baseFontSize?: number
@@ -137,7 +158,16 @@ export function bridgeCss(appearance: VaultAppearance = {}): string {
     vault.push(`--font-text-size: ${Math.round(appearance.baseFontSize)}px;`)
   const declare = (entries: [string, string][]) =>
     entries.map(([name, value]) => `${name}: ${value};`).join(' ')
-  return `@layer obsidian-compat {
+  // For !important, any layer beats unlayered rules and the earliest layer
+  // beats later ones. obsidian-guard is declared first and theme layers are
+  // renamed to obsidian-theme-*, so they can't nest inside it: no theme rule,
+  // !important or not, can hide the page root.
+  return `@layer obsidian-guard, obsidian-compat;
+@layer obsidian-guard {
+html, :root { ${guard} }
+html::before, html::after, :root::before, :root::after { content: none !important; display: none !important; }
+}
+@layer obsidian-compat {
 :root { ${carried.map((token) => `--hibi-o-${token}: var(--${token});`).join(' ')} }
 body { ${declare(Object.entries(OBSIDIAN_DEFAULTS))} ${vault.join(' ')} }
 body { ${declare(Object.entries(HIBI_FROM_OBSIDIAN).map(([hibi, obsidian]) => [hibi, `var(${obsidian})`]))} }

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
-import { lstat, readdir, readFile, realpath } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, mkdir, readdir, readFile, realpath } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { isPathInside, validateWorkspaceName } from './workspace-paths.ts'
 
 export async function obsidianDataPath(root: string, data: string) {
   const identity = createHash('sha256')
@@ -30,6 +31,13 @@ export async function obsidianConfiguration(root: string) {
   const standard = await lstat(join(root, '.obsidian')).catch(() => null)
   if (standard?.isDirectory() && !standard.isSymbolicLink())
     return { directory: '.obsidian', folders: ['.obsidian'], notice: '' }
+  if (standard)
+    return {
+      directory: null,
+      folders: ['.obsidian'],
+      notice:
+        'Obsidian configuration is not a regular folder. Hibi uses Obsidian defaults.',
+    }
   const folders: string[] = []
   for (const entry of await readdir(root, { withFileTypes: true })) {
     if (
@@ -99,6 +107,91 @@ export async function obsidianSettings(root: string) {
         ? saved.trashOption
         : 'system',
   } as const
+}
+
+async function vaultDirectory(root: string, folder: string, create: boolean) {
+  if (
+    isAbsolute(folder) ||
+    folder.includes('\\') ||
+    folder.split('/').includes('..')
+  )
+    throw new Error('Choose a folder inside this vault.')
+  const parts = folder.split('/').filter((part) => part && part !== '.')
+  for (const part of parts) validateWorkspaceName(part)
+  let path = root
+  for (const part of parts) {
+    path = join(path, part)
+    if (create)
+      await mkdir(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error
+      })
+    const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+      return null
+    })
+    if (!info && !create) continue
+    if (!info?.isDirectory() || info.isSymbolicLink())
+      throw new Error(
+        'Choose a regular folder inside this vault, not a symbolic link.',
+      )
+  }
+  return path
+}
+
+export async function obsidianAttachmentDirectory(
+  root: string,
+  note: string,
+  create = true,
+) {
+  if (!isPathInside(root, note)) return null
+  const settings = await obsidianSettings(root)
+  if (!settings) return null
+  const folder = settings.attachmentFolderPath
+  const relativeFolder = folder.startsWith('./')
+    ? [relative(root, dirname(note)).split(sep).join('/'), folder.slice(2)]
+        .filter(Boolean)
+        .join('/')
+    : folder
+  return vaultDirectory(root, relativeFolder, create)
+}
+
+export async function obsidianNewNotePath(
+  root: string,
+  origin: string | null,
+  name: string,
+  create = false,
+) {
+  const settings = await obsidianSettings(root)
+  if (!settings) return null
+  const folder =
+    settings.newFileLocation === 'folder'
+      ? settings.newFileFolderPath
+      : settings.newFileLocation === 'current' &&
+          origin &&
+          isPathInside(root, origin)
+        ? relative(root, dirname(origin)).split(sep).join('/')
+        : ''
+  return join(await vaultDirectory(root, folder, create), name)
+}
+
+export async function assertObsidianContentPath(root: string, file: string) {
+  if (!isPathInside(root, file)) return
+  const first = relative(root, file).split(sep)[0] ?? ''
+  if (!first.startsWith('.')) return
+  let protectedFolder = first === '.obsidian'
+  const config = await obsidianConfiguration(root)
+  if (config) {
+    protectedFolder ||= config.folders.includes(first)
+    for (const name of ['app.json', 'appearance.json']) {
+      try {
+        protectedFolder ||= !!(await jsonFile(join(root, first, name)))
+      } catch {
+        /* Ignore unrelated malformed files. */
+      }
+    }
+  }
+  if (protectedFolder)
+    throw new Error('Obsidian configuration is read-only in Hibi.')
 }
 
 const notices = new Map<string, string>()

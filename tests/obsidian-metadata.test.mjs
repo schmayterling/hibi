@@ -24,6 +24,7 @@ test.before(async () => {
   cacheRoot = await mkdtemp(join(tmpdir(), 'hibi-obsidian-metadata-'))
   server = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true },
     cacheDir: join(cacheRoot, 'renderer'),
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
@@ -458,6 +459,14 @@ test('link targets span bounded index pages and linktext honors vault settings',
     [0, 100, 200],
   )
   assert.deepEqual(new Set(env.calls.reads), new Set(['start.md']))
+  assert.equal(
+    env.cache.getFirstLinkpathDest('../start', 'dest/0.md'),
+    env.files.get('start.md'),
+  )
+  assert.equal(
+    env.cache.getFirstLinkpathDest('../../outside', 'dest/0.md'),
+    null,
+  )
   env.context.app.vault.settings = { newLinkFormat: 'relative' }
   assert.equal(
     env.cache.fileToLinktext(env.files.get('dest/0.md'), 'start.md'),
@@ -546,6 +555,7 @@ test('native metadata query rejects config paths, symlinks and changed capture',
   const stub = '\0metadata-workspace'
   const nativeServer = await createServer({
     configFile: false,
+    optimizeDeps: { noDiscovery: true },
     cacheDir: join(cacheRoot, 'native'),
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',

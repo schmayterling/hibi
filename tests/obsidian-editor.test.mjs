@@ -378,3 +378,26 @@ test('plugins import the editor’s own CodeMirror and Lezer modules', async () 
   assert.equal(requireObsidianHostModule('@lezer/common').Tree, common.Tree)
   assert.throws(() => requireObsidianHostModule('fs'), /Unsupported/)
 })
+
+test('undo and redo act on the captured pane, never the focused one', async (t) => {
+  const { hibi, state, panes } = session('one\r\n')
+  let commands = 0
+  const run = hibi.editor.runCommand
+  hibi.editor.runCommand = (command) => {
+    commands++
+    return run(command)
+  }
+  const { commandEditor } = await host(t, hibi)
+  const left = commandEditor(panes[0]).editor
+  const right = commandEditor(panes[1]).editor
+  right.replaceRange('two ', { line: 0, ch: 0 })
+  // The right pane has no mounted view here and is not the focused pane.
+  right.undo()
+  await Promise.resolve()
+  assert.equal(commands, 0)
+  assert.equal(state.raw, 'two one\r\n')
+  left.undo()
+  await Promise.resolve()
+  assert.equal(commands, 1)
+  assert.equal(state.raw, 'one\r\n')
+})

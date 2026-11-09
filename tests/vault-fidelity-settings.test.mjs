@@ -18,7 +18,7 @@ import { diffVault, fixtureVault, snapshotVault } from './vault-fidelity.mjs'
 const bundle = await build({
   stdin: {
     contents:
-      "export * from './src/main/workspace-metadata.ts'; export * from './src/main/workspace-layout.ts'",
+      "export * from './src/main/workspace-metadata.ts'; export * from './src/main/workspace-layout.ts'; export { WorkspaceTextIndex } from './src/main/workspace-text-index.ts'",
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -54,6 +54,13 @@ async function fixture(t, config = '.obsidian') {
     const { rename } = await import('node:fs/promises')
     await rename(join(root, '.obsidian'), join(root, config))
   }
+  let worker = false
+  const profileApp = {
+    getPath: () => {
+      if (worker) throw new Error('Electron is unavailable in a worker')
+      return profile
+    },
+  }
   const module = { exports: {} }
   new Function(
     'module',
@@ -66,9 +73,17 @@ async function fixture(t, config = '.obsidian') {
     module.exports,
     (id) =>
       id === 'electron' ? { app: { getPath: () => profile } } : require(id),
-    { getPath: () => profile },
+    profileApp,
   )
-  return { root, profile, directory, ...module.exports }
+  return {
+    root,
+    profile,
+    directory,
+    asWorker: () => {
+      worker = true
+    },
+    ...module.exports,
+  }
 }
 test('remote image cache stays outside obsidian vault', async (t) => {
   const f = await fixture(t)
@@ -87,6 +102,31 @@ test('remote image cache stays outside obsidian vault', async (t) => {
       new Response(bytes, { headers: { 'content-type': 'image/png' } }),
   )
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes)
+  assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])
+})
+
+test('text-search worker reads profile ignore rules without importing Electron', async (t) => {
+  const f = await fixture(t)
+  await mkdir(f.profile, { recursive: true })
+  await f.writeWorkspaceText(f.root, f.WORKSPACE_IGNORE, 'syntax.md\n')
+  const before = await snapshotVault(f.root)
+  f.asWorker()
+  const index = await f.WorkspaceTextIndex.open({
+    root: f.root,
+    database: join(f.profile, 'search.sqlite'),
+    dataDirectory: f.profile,
+    extensions: ['md'],
+  })
+  t.after(() => index.close())
+  const query = index.createQuery('paragraph', [])
+  const matches = []
+  let result
+  do {
+    result = await index.page(query, 100)
+    matches.push(...result.matches)
+  } while (result.hasMore)
+  assert.ok(matches.some((match) => match.path === 'crlf.md'))
+  assert.ok(!matches.some((match) => match.path === 'syntax.md'))
   assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])
 })
 
@@ -159,6 +199,21 @@ test('custom config directory also externalizes metadata and protects config byt
   await f.writeWorkspaceText(f.root, f.WORKSPACE_MANIFEST, manifest('custom'))
   assert.equal((await f.workspaceMetadata(f.root)).manifest.name, 'custom')
   assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])
+})
+
+test('a symlinked default config keeps vault state external and settings read-only', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const f = await fixture(t)
+  const { rename } = await import('node:fs/promises')
+  const outside = join(f.directory, 'outside-config')
+  await rename(join(f.root, '.obsidian'), outside)
+  await symlink(outside, join(f.root, '.obsidian'))
+  const before = await snapshotVault(f.root)
+  const outsideBefore = await snapshotVault(outside)
+  await f.writeWorkspaceText(f.root, f.WORKSPACE_MANIFEST, manifest('overlay'))
+  assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])
+  assert.deepEqual(diffVault(outsideBefore, await snapshotVault(outside)), [])
 })
 
 test('metadata vault identity uses canonical path and isolates different vaults', {

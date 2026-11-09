@@ -3,7 +3,7 @@
 // are seen as the browser sees them, keeps rules it can check, and writes every
 // URL back out in a form of its own. Nothing here fetches or runs anything.
 
-export const SANITIZER_VERSION = 1
+export const SANITIZER_VERSION = 2
 export const MAX_THEME_BYTES = 5 * 1024 * 1024
 export const MAX_SNIPPET_BYTES = 1024 * 1024
 export const MAX_ASSET_BYTES = 2 * 1024 * 1024
@@ -274,9 +274,9 @@ function tree(tokens: Token[]): Node[] {
           children: read(')'),
           close: ')',
         })
-      // Stray closers are dropped so the output stays balanced.
-      else if (token.type !== '}' && token.type !== ']' && token.type !== ')')
-        nodes.push(token)
+      // Stray closers stay: dropping one would join its neighbours, so
+      // `ur)l(` would come out as `url(`. Browsers read them the same way.
+      else nodes.push(token)
     }
     return nodes
   }
@@ -362,7 +362,20 @@ export const SELECTOR_ALIASES: Readonly<Record<string, string>> = {
   'HyperMD-quote': '.hibi-lp-quote',
   'cm-quote': '.hibi-lp-quote',
   'HyperMD-list-line': '.hibi-lp-list-item',
-  'task-list-item': '.hibi-lp-task',
+  'task-list-item-checkbox': '.hibi-lp-task',
+  'cm-formatting': '.hibi-lp-marker',
+  'cm-active': '.cm-activeLine',
+  'markdown-embed': '.obsidian-embed',
+  'suggestion-item': '.cm-tooltip-autocomplete li',
+  'clickable-icon': '.icon-button',
+  'view-header-title-container': '.document-title',
+  'workspace-tab-header-inner': '.document-name',
+  // State classes: Hibi keeps state in ARIA and data attributes.
+  'is-active':
+    '[aria-selected="true"], [aria-pressed="true"], [aria-current="page"], [data-selected]',
+  'mod-active': '[aria-selected="true"], [aria-current="page"]',
+  'is-selected': '[aria-selected="true"], [data-selected]',
+  'is-collapsed': '[aria-expanded="false"]',
   callout: '.hibi-lp-alert',
   'callout-title': '.hibi-lp-alert-title',
   'callout-title-inner': '.hibi-lp-alert-title-text',
@@ -413,7 +426,42 @@ const bannedProperties = new Set([
   '-moz-binding',
   'binding',
 ])
-const urlFunctions = new Set(['url', 'src', 'image-set', '-webkit-image-set'])
+// Functions that load what their strings name.
+const urlFunctions = new Set([
+  'url',
+  'src',
+  'image-set',
+  '-webkit-image-set',
+  'image',
+  'cross-fade',
+  '-webkit-cross-fade',
+])
+// Substituted after checking, so never allowed where an image loads.
+const lateFunctions = new Set(['var', 'env', 'attr'])
+// Properties where url(#id) names an SVG element in the page.
+const fragmentProperties = new Set([
+  'filter',
+  'clip-path',
+  'marker',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'fill',
+  'stroke',
+])
+// What a rule on the page root could use to hide or cover everything.
+const rootEffects =
+  /^(?:opacity|filter|backdrop-filter|transform|translate|scale|rotate|zoom|clip-path|clip|-webkit-clip-path|mask(?:-.*)?|-webkit-mask(?:-.*)?|contain|content-visibility|display|visibility|pointer-events|position|z-index|inset|perspective)$/
+/** Hibi's own custom properties. A theme's variable of the same name is renamed so it can't feed Hibi. */
+export const HIBI_PROPERTIES: ReadonlySet<string> = new Set(
+  'accent active background border caret code-ink control-height control-padding-x control-padding-y ease-out editor-mask editor-padding editor-top-fade field-background field-border field-placeholder font-mono font-ui hover ink key-background key-border key-height key-ink key-min-width key-radius left-sidebar-space motion-fast motion-feedback motion-pane motion-selection muted overlay radius-control radius-panel radius-pill radius-popover radius-round right-sidebar-space selection selection-ink settings-fade-bottom settings-fade-top sidebar sidebar-action-size sidebar-divider-gap sidebar-row-height sidebar-section-height sidebar-width space-1 space-2 space-3 space-4 space-5 space-6 status-bar-height status-danger status-info status-success status-warning surface syntax-code syntax-comment syntax-emphasis syntax-function syntax-heading syntax-keyword syntax-link syntax-meta syntax-number syntax-operator syntax-quote syntax-string syntax-strong syntax-type syntax-variable text-editor text-heading text-sm text-ui text-xs titlebar-edge-inset ui-text-transform window-controls-width window-corner-radius cursor-duration download-progress preview-accent preview-background preview-border preview-ink preview-muted preview-surface right-sidebar-width slider-fill tab-width toast-progress toast-remaining'
+    .split(' ')
+    .map((name) => `--${name}`),
+)
+const renamed = (name: string) =>
+  HIBI_PROPERTIES.has(name) || name.startsWith('--hibi-')
+    ? `--obsidian-theme-${name.slice(2)}`
+    : null
 const safeData =
   /^data:(?:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml|x-icon|vnd\.microsoft\.icon)|font\/[\w.+-]+|application\/(?:x-)?font-[\w.+-]+|application\/vnd\.ms-fontobject)[;,]/i
 const quoteUrl = (value: string) =>
@@ -449,22 +497,41 @@ type Context = {
   assets: string[]
   known: ReadonlyMap<string, string>
   aliased: number
+  /** URLs this sanitizer wrote; the only ones its output may contain. */
+  emitted: Set<string>
 }
 
 // Replace each URL in a value with its checked form; returns the reason to drop otherwise.
-function checkValue(nodes: Node[], context: Context): string | null {
+function checkValue(
+  nodes: Node[],
+  context: Context,
+  property = '',
+): string | null {
+  const write = (url: string) => {
+    context.emitted.add(url)
+    return quoteUrl(url)
+  }
   const resolve = (value: string): string | null | 'drop' => {
     const trimmed = value.trim()
+    // Elsewhere url(#id) loads the page itself as an image.
     if (trimmed.startsWith('#') && !trimmed.includes(':'))
-      return quoteUrl(trimmed)
+      return fragmentProperties.has(property) ? write(trimmed) : 'drop'
     if (/^data:/i.test(trimmed))
-      return safeData.test(trimmed) ? quoteUrl(trimmed) : 'drop'
+      return safeData.test(trimmed) ? write(trimmed) : 'drop'
     const path = assetPath(trimmed)
     if (path === null) return 'drop'
     if (!context.assets.includes(path)) context.assets.push(path)
     const data = context.known.get(path)
-    return data ? quoteUrl(data) : null
+    return data ? write(data) : null
   }
+  const late = (list: readonly Node[]): boolean =>
+    list.some(
+      (child) =>
+        isBlock(child) &&
+        ((child.open.type === 'function' &&
+          lateFunctions.has(child.open.value)) ||
+          late(child.children)),
+    )
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i] as Node
     if (node.type === 'bad-url') return 'malformed url()'
@@ -479,6 +546,14 @@ function checkValue(nodes: Node[], context: Context): string | null {
     if (!isBlock(node)) continue
     const fn = node.open.type === 'function' ? node.open.value : ''
     if (fn === 'expression') return 'expression()'
+    // Typed attr() can turn page attributes into URLs.
+    if (
+      fn === 'attr' &&
+      node.children.some((child) => child.type === ',' || isBlock(child))
+    )
+      return 'typed attr()'
+    if (urlFunctions.has(fn) && late(node.children))
+      return `${fn}() with var(), env() or attr()`
     if (urlFunctions.has(fn)) {
       const strings = node.children.filter((child) => child.type === 'string')
       if (fn === 'url' || fn === 'src') {
@@ -496,7 +571,7 @@ function checkValue(nodes: Node[], context: Context): string | null {
         nodes[i] = { type: 'url', raw: replacement, value: '' }
         continue
       }
-      // image-set() reads bare strings as URLs.
+      // image-set() and image() read bare strings as URLs.
       for (let j = 0; j < node.children.length; j++) {
         const child = node.children[j] as Node
         if (child.type !== 'string') continue
@@ -507,7 +582,7 @@ function checkValue(nodes: Node[], context: Context): string | null {
         node.children[j] = { type: 'url', raw: replacement, value: '' }
       }
     }
-    const nested = checkValue(node.children, context)
+    const nested = checkValue(node.children, context, property)
     if (nested) return nested
   }
   return null
@@ -518,6 +593,7 @@ function declarations(
   nodes: readonly Node[],
   context: Context,
   nested: boolean,
+  root = false,
 ) {
   let out = ''
   let item: Node[] = []
@@ -540,19 +616,41 @@ function declarations(
       })
       return
     }
-    const reason = checkValue(value, context)
+    if (root && rootEffects.test(property)) {
+      context.dropped.push({
+        rule: brief(text),
+        reason: `${property} on the page root`,
+      })
+      return
+    }
+    // A string that names a resource waits in a variable for an image function.
+    if (
+      property.startsWith('--') &&
+      value.some(
+        (node) =>
+          node.type === 'string' &&
+          /^\s*(?:[a-z][\w+.-]*:|\/\/)/i.test(node.value),
+      )
+    ) {
+      context.dropped.push({
+        rule: brief(text),
+        reason: 'URL-like string in a custom property',
+      })
+      return
+    }
+    const reason = checkValue(value, context, property)
     if (reason) {
       context.dropped.push({ rule: brief(text), reason })
       return
     }
-    out += `${serialize(value)};`
+    out += `${serialize(rename(value))};`
   }
   for (const node of nodes) {
     if (node.type === ';') flush()
     else if (isBlock(node, '{') && nested) {
       const prelude = item
       item = []
-      out += rule(prelude, node, context, 'style')
+      out += rule(prelude, node, context, 'style', root)
     } else item.push(node)
   }
   flush()
@@ -575,6 +673,7 @@ function rule(
   body: Block | null,
   context: Context,
   kind: 'top' | 'style' | 'keyframes',
+  parentRoot = false,
 ): string {
   const start = prelude.findIndex((node) => !trivia(node))
   const head = prelude[start]
@@ -584,11 +683,17 @@ function rule(
     const name = head.value
     const rest = prelude.slice(start + 1)
     if (name === 'layer') {
-      // Keep theme layers apart from Hibi's own.
+      // Theme layers get names of their own, so `@layer guard.x` or
+      // `@layer compat` can't nest inside Hibi's obsidian-guard or
+      // obsidian-compat (an inner layer's !important would beat the guard).
       for (let i = 0; i < rest.length; i++) {
         const node = rest[i] as Node
-        if (node.type === 'ident')
-          rest[i] = { ...node, raw: `obsidian-${node.raw}` }
+        const before = rest[i - 1]
+        if (
+          node.type === 'ident' &&
+          !(before?.type === 'delim' && before.value === '.')
+        )
+          rest[i] = { ...node, raw: `obsidian-theme-${node.raw}` }
       }
       const kept = serialize([head, ...rest])
       if (!body) return `${kept};`
@@ -608,7 +713,7 @@ function rule(
       }
       const inner =
         kind === 'style'
-          ? declarations(body.children, context, true)
+          ? declarations(body.children, context, true, parentRoot)
           : list(body.children, context, false)
       return `${serialize([head, ...rest])}{${inner}}`
     }
@@ -638,7 +743,102 @@ function rule(
   }
   const [selector, count] = aliasSelector(prelude)
   context.aliased += count
-  return `${serialize(selector)}{${declarations(body.children, context, true)}}`
+  const root = targetsRoot(prelude, parentRoot)
+  return `${serialize(selector)}{${declarations(body.children, context, true, root)}}`
+}
+
+// Whether a selector's subject can be the page root (html, :root), or is
+// `&` inside a rule that can.
+function targetsRoot(prelude: readonly Node[], parent: boolean): boolean {
+  let subject: Node[] = []
+  let found = false
+  const check = () => {
+    for (let i = 0; i < subject.length; i++) {
+      const node = subject[i] as Node
+      const before = subject[i - 1]
+      const after = subject[i + 1]
+      if (
+        node.type === 'ident' &&
+        node.value.toLowerCase() === 'html' &&
+        !(before?.type === 'delim' && before.value === '.') &&
+        before?.type !== ':'
+      )
+        found = true
+      if (
+        node.type === ':' &&
+        after?.type === 'ident' &&
+        after.value.toLowerCase() === 'root'
+      )
+        found = true
+      if (node.type === 'delim' && node.value === '&' && parent) found = true
+      // :is(html), :where(:root) and the like.
+      if (isBlock(node) && targetsRoot(node.children, parent)) found = true
+    }
+    subject = []
+  }
+  // A space ends a compound only when another compound follows it.
+  let boundary = false
+  for (const node of prelude) {
+    if (node.type === ',') {
+      check()
+      boundary = false
+    } else if (node.type === 'ws' || node.type === 'comment') boundary = true
+    else if (node.type === 'delim' && '>+~'.includes(node.value)) {
+      subject = []
+      boundary = false
+    } else {
+      if (boundary) subject = []
+      boundary = false
+      subject.push(node)
+    }
+  }
+  check()
+  return found
+}
+
+// Rename theme variables that share a name with Hibi's own.
+function rename(nodes: readonly Node[]): Node[] {
+  return nodes.map((node) => {
+    if (isBlock(node)) return { ...node, children: rename(node.children) }
+    const name = node.type === 'ident' ? renamed(node.value) : null
+    return name ? { ...node, raw: name, value: name } : node
+  })
+}
+
+// Read the output back: it may hold no URL or import that this sanitizer
+// did not write itself.
+function verify(css: string, emitted: ReadonlySet<string>): string | null {
+  const walk = (nodes: readonly Node[]): string | null => {
+    for (const node of nodes) {
+      if (node.type === 'url' || node.type === 'bad-url') return 'url()'
+      if (
+        node.type === 'at' &&
+        ['import', 'charset', 'namespace'].includes(node.value)
+      )
+        return `@${node.value}`
+      if (!isBlock(node)) continue
+      const fn = node.open.type === 'function' ? node.open.value : ''
+      if (fn === 'expression') return 'expression()'
+      if (urlFunctions.has(fn)) {
+        const parts = node.children.filter((child) => !trivia(child))
+        if (
+          parts.some(
+            (child) =>
+              (child.type === 'string' && !emitted.has(child.value)) ||
+              (isBlock(child) &&
+                child.open.type === 'function' &&
+                lateFunctions.has(child.open.value)),
+          ) ||
+          ((fn === 'url' || fn === 'src') && parts.length !== 1)
+        )
+          return `${fn}()`
+      }
+      const nested = walk(node.children)
+      if (nested) return nested
+    }
+    return null
+  }
+  return walk(tree(tokenize(css)))
 }
 
 // Split a rule list into [prelude, block]; at-rules without a block end at ';'.
@@ -672,7 +872,16 @@ function list(
 ): string {
   if (nested) return declarations(nodes, context, true)
   return rules(nodes)
-    .map(([prelude, body]) => rule(prelude, body, context, 'top'))
+    .map(([prelude, body]) => {
+      const css = rule(prelude, body, context, 'top')
+      const unsafe = verify(css, context.emitted)
+      if (!unsafe) return css
+      context.dropped.push({
+        rule: brief(css),
+        reason: `rewriting made a new ${unsafe}`,
+      })
+      return ''
+    })
     .join('')
 }
 
@@ -700,6 +909,7 @@ export function sanitizeCss(
     assets: [],
     known: options.assets ?? new Map(),
     aliased: 0,
+    emitted: new Set(),
   }
   const css = list(tree(tokenize(input)), context, false)
   return {

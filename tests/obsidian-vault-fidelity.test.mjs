@@ -822,6 +822,63 @@ test('obsidian vault fidelity through real desktop operations', async (t) => {
     },
   )
 
+  await scenario(
+    'title rename refreshes clean source session after self-link edits',
+    async ({ before }) => {
+      await openNote('nested/Self.md', 'source')
+      await clickMenu(app, 'Command palette')
+      await page
+        .getByRole('combobox', { name: 'Search commands' })
+        .fill('Rename document')
+      await page.getByRole('option', { name: /Rename document/i }).click()
+      const dialog = page.getByRole('dialog', {
+        name: 'Rename document',
+        exact: true,
+      })
+      const input = dialog.getByRole('textbox', {
+        name: 'File name',
+        exact: true,
+      })
+      await input.fill('Renamed.md')
+      await input.press('Enter')
+      await dialog.waitFor({ state: 'hidden' })
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).name === 'Renamed.md',
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).dirty,
+        false,
+      )
+      await waitForAsync(page, () =>
+        document
+          .querySelector('.source-pane .cm-content')
+          ?.cmTile?.root?.view.state.doc.toString()
+          .includes('[[Renamed#H|alias]]'),
+      )
+      return {
+        'nested/Self.md': null,
+        'nested/Renamed.md': {
+          kind: 'file',
+          bytes: Buffer.from(
+            before
+              .get('nested/Self.md')
+              .bytes.toString()
+              .replaceAll('[[Self', '[[Renamed'),
+          ),
+        },
+      }
+    },
+    {},
+    '.obsidian',
+    async (root) => {
+      await writeFile(
+        join(root, 'nested/Self.md'),
+        '\ufeff---\r\nlinks: ["[[Self#H|alias]]"]\r\n---\r\n# H\r\n[[Self#H|alias]]\r\n',
+      )
+    },
+  )
+
   for (const title of [false, true]) {
     await scenario(
       `read-only referrer refuses ${title ? 'title rename' : 'explorer move'} before any write`,

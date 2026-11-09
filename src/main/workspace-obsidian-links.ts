@@ -345,6 +345,22 @@ async function readNote(root: string, path: string) {
     await handle.close()
   }
 }
+async function assertWritableNote(root: string, path: string, mode: number) {
+  try {
+    const directory = join(root, posix.dirname(path))
+    if (!(mode & 0o222) || !((await lstat(directory)).mode & 0o222))
+      throw new Error('read-only')
+    await access(join(root, path), constants.W_OK)
+    await access(directory, constants.W_OK | constants.X_OK)
+  } catch (cause) {
+    throw new Error(
+      'Could not update links in ' +
+        path +
+        ': the file or its folder is read-only or not writable.',
+      { cause },
+    )
+  }
+}
 type OpenNote = { file: string | null; dirty: boolean }
 export async function prepareObsidianLinkUpdates(
   root: string,
@@ -417,20 +433,7 @@ export async function prepareObsidianLinkUpdates(
         ? rewriteObsidianCanvas(source, path, paths, moves)
         : rewriteObsidianLinks(source, path, paths, moves)
       if (source !== text) {
-        try {
-          const directory = join(root, posix.dirname(path))
-          if (!(mode & 0o222) || !((await lstat(directory)).mode & 0o222))
-            throw new Error('read-only')
-          await access(join(root, path), constants.W_OK)
-          await access(directory, constants.W_OK | constants.X_OK)
-        } catch (cause) {
-          throw new Error(
-            'Could not update links in ' +
-              path +
-              ': the file or its folder is read-only or not writable.',
-            { cause },
-          )
-        }
+        await assertWritableNote(root, path, mode)
         updates.push({
           path,
           destination: moves.get(path) ?? path,
@@ -456,6 +459,11 @@ export async function prepareObsidianLinkUpdates(
     const current = await readNote(
       root,
       moved ? update.destination : update.path,
+    )
+    await assertWritableNote(
+      root,
+      moved ? update.destination : update.path,
+      current.mode,
     )
     if (!current.bytes.equals(update.bytes))
       throw new Error(

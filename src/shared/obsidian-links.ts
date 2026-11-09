@@ -16,11 +16,14 @@ export function shortestObsidianPath(
   paths: ReadonlySet<string>,
 ) {
   const parts = target.split('/')
+  const fold = (path: string) => path.normalize('NFC').toLowerCase()
   for (let count = 1; count <= parts.length; count++) {
     const suffix = parts.slice(-count).join('/')
     if (
       [...paths].filter(
-        (path) => path === suffix || path.endsWith('/' + suffix),
+        (path) =>
+          fold(path) === fold(suffix) ||
+          fold(path).endsWith('/' + fold(suffix)),
       ).length === 1
     )
       return suffix

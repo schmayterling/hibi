@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   chmod,
   mkdir,
@@ -300,4 +300,38 @@ test('normalization-equivalent source path keeps self and incoming unicode refer
     }),
     [],
   )
+})
+
+test('late read-only referrer rolls back group and preserves its bytes and permission', async (t) => {
+  const { root, data } = await vault(t)
+  const before = await snapshotVault(root)
+  let changed = false
+  const notes = () => {
+    if (
+      !changed &&
+      readFileSync(join(root, 'a/one.md'), 'utf8').includes('[[New|')
+    ) {
+      changed = true
+      chmodSync(join(root, 'z/two.md'), 0o444)
+    }
+    return []
+  }
+  const plan = await links.prepareObsidianLinkUpdates(
+    root,
+    'Target.md',
+    'New.md',
+    notes,
+  )
+  try {
+    await assert.rejects(
+      plan.run(...moves(root), data),
+      /rolled back.*z\/two\.md.*read-only/i,
+    )
+    assert.equal(changed, true)
+    assert.deepEqual(diffVault(before, await snapshotVault(root)), [])
+    const { stat } = await import('node:fs/promises')
+    assert.equal((await stat(join(root, 'z/two.md'))).mode & 0o777, 0o444)
+  } finally {
+    await chmod(join(root, 'z/two.md'), 0o644)
+  }
 })

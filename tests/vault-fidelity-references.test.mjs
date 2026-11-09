@@ -170,3 +170,15 @@ test('mixed raw-unicode percent-space targets and newly unbalanced parentheses s
     '[mix](日本%20new.md) [plain](new%28note.md)',
   )
 })
+
+test('shortest style disambiguates case-folded basename collisions after rename', () => {
+  assert.equal(
+    rewrite(
+      '[[old#H|alias]]',
+      'r.md',
+      ['r.md', 'a/old.md', 'b/note.md'],
+      [['a/old.md', 'a/Note.md']],
+    ),
+    '[[a/Note#H|alias]]',
+  )
+})

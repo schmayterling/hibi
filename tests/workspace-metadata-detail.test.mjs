@@ -13,11 +13,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Marked } from 'marked'
 import {
-  parseWorkspaceMetadata,
   propertyIndexValue,
   sourceIndexVersion,
 } from '../src/main/workspace-index-metadata.ts'
 import { WorkspaceMetadataParser } from '../src/main/workspace-metadata-parser.ts'
+import { parsePositionedMetadata } from '../src/main/workspace-metadata-positioned.ts'
 import {
   DetailReader,
   RecordReader,
@@ -330,15 +330,13 @@ test('rich detail files reject symlinks; invalid YAML and fallback mark incomple
 test('worker projection consumes rich parse once and preserves flat predicates without marked', (t) => {
   const lexer = t.mock.method(Marked.prototype, 'lexer')
   const entries = []
-  const metadata = parseWorkspaceMetadata(
+  const metadata = parsePositionedMetadata(
     {
       path: 'folder/note.md',
       markdown:
         '---\nnumber: 3\ntags: [one, two]\n---\n# hi\n\n[[note]] [go](../target.md) #Tag',
     },
     syntax,
-    undefined,
-    undefined,
     (entry) => entries.push(entry),
   )
   assert.equal(lexer.mock.callCount(), 0)

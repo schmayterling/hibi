@@ -20,10 +20,7 @@ import {
 } from '../shared/metadata-stream.ts'
 import type { NoteHeading } from '../shared/note-metadata.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
-import {
-  parseWorkspaceMetadata,
-  type WorkspaceMetadataPage,
-} from './workspace-index-metadata.ts'
+import type { WorkspaceMetadataPage } from './workspace-index-metadata.ts'
 import {
   DetailStoreWriter,
   detailStorePattern,
@@ -49,6 +46,7 @@ import type {
   MetadataParseInput,
   MetadataWorkerRequest,
 } from './workspace-metadata-parser.ts'
+import { parsePositionedMetadata } from './workspace-metadata-positioned.ts'
 import {
   incompleteMetadataPage,
   RecordReader,
@@ -866,12 +864,11 @@ async function derive(
           path: input.path,
           version: input.version,
           syntax,
-          metadata: parseWorkspaceMetadata(
+          metadata: parsePositionedMetadata(
             { id: input.id, path: input.path, markdown: source },
             syntax,
-            undefined,
-            onHeading,
             (entry) => detailWriter.add(entry),
+            onHeading,
             (complete) => {
               detailsComplete = complete
             },

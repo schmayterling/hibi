@@ -3,8 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
+import { InlineContext, MarkdownParser } from '@lezer/markdown'
 import { createServer } from 'vite'
+import { Parser as YAMLParser } from 'yaml'
+import { noteReferences } from '../src/shared/note-links.ts'
+import { noteHeadings } from '../src/shared/note-metadata.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax-config.ts'
+import { noteTags } from '../src/shared/note-tags.ts'
 
 const cacheDir = await mkdtemp(join(tmpdir(), 'hibi-note-cache-'))
 const server = await createServer({
@@ -93,21 +98,17 @@ test('one tree powers all entries and reuse never reparses markdown', () => {
   const source = '# Heading\n\n[a][ref] [[wiki]] #Tag\n\n[ref]: ./a.md'
   const parsed = noteCacheParse(source)
   const first = [...noteCacheEntries(source, defaultNoteSyntax, parsed)]
-  const parsers = Object.values(metadataParsers)
-  const saved = parsers.map((parser) => parser.createParse)
-  for (const parser of parsers)
-    parser.createParse = () => {
-      throw Error('second parse')
-    }
+  const saved = MarkdownParser.prototype.createParse
+  MarkdownParser.prototype.createParse = () => {
+    throw Error('second parse')
+  }
   try {
     assert.deepEqual(
       [...noteCacheEntries(source, defaultNoteSyntax, parsed)],
       first,
     )
   } finally {
-    parsers.forEach((parser, index) => {
-      parser.createParse = saved[index]
-    })
+    MarkdownParser.prototype.createParse = saved
   }
   assert.equal(values(first, 'link')[0].link, './a.md')
   assert.deepEqual(parsed.flags, {
@@ -199,7 +200,7 @@ test('grammar excludes code/math/html/escapes/highlights from references, tags a
   )
   assert.deepEqual(
     values(rows, 'tag').map((tag) => tag.tag),
-    ['#Visible'],
+    ['#highlight', '#Visible'],
   )
   assert.deepEqual(
     values(rows, 'block').map((block) => block.id),
@@ -305,4 +306,299 @@ test('reference forms resolve definitions and never invent unresolved destinatio
     ['./a.md', '', 'mailto:x@example.com', 'http://www.example.com'],
   )
   assert.equal(values(rows, 'embed')[0].link, 'a.png')
+})
+
+test('single markdown and yaml parse covers body and property references', () => {
+  const markdown = MarkdownParser.prototype.createParse
+  const yaml = YAMLParser.prototype.parse
+  let markdownCount = 0,
+    yamlCount = 0
+  MarkdownParser.prototype.createParse = function (...args) {
+    markdownCount++
+    return markdown.apply(this, args)
+  }
+  YAMLParser.prototype.parse = function (...args) {
+    yamlCount++
+    return yaml.apply(this, args)
+  }
+  try {
+    const source = '---\nnested: {link: "[[property]]"}\n---\n# body [[body]]'
+    const parsed = noteCacheParse(source)
+    const first = [...noteCacheEntries(source, defaultNoteSyntax, parsed)]
+    assert.equal(markdownCount, 1)
+    assert.equal(yamlCount, 1)
+    assert.deepEqual(
+      values(first, 'frontmatterLink').map((link) => link.link),
+      ['property'],
+    )
+    assert.deepEqual(
+      [...noteCacheEntries(source, defaultNoteSyntax, parsed)],
+      first,
+    )
+    assert.equal(markdownCount, 1)
+    assert.equal(yamlCount, 1)
+  } finally {
+    MarkdownParser.prototype.createParse = markdown
+    YAMLParser.prototype.parse = yaml
+  }
+})
+
+test('raw numeric coordinate golden covers bom/crlf/astral/tab and nested grammar', () => {
+  const source =
+    '\uFEFF# 😀\r\n\r\n> - [X] [[n]] #T ^b\r\n>   -\t![x](a.png)\r\n'
+  const rows = entries(source)
+  assert.deepEqual(values(rows, 'heading')[0].position, {
+    start: { line: 0, col: 1, offset: 1 },
+    end: { line: 0, col: 5, offset: 5 },
+  })
+  assert.deepEqual(values(rows, 'link')[0].position, {
+    start: { line: 2, col: 8, offset: 17 },
+    end: { line: 2, col: 13, offset: 22 },
+  })
+  assert.deepEqual(values(rows, 'tag')[0].position, {
+    start: { line: 2, col: 14, offset: 23 },
+    end: { line: 2, col: 16, offset: 25 },
+  })
+  assert.deepEqual(values(rows, 'embed')[0].position, {
+    start: { line: 3, col: 6, offset: 36 },
+    end: { line: 3, col: 17, offset: 47 },
+  })
+  assert.deepEqual(
+    values(rows, 'listItem').map((item) => item.parent),
+    [-1, 2],
+  )
+  for (const source of [
+    '\uFEFF# 😀\r# second',
+    '\uFEFF# 😀\r\n# second',
+    '# 😀\n# second',
+  ]) {
+    const headings = values(entries(source), 'heading')
+    assert.equal(headings.length, 2)
+    for (const row of entries(source)) positioned(source, row)
+  }
+})
+
+test('legacy projections retain refs order, normalized tags, heading display and settings', () => {
+  const sources = [
+    '# **bold** _italic_ `code` &amp; \\*',
+    '# [a](a.md) ![b](b.png) <https://ex.com>',
+    '> multi *word\n> next*\n> ---',
+    '- multi *word\n  next*\n  ---',
+    'hello\n  next\n---',
+    '- hello\n    next\n  ---',
+    '> hello\n>   next\n> ---',
+    '[a][ref] ![b][ref] [ref][] [ref]\n\n[ref]: a.md',
+    '> # h\n> - #tag\n>   - [[next]] #Tag2',
+    '==#hi [hidden](x.md)== #tag **#bold**',
+    'email@example.com <x@y.com> www.example.com https://example.com',
+    '[a](<a b.md>) [a](a&amp;b.md) [z](a%20b.md)',
+    '- [ ] task [a](a.md) #tag\n- ordinary [b](b.md) #b',
+    '| links | tags |\n| - | - |\n| [[wiki]] | #tag |',
+  ]
+  const settings = [
+    defaultNoteSyntax,
+    { ...defaultNoteSyntax, gfm: false },
+    { ...defaultNoteSyntax, wikilinks: false },
+    ...[
+      'core.links',
+      'core.bold',
+      'core.italic',
+      'core.bullet-lists',
+      'markdown.tasks',
+      'core.quotes',
+      'core.images',
+    ].map((feature) => ({ ...defaultNoteSyntax, disabledFeatures: [feature] })),
+  ]
+  for (const syntax of settings)
+    for (const source of sources) {
+      const rows = entries(source, syntax),
+        references = { links: [], wikilinks: [] }
+      for (const { kind, value } of rows)
+        if (kind === 'link' || kind === 'embed') {
+          if (/^!?\[\[/.test(value.original))
+            references.wikilinks.push(value.link)
+          else if (kind === 'link') references.links.push(value.link)
+        }
+      assert.deepEqual(references, noteReferences(source, syntax), source)
+      assert.deepEqual(
+        values(rows, 'heading').map(({ depth, text }) => ({ depth, text })),
+        noteHeadings(source, syntax).items,
+        source,
+      )
+      assert.deepEqual(
+        [
+          ...new Set(
+            values(rows, 'tag').map(({ tag }) =>
+              tag.slice(1).normalize('NFC').toLowerCase(),
+            ),
+          ),
+        ].sort(),
+        noteTags(source, syntax),
+        source,
+      )
+    }
+})
+
+test('standalone ids own preceding blocks and custom task statuses stay positioned', () => {
+  const source = [
+    '- first',
+    '- second',
+    '',
+    '^list',
+    '',
+    '| h |',
+    '| - |',
+    '| c |',
+    '',
+    '^table',
+    '',
+    '> quote',
+    '',
+    '^quote',
+    '',
+    '~~~',
+    'inside ^hidden',
+    '~~~',
+    '',
+    '^fence',
+    '',
+    '- [/] progress ^task',
+  ].join('\n')
+  const rows = entries(source)
+  assert.deepEqual(
+    values(rows, 'block').map((block) => [block.id, raw(source, block)]),
+    [
+      ['list', '- first\n- second\n\n^list'],
+      ['table', '| h |\n| - |\n| c |\n\n^table'],
+      ['quote', '> quote\n\n^quote'],
+      ['fence', '~~~\ninside ^hidden\n~~~\n\n^fence'],
+      ['task', '- [/] progress ^task'],
+    ],
+  )
+  assert.equal(values(rows, 'listItem').at(-1).task, '/')
+})
+
+test('sections keep yaml, thematic breaks, html, math and footnote definitions', () => {
+  const source =
+    '---\ntitle: one\n---\n\n---\n\n<div>html</div>\n\n$$\nx\n$$\n\n[^one]: footnote'
+  assert.deepEqual(
+    values(entries(source), 'section').map((section) => section.type),
+    ['yaml', 'thematicBreak', 'html', 'math', 'footnoteDefinition'],
+  )
+})
+
+test('cyclic aliases and unsupported yaml objects never become successful cache records', () => {
+  for (const yaml of [
+    'a: &a { self: *a }',
+    'data: !!set {one, two}',
+    'number: .inf',
+    'data: !!binary YQ==',
+  ]) {
+    const source = '---\n' + yaml + '\n---\n# Body [[body]]'
+    const parsed = noteCacheParse(source)
+    assert.deepEqual(parsed.flags, {
+      references: true,
+      headings: true,
+      frontmatter: false,
+      properties: false,
+    })
+    const rows = [...noteCacheEntries(source, defaultNoteSyntax, parsed)]
+    assert.equal(values(rows, 'frontmatter').length, 0)
+    assert.equal(values(rows, 'heading')[0].text, 'Body body')
+    assert.equal(values(rows, 'link')[0].link, 'body')
+  }
+})
+
+test('plain body runs do bounded inline work while preserving existing grammar tree', () => {
+  const char = InlineContext.prototype.char
+  let reads = 0
+  InlineContext.prototype.char = function (...args) {
+    reads++
+    return char.apply(this, args)
+  }
+  try {
+    noteCacheParse(
+      '# note 0\n\n#work [[note-00000]]\n\n' + 'body '.repeat(2048),
+    )
+    assert.ok(reads < 200, 'plain body character reads: ' + reads)
+  } finally {
+    InlineContext.prototype.char = char
+  }
+})
+
+test('plain-run optimization matches independent existing grammar across delimiter combinations', () => {
+  function nodes(tree) {
+    const rows = []
+    tree.iterate({
+      enter(node) {
+        rows.push([node.name, node.from, node.to])
+      },
+    })
+    return rows
+  }
+  const fragments = [
+    'body ',
+    '**bold**',
+    '_em_',
+    '`code`',
+    '\\*escaped\\*',
+    '&amp;',
+    '[a](a.md)',
+    '[b][ref]',
+    '![alt](image.png)',
+    '[[wiki|label]]',
+    '![[embed]]',
+    '==highlight==',
+    '$math$',
+    '<span>tag</span>',
+    '<!-- comment -->',
+    '<https://ex.com>',
+    'x.y+z@example.com',
+    'www.example.com',
+    'https://example.com/a(b)',
+    'mailto:x@example.com',
+    'xmpp:x@example.com/a',
+    '  \nnext',
+    '\\\nnext',
+    '\nsoft',
+    '😀*word*',
+    '[',
+    ']',
+    '~~~',
+    '$',
+    '==',
+    '\t',
+  ]
+  for (const gfm of [false, true])
+    for (const wikilinks of [false, true]) {
+      const syntax = { ...defaultNoteSyntax, gfm, wikilinks }
+      const grammar = (
+        gfm ? metadataParsers.gfm : metadataParsers.commonmark
+      ).configure([
+        ...(wikilinks ? [boundarySyntax['obsidian@1']] : []),
+        ...(gfm
+          ? [
+              boundarySyntax['empty-tasks@1'],
+              boundarySyntax['github-alerts@1'],
+              boundarySyntax['footnotes@1'],
+            ]
+          : []),
+        boundarySyntax['math-inline@1'],
+        boundarySyntax['math-block@1'],
+      ])
+      for (let index = 0; index < fragments.length; index++)
+        for (let next = 0; next < fragments.length; next++) {
+          const source =
+            '# title ' +
+            fragments[index] +
+            ' ' +
+            fragments[next] +
+            '\n\n[ref]: a.md'
+          assert.deepEqual(
+            nodes(noteCacheParse(source, syntax).tree),
+            nodes(grammar.parse(source)),
+            source,
+          )
+        }
+    }
 })

@@ -19,14 +19,8 @@ export type NoteCacheListItem = {
   id?: string
 }
 export type NoteCacheSection = {
-  type:
-    | 'paragraph'
-    | 'heading'
-    | 'list'
-    | 'code'
-    | 'blockquote'
-    | 'table'
-    | 'callout'
+  /** Built-in block kind; additional grammar nodes may supply other kinds. */
+  type: string
   position: Pos
   id?: string
 }

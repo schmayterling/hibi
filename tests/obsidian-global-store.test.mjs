@@ -305,14 +305,39 @@ test('global native operations install and serve without any folder and keep act
     f.obsidianPluginAsset(scriptRequest(), scope),
     f.obsidianPluginAsset(competing, scope),
   ])
-  assert.equal(
-    scripts.filter(Boolean).length,
-    1,
+  const [capability, loser] = scripts.map(
+    (script) => /bridge\.activate\("([a-f0-9-]{36})"\)/.exec(script.body)[1],
+  )
+  await native.profileMethods.activateRequestUrl(
+    { id: 'host-smoke', capability },
+    f.context,
+  )
+  await assert.rejects(
+    native.profileMethods.activateRequestUrl(
+      { id: 'host-smoke', capability: loser },
+      f.context,
+    ),
+    /capability|no longer current/,
     'concurrent script loads cannot replace a live grant',
   )
-  const asset = scripts.find(Boolean)
+  await assert.rejects(
+    native.profileMethods.releaseRequestUrl(
+      { id: 'host-smoke', capability: loser },
+      f.context,
+    ),
+    /capability/,
+    'the losing load keeps no grant',
+  )
+  const asset = scripts[0]
   assert.equal(await f.obsidianPluginAsset(scriptRequest(), scope), null)
-  const capability = /bridge\.activate\("([a-f0-9-]{36})"\)/.exec(asset.body)[1]
+  assert.equal(
+    await f.obsidianPluginAsset(
+      new Request(bare + '?load=' + (await prepare())),
+      scope,
+    ),
+    null,
+    'an activated grant refuses later script loads',
+  )
   assert.match(asset.body, new RegExp(`global:host-smoke:${installed.hash}`))
   assert.equal(asset.type, 'text/javascript; charset=utf-8')
   assert.equal(

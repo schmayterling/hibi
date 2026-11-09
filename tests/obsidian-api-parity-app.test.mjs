@@ -202,6 +202,47 @@ test('trusted API fixture has main-process networking, real moment and local pro
         }
     }).observe(document.head, { childList: true })
   })
+  // Page code wraps every reachable IPC entry before the plugin loads.
+  await page.evaluate((base) => {
+    const state = { tokens: [], wrapped: [] }
+    window.__apiIpcProbe = state
+    window.__apiParityFirstUrl = `${base}/first-onload`
+    const spy = (real) =>
+      function (id, method, input) {
+        if (typeof input?.capability === 'string')
+          state.tokens.push(input.capability)
+        return real.call(this, id, method, input)
+      }
+    for (const name of ['hibi', 'hibiTransport']) {
+      const real = window[name].invokeAddonProfile
+      const wrapped = spy(real)
+      const attempts = [
+        () => {
+          window[name].invokeAddonProfile = wrapped
+        },
+        () =>
+          Object.defineProperty(window[name], 'invokeAddonProfile', {
+            value: wrapped,
+          }),
+        () =>
+          Object.defineProperty(window, name, {
+            value: { ...window[name], invokeAddonProfile: wrapped },
+          }),
+        () => {
+          window[name] = { ...window[name], invokeAddonProfile: wrapped }
+        },
+      ]
+      for (const attempt of attempts) {
+        try {
+          attempt()
+        } catch {}
+        if (window[name].invokeAddonProfile === wrapped) {
+          state.wrapped.push(name)
+          break
+        }
+      }
+    }
+  }, base)
   await enabled.click()
   await page.waitForFunction(
     () => window.__apiParity?.rendered && !window.__apiParity.plugin.isUnloaded,
@@ -262,6 +303,55 @@ test('trusted API fixture has main-process networking, real moment and local pro
         direct: undefined,
         realStatus: 200,
       })
+    },
+  )
+  await t.test(
+    'wrapped renderer IPC methods never see a capability, and onload requests run after activation',
+    async () => {
+      const result = await page.evaluate(async (base) => {
+        const state = window.__apiIpcProbe
+        const realStatus = (
+          await window.__apiParity.requestUrl(`${base}/ipc-real-plugin`)
+        ).status
+        const id = (await window.hibi.queryAddon('obsidian', 'list', {})).find(
+          (plugin) => plugin.enabled,
+        ).manifest.id
+        let direct
+        if (state.tokens.length)
+          direct = await window.hibi
+            .invokeAddonProfile('obsidian', 'requestUrl', {
+              id,
+              capability: state.tokens.at(-1),
+              requestId: crypto.randomUUID(),
+              request: { url: `${base}/ipc-theft`, method: 'POST', body: 'x' },
+            })
+            .then(
+              (response) => response.status,
+              (error) => error.message,
+            )
+        return {
+          wrapped: state.wrapped.includes('hibi'),
+          transportWrapped: state.wrapped.includes('hibiTransport'),
+          tokens: state.tokens.length,
+          direct,
+          first: await window.__apiParity.first,
+          realStatus,
+        }
+      }, base)
+      assert.equal(
+        hits.includes('/ipc-theft'),
+        false,
+        'wrapped IPC stole native network authority',
+      )
+      assert.deepEqual(result, {
+        wrapped: true,
+        transportWrapped: false,
+        tokens: 0,
+        direct: undefined,
+        first: 200,
+        realStatus: 200,
+      })
+      assert.ok(hits.includes('/first-onload'))
     },
   )
   await t.test(

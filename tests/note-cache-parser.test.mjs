@@ -15,7 +15,7 @@ const cacheDir = await mkdtemp(join(tmpdir(), 'hibi-note-cache-'))
 const server = await createServer({
   configFile: false,
   cacheDir,
-  server: { middlewareMode: true, watch: null },
+  server: { middlewareMode: true, watch: null, hmr: false, ws: false },
   optimizeDeps: { noDiscovery: true, include: [] },
 })
 after(async () => {
@@ -521,6 +521,11 @@ test('plain body runs do bounded inline work while preserving existing grammar t
       '# note 0\n\n#work [[note-00000]]\n\n' + 'body '.repeat(2048),
     )
     assert.ok(reads < 200, 'plain body character reads: ' + reads)
+    reads = 0
+    noteCacheParse(
+      `---\nlong: ${'body '.repeat(2048)}\n---\n${'body '.repeat(2048)}`,
+    )
+    assert.ok(reads < 200, 'frontmatter configured parser reads: ' + reads)
   } finally {
     InlineContext.prototype.char = char
   }
@@ -607,4 +612,68 @@ test('plain-run optimization matches independent existing grammar across delimit
           )
         }
     }
+})
+
+test('property links use yaml cooked values with exact escaped and folded source spans', () => {
+  const source =
+    '\uFEFF---\r\nlinks:\r\n  - "[[Notes\\u002fDaily|Day]]"\r\n  - "\\u005b\\u005bEscaped\\u005d\\u005d"\r\n  - "[label](a\\u002emd)"\r\nfolded: >-\r\n  [[Long\r\n  name]]\r\nliteral: |-\r\n  [[one]]\r\n  [[two]]\r\nquoted: "[[quote\\"target]]"\r\nsingle: \'[[It\'\'s]]\'\r\n---\r\n# Body [[body]]'
+  const parsed = noteCacheParse(source)
+  const rows = [...noteCacheEntries(source, defaultNoteSyntax, parsed)]
+  assert.equal(parsed.flags.frontmatter, true)
+  assert.equal(parsed.flags.references, true)
+  const links = values(rows, 'frontmatterLink')
+  assert.deepEqual(
+    links.map(({ key, link }) => [key, link]),
+    [
+      ['links.0', 'Notes/Daily'],
+      ['links.1', 'Escaped'],
+      ['links.2', 'a.md'],
+      ['folded', 'Long name'],
+      ['literal', 'one'],
+      ['literal', 'two'],
+      ['quoted', 'quote"target'],
+      ['single', "It's"],
+    ],
+  )
+  assert.deepEqual(
+    links.map((link) => raw(source, link)),
+    [
+      '[[Notes\\u002fDaily|Day]]',
+      '\\u005b\\u005bEscaped\\u005d\\u005d',
+      '[label](a\\u002emd)',
+      '[[Long\r\n  name]]',
+      '[[one]]',
+      '[[two]]',
+      '[[quote\\"target]]',
+      "[[It''s]]",
+    ],
+  )
+  for (const row of rows) positioned(source, row)
+  assert.deepEqual(
+    values(rows, 'link').map((link) => link.link),
+    ['body'],
+  )
+  assert.equal(raw(source, values(rows, 'heading')[0]), '# Body [[body]]')
+})
+
+test('yaml scalar projection preserves escaped unicode, joins and supported scalar styles', () => {
+  const cases = [
+    ['"[[\\U0001f600]]"', '😀'],
+    ['"[[\\x41\\u0042]]"', 'AB'],
+    ['"[[Long\\\n  name]]"', 'Longname'],
+    ['"[[Long\n  name]]"', 'Long name'],
+    ["'[[Long\n  name]]'", 'Long name'],
+    ['>2-\n  [[Long\n  name]]', 'Long name'],
+    ['|+\n  [[literal]]\n\n', 'literal'],
+  ]
+  for (const [yaml, target] of cases) {
+    const source = '---\nlink: ' + yaml + '\n---\n# Body'
+    const rows = entries(source)
+    assert.deepEqual(
+      values(rows, 'frontmatterLink').map((link) => link.link),
+      [target],
+      source,
+    )
+    for (const row of rows) positioned(source, row)
+  }
 })

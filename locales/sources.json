@@ -3442,6 +3442,9 @@
   "c6575e3bf649": [
     "src/renderer/src/completion-broker.ts"
   ],
+  "9cc3745095d3": [
+    "src/renderer/src/completion-broker.ts"
+  ],
   "78fc79d2cefd": [
     "src/shared/source-operations.ts"
   ],
@@ -7181,6 +7184,9 @@
   "4396b1d0a374": [
     "src/renderer/src/source-formatting-actions.ts"
   ],
+  "3812b8afab3d": [
+    "src/addons/obsidian/api/editor/editor.ts"
+  ],
   "dd81768f0d54": [
     "src/renderer/src/document-runtime.ts"
   ],
@@ -8557,9 +8563,6 @@
   ],
   "9bf22c3ffed2": [
     "src/addons/word-count/index.ts"
-  ],
-  "1eb4f482ae5c": [
-    "src/addons/obsidian/api/editor/index.ts"
   ],
   "da55d16fc16f": [
     "src/addons/text-extras/flavor-info.ts"

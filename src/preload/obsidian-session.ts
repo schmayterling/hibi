@@ -31,6 +31,9 @@ export function obsidianSession(
   })
   return {
     pending: process.argv.includes('--hibi-workspace-swap'),
+    active:
+      process.argv.includes('--hibi-workspace-swap') ||
+      !process.contextIsolated,
     onCapture(callback) {
       captures.add(callback)
       return () => {

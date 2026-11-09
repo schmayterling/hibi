@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import * as electron from 'electron'
 import {
   BrowserWindow,
   type IpcMainEvent,
@@ -88,6 +89,9 @@ export class DesktopWorkspace {
   private actualTrusted = false
   private changing = false
   private force = false
+  private revoking = false
+  private retryDelay = 250
+  private retryTimer: ReturnType<typeof setTimeout> | undefined
   private queued = false
   private capturePending: {
     token: string
@@ -201,13 +205,28 @@ export class DesktopWorkspace {
   get trusted() {
     return this.actualTrusted
   }
+  get status() {
+    return {
+      trusted: this.actualTrusted,
+      revoking: this.revoking || (this.actualTrusted && !this.hooks.enabled()),
+    }
+  }
   get previousWindow() {
     return this.handoff?.previous ?? null
   }
 
   async initialize() {
-    await this.refresh()
-    this.actualTrusted = this.grants.size > 0
+    try {
+      await this.refresh()
+      this.actualTrusted = this.grants.size > 0
+    } catch (error) {
+      this.grants.clear()
+      this.actualTrusted = false
+      console.error(
+        'Could not verify desktop plugin access; keeping the sandbox:',
+        error,
+      )
+    }
     return this.actualTrusted
   }
 
@@ -221,32 +240,47 @@ export class DesktopWorkspace {
     this.trustedContents.add(window.webContents)
     const children = new Set<BrowserWindow>()
     let childConstructor: typeof BrowserWindow | undefined
-    ;(window.webContents as NodeJS.EventEmitter).on(
+    const safeChild = () =>
+      (childConstructor ??= new Proxy(BrowserWindow, {
+        construct(target, [options = {}]) {
+          const child = new target({
+            ...options,
+            webPreferences: {
+              ...options.webPreferences,
+              sandbox: true,
+              contextIsolation: true,
+              nodeIntegration: false,
+              nodeIntegrationInWorker: false,
+              nodeIntegrationInSubFrames: false,
+              webSecurity: true,
+              webviewTag: false,
+            },
+          })
+          child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+          children.add(child)
+          child.once('closed', () => children.delete(child))
+          return child
+        },
+      }))
+    const remoteEvents = window.webContents as NodeJS.EventEmitter
+    remoteEvents.on(
       'remote-get-builtin',
       (event: { returnValue?: unknown }, name: string) => {
-        if (name !== 'BrowserWindow') return
-        childConstructor ??= new Proxy(BrowserWindow, {
-          construct(target, [options = {}]) {
-            const child = new target({
-              ...options,
-              webPreferences: {
-                ...options.webPreferences,
-                sandbox: true,
-                contextIsolation: true,
-                nodeIntegration: false,
-                nodeIntegrationInWorker: false,
-                nodeIntegrationInSubFrames: false,
-                webSecurity: true,
-                webviewTag: false,
-              },
-            })
-            child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-            children.add(child)
-            child.once('closed', () => children.delete(child))
-            return child
-          },
-        })
-        event.returnValue = childConstructor
+        if (name === 'BrowserWindow') event.returnValue = safeChild()
+      },
+    )
+    remoteEvents.on(
+      'remote-require',
+      (event: { returnValue?: unknown }, name: string) => {
+        if (name === 'electron' || name === 'electron/main') {
+          const safeElectron: Record<string, unknown> = {
+            ...electron,
+            BrowserWindow: safeChild(),
+          }
+          if (Object.hasOwn(safeElectron, 'default'))
+            safeElectron.default = safeElectron
+          event.returnValue = safeElectron
+        }
       },
     )
     window.webContents.once('destroyed', () => {
@@ -258,6 +292,11 @@ export class DesktopWorkspace {
     const revision = this.revision
     if (!this.hooks.enabled()) {
       this.grants.clear()
+      if (this.actualTrusted) {
+        this.revoking = true
+        this.force = true
+      }
+      revokeStalePluginRequestCapabilities()
       return
     }
     const next: typeof this.grants = new Map()
@@ -294,6 +333,8 @@ export class DesktopWorkspace {
 
   changed(id?: string, fullAccess = false) {
     this.revision++
+    if (this.actualTrusted && !fullAccess && (!id || this.grants.has(id)))
+      this.revoking = true
     if (this.actualTrusted && (fullAccess || !id || this.grants.has(id)))
       this.force = true
     if (id) this.grants.delete(id)
@@ -303,6 +344,8 @@ export class DesktopWorkspace {
   }
 
   request() {
+    clearTimeout(this.retryTimer)
+    this.retryTimer = undefined
     if (this.queued) return
     this.queued = true
     setImmediate(() => {
@@ -409,6 +452,9 @@ export class DesktopWorkspace {
       }
       this.handoff = null
       const visible = previous.isVisible()
+      this.revoking = false
+      this.retryDelay = 250
+      clearTimeout(this.retryTimer)
       previous.destroy()
       if (next && !next.isDestroyed()) {
         if (visible) next.show()
@@ -427,6 +473,11 @@ export class DesktopWorkspace {
             ? error.message
             : 'Could not switch workspace mode.',
         )
+        if (this.revoking) {
+          this.retryTimer = setTimeout(() => this.request(), this.retryDelay)
+          this.retryTimer.unref?.()
+          this.retryDelay = Math.min(this.retryDelay * 2, 5000)
+        }
       }
     } finally {
       if (prepared) this.hooks.settled()
@@ -436,5 +487,12 @@ export class DesktopWorkspace {
         this.request()
       }
     }
+  }
+}
+
+export function desktopWorkspaceState() {
+  return {
+    trusted: [...workspaces].some((workspace) => workspace.trusted),
+    revoking: [...workspaces].some((workspace) => workspace.status.revoking),
   }
 }

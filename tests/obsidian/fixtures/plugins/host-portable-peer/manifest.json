@@ -1,0 +1,9 @@
+{
+  "id": "host-portable-peer",
+  "name": "Portable peer",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "author": "Fixture author",
+  "description": "Checks that portable plugins are held until separately trusted.",
+  "isDesktopOnly": false
+}

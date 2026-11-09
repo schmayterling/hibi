@@ -69,15 +69,22 @@ It names the plugin, author, and repository, and explains that the plugin can re
 and write any file and run programs. Hibi switches to a less isolated workspace
 while these plugins are enabled. Real Node.js and Electron modules, including
 Electron remote, share the app's DOM. CodeMirror and Lezer stay shared with
-Hibi's editor. Portable plugins keep the restricted module shim unless you grant
-full access from their Installed row.
+Hibi's editor. In trusted mode, Hibi pauses enabled plugins without their own
+full-access grant. Grant access or disable them from their Installed rows.
+The renderer shares this realm: code injected into Hibi's interface can gain
+computer access too (renderer XSS becomes remote code execution). The regular
+sandboxed workspace keeps its restricted module shim.
 
 Without full-access plugins, Hibi keeps its normal sandboxed, isolated renderer.
-Open tabs, unsaved text, pane layout, and scroll positions survive mode changes.
+Open tabs, unsaved text, pane layout, and text editor scroll positions survive
+mode changes. Unsaved undo stacks and non-text preview zoom and scroll are not
+transferred.
 Disable the plugin or use **Revoke full access** to stop it and replace its
 workspace realm. Revocation cannot undo file changes or programs it already
 launched. Hibi's own plugin storage never writes back to the vault; full-access
-plugin code can write anywhere you allow it to run.
+plugin code can write anywhere you allow it to run. Failed revocations keep a
+visible pending banner and retry with backoff while preserving edits.
+
 `requestUrl` and `request` use Electron networking in the main process, without
 CORS restrictions. HTTP and HTTPS, custom methods and headers, string and
 ArrayBuffer bodies, and `contentType` are supported. Responses expose status,

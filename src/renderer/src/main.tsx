@@ -1349,7 +1349,7 @@ function App() {
     availableFlavors,
   )
   const sessionEnabled =
-    window.hibiObsidianSession?.pending || enabledAddons.has('obsidian')
+    window.hibiObsidianSession?.active || enabledAddons.has('obsidian')
   useEffect(() => {
     const bridge = window.hibiObsidianSession
     if (!bridge || !sessionEnabled) return

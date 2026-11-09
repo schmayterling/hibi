@@ -14,6 +14,7 @@ export const OBSIDIAN_DESKTOP = {
 
 export interface ObsidianWorkspaceSessionBridge {
   readonly pending: boolean
+  readonly active: boolean
   onCapture(callback: () => unknown | Promise<unknown>): () => void
   onResume(callback: (message?: string) => void): () => void
   restore(): Promise<{ ui: unknown; documents: DocumentState[] } | null>

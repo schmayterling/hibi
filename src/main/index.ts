@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -3241,7 +3242,10 @@ if (!app.requestSingleInstanceLock()) {
           mainWindow?.setTitleBarOverlay(titleBarColors())
         refreshAddonWindowColors()
       })
-      await addonsReady
+      // Only an existing plugin profile can carry a persisted full-access grant.
+      // This is a readiness hint; the store still verifies every hash and grant below.
+      if (existsSync(join(app.getPath('userData'), 'obsidian', 'global')))
+        await addonsReady
       if (
         getAddonStates().some(
           (state) => state.id === 'obsidian' && state.enabled,

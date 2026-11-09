@@ -378,7 +378,18 @@ export class ObsidianStore {
       if (entry.isDirectory() && validPluginId(entry.name)) {
         try {
           const record = await this.record(entry.name)
-          if (record.fullAccess) await this.readPackage(record)
+          if (record.fullAccess) {
+            try {
+              await this.readPackage(record)
+            } catch (error) {
+              record.enabled = false
+              delete record.fullAccess
+              record.error =
+                error instanceof Error
+                  ? error.message
+                  : 'This plugin could not be verified. Reinstall it.'
+            }
+          }
           result.push(record)
         } catch (error) {
           if (!missing(error)) throw error

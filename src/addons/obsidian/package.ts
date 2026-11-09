@@ -15,6 +15,7 @@ export interface InstalledPlugin {
   enabled: boolean
   hasStyles: boolean
   fullAccess?: boolean
+  error?: string
   origin?: 'folder' | 'vault' | 'community'
   source?: CommunityPluginSource
 }

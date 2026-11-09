@@ -27,7 +27,7 @@ export async function setPluginEnabled(
           ' by ' +
           current.manifest.author +
           (current.source ? ' (' + current.source.repo + ')' : '') +
-          ' can read and write any file on your computer and run programs, like a desktop plugin in Obsidian. Hibi itself runs in a less isolated workspace while full-access plugins are enabled. Only grant this to code you trust. Hibi will keep your open tabs and unsaved edits when switching modes. Disabling this plugin revokes its grant and replaces the workspace window.',
+          ' can read and write any file on your computer and run programs, like a desktop plugin in Obsidian. Hibi itself runs in a less isolated workspace while full-access plugins are enabled. Every plugin running there must have full computer access; other plugins are paused. Unsafe scripts in Hibi’s interface can also gain computer access. Only grant this to code you trust. Hibi will keep your open tabs and unsaved edits when switching modes. Disabling this plugin revokes its grant and replaces the workspace window.',
         confirmLabel: 'Grant full access and enable',
         destructive: true,
       }))

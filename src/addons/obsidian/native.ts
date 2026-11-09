@@ -31,6 +31,7 @@ import {
 import {
   consumeFullAccessChallenge,
   desktopAccessChanged,
+  desktopWorkspaceState,
   fullAccessChallenge,
 } from './desktop-native'
 import {
@@ -254,6 +255,7 @@ export async function obsidianPluginAsset(
   if (name === 'styles.css' && url.search) return null
   const nonce = url.searchParams.get('load')
   if (name === 'main.js' && (url.searchParams.size !== 1 || !nonce)) return null
+  if (name === 'main.js' && desktopWorkspaceState().trusted) return null
   const place = await obsidianGlobalStore()
   const source = await place.store.enabledPackage(id, hash)
   if (!scope.isCurrent()) return null
@@ -367,6 +369,10 @@ export default {
   },
   profileMethods: {
     async preparePluginLoad(input, context) {
+      if (desktopWorkspaceState().trusted)
+        throw new Error(
+          'Plugins need full computer access in this trusted workspace. Grant access or disable this plugin.',
+        )
       const place = await globalPlace(input, context)
       const id = pluginId(place.data)
       const hash = (input as { hash?: unknown }).hash
@@ -501,6 +507,25 @@ export default {
             (input as { token?: unknown }).token,
             plugin,
           )
+          const verdict = await runFileDialog(() =>
+            dialog.showMessageBox({
+              type: 'warning',
+              message: 'Full computer access for ' + plugin.manifest.name + '?',
+              detail:
+                plugin.manifest.name +
+                ' by ' +
+                plugin.manifest.author +
+                (plugin.source ? ' (' + plugin.source.repo + ')' : '') +
+                '\nPackage SHA-256: ' +
+                plugin.hash +
+                '\n\nThis plugin can read and write any file and run programs. Hibi itself runs in a less isolated workspace. Every enabled plugin in that workspace must have full computer access; other plugins are paused. Unsafe scripts in Hibi’s interface can also gain computer access. Only grant this to code you trust. Disabling it replaces the workspace window; programs it already launched may keep running.',
+              buttons: ['Cancel', 'Grant full access and enable'],
+              defaultId: 0,
+              cancelId: 0,
+            }),
+          )
+          place.check()
+          if (verdict.response !== 1) return null
           fullAccess = true
         } else {
           const verdict = await runFileDialog(() =>
@@ -560,7 +585,7 @@ export default {
     async revokeFullAccess(input, context) {
       const place = await globalPlace(input, context)
       for (const plugin of await place.store.list()) {
-        if (plugin.fullAccess)
+        if (plugin.fullAccess || plugin.error)
           await place.store.setEnabled(plugin.manifest.id, false, place.check)
       }
       desktopAccessChanged()

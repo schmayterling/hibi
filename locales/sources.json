@@ -2899,7 +2899,7 @@
   "56363c226ca7": [
     "src/addons/obsidian/desktop-native.ts"
   ],
-  "ffb9af47fa67": [
+  "6012554d9398": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "c910d474dcd7": [
@@ -2962,7 +2962,8 @@
     "src/renderer/src/History.tsx"
   ],
   "c37dc0d6e0e6": [
-    "src/addons/obsidian/desktop-client.ts"
+    "src/addons/obsidian/desktop-client.ts",
+    "src/addons/obsidian/native.ts"
   ],
   "32ab018fd38a": [
     "src/addons/graph/hibi-addon.json",
@@ -5048,6 +5049,9 @@
   "4d5e5cbec56a": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
+  "5679e1877498": [
+    "src/addons/obsidian/native.ts"
+  ],
   "77deabe238de": [
     "src/renderer/src/History.tsx"
   ],
@@ -5614,6 +5618,9 @@
   ],
   "740355addffc": [
     "src/renderer/src/AddonInstallChooser.tsx"
+  ],
+  "b4432cafca82": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "d1f8aff5beaa": [
     "src/addons/obsidian/CommunityBrowser.tsx"
@@ -7772,6 +7779,9 @@
   ],
   "c04f0fb5e9da": [
     "src/addons/ui-preview/index.tsx"
+  ],
+  "545a825e00e4": [
+    "src/addons/obsidian/CommunityBrowser.tsx"
   ],
   "dc943d8ef9e4": [
     "src/addons/dictionary/custom-word-database.ts",

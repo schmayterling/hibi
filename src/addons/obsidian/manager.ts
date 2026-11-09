@@ -14,6 +14,7 @@ export type ObsidianInventory = {
   themes: InstalledTheme[]
   snippets: InstalledSnippet[]
   selection: { snippets: string[] }
+  desktop?: { trusted: boolean; revoking: boolean }
 }
 export type ManagerProps = {
   pluginsEnabled: boolean

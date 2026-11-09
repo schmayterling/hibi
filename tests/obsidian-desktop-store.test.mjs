@@ -260,7 +260,10 @@ test('changing installed hash or manifest metadata invalidates existing grant', 
     manifest: { ...granted.manifest, isDesktopOnly: false },
   }
   await f.writeRecord(changed)
-  await assert.rejects(f.store.list(), /hash|manifest/i)
+  const [damaged] = await f.store.list()
+  assert.equal(damaged.enabled, false)
+  ungranted(damaged)
+  assert.match(damaged.error, /hash|manifest/i)
   await assert.rejects(f.store.setEnabled('host-smoke', true), /hash|manifest/i)
   await assert.rejects(
     f.store.setEnabled('host-smoke', true, undefined, true),
@@ -285,7 +288,10 @@ test('tampered package assets cannot retain or obtain grants; ordinary disable s
     await f.store.setEnabled('host-smoke', true, undefined, true)
     const path = join(f.store.root, 'packages', 'host-smoke', source.hash, name)
     await writeFile(path, tampered)
-    await assert.rejects(f.store.list(), /hash|manifest/i)
+    const [damaged] = await f.store.list()
+    assert.equal(damaged.enabled, false)
+    ungranted(damaged)
+    assert.match(damaged.error, /hash|manifest/i)
     await assert.rejects(
       f.store.enabledPackage('host-smoke', source.hash),
       /hash|manifest/i,

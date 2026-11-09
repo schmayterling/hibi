@@ -15,6 +15,7 @@ import { sourcePosition, sourceView } from './source-view.ts'
 
 export interface ObsidianSessionBridge {
   readonly pending: boolean
+  readonly active: boolean
   onCapture(callback: () => unknown | Promise<unknown>): () => void
   onResume(callback: (message?: string) => void): () => void
   restore(): Promise<{ ui: unknown; documents: DocumentState[] } | null>
@@ -47,6 +48,7 @@ type View = {
   margin: number | null
   scrollLeft: number
 }
+// ponytail: text view state only; preview geometry and unsaved undo need their own capture/restore adapters.
 export type WorkspaceUi = WorkspaceShell & {
   version: 1
   activeTab: string
@@ -497,7 +499,15 @@ export function createWorkspaceSession(
       try {
         suspend()
         const restored = await bridge.restore()
-        if (!restored || disposed) throw invalid()
+        if (disposed) throw invalid()
+        // The swap argument remains on this window during an ordinary reload after handoff.
+        if (!restored) {
+          current().accept(initial)
+          workspaceRestored = true
+          resume()
+          await bridge.ready()
+          return
+        }
         const { loadTransferredDocument } = await import('./document-transfer')
         const documents = await Promise.all(
           restored.documents.map((document) =>

@@ -55,7 +55,7 @@ async function setup(t, installed = []) {
           if (id === '\0desktop-test:@electron/remote/main')
             return 'export const isInitialized = ()=>false; export const initialize=()=>globalThis.__desktopAccessTest.remote.push("initialize"); export const enable=(contents)=>globalThis.__desktopAccessTest.remote.push(contents.id)'
           if (id === '\0desktop-test:./native')
-            return `export const obsidianGlobalStore = async()=>({store:{root:'/app-data/global',list:async()=>globalThis.__desktopAccessTest.installed,enabledPackage:async(id,hash)=>{globalThis.__desktopAccessTest.reads.push([id,hash]);await globalThis.__desktopAccessTest.waiter?.();return {main:Buffer.from('module.exports = {}')}}}})`
+            return `export const obsidianGlobalStore = async()=>({store:{root:'/app-data/global',list:async()=>{const s=globalThis.__desktopAccessTest;if(s.listError)throw s.listError;return s.installed},enabledPackage:async(id,hash)=>{globalThis.__desktopAccessTest.reads.push([id,hash]);await globalThis.__desktopAccessTest.waiter?.();return {main:Buffer.from('module.exports = {}')}}}})`
         },
       },
     ],
@@ -389,6 +389,73 @@ test('retired renderer cannot finish, abort or receive another renderer’s work
   assert.equal(previous.isDestroyed(), true)
 })
 
+test('unverifiable startup inventory falls back to a sandbox and reports the failure', async (t) => {
+  const ctx = await setup(t, [plugin()])
+  ctx.state.listError = new Error('fixture unreadable grant store')
+  const reports = []
+  t.mock.method(console, 'error', (...args) => reports.push(args))
+  assert.equal(await ctx.workspace.initialize(), false)
+  await ctx.workspace.attach(ctx.current(), false)
+  assert.deepEqual(ctx.state.remote, [])
+  assert.match(String(reports[0]), /keeping the sandbox/)
+})
+
+test('failed revocation stays visibly pending and retries without losing the old buffers', {
+  timeout: 5000,
+}, async (t) => {
+  const ctx = await setup(t, [plugin()])
+  await ctx.workspace.initialize()
+  await ctx.workspace.attach(ctx.current(), true)
+  const previous = ctx.current()
+  let failures = 1
+  ctx.hooks.prepare = async () => {
+    if (failures-- > 0) throw new Error('fixture unconfirmed edits')
+  }
+  ctx.state.installed = []
+  const first = ctx.settled()
+  ctx.workspace.changed('desktop')
+  await first
+  assert.equal(ctx.workspace.status.revoking, true)
+  assert.equal(previous.isDestroyed(), false)
+  const retry = ctx.settled()
+  await retry
+  assert.equal(previous.isDestroyed(), true)
+  assert.equal(ctx.workspace.trusted, false)
+  assert.equal(ctx.workspace.status.revoking, false)
+})
+
+test('previous trusted webContents cannot acquire Node during a trusted to trusted handoff', async (t) => {
+  const ctx = await setup(t, [plugin()])
+  await ctx.workspace.initialize()
+  await ctx.workspace.attach(ctx.current(), true)
+  const previous = ctx.current()
+  ctx.hooks.trusted = (wire) => {
+    if (
+      wire.sender !== previous.webContents &&
+      wire.sender !== ctx.current().webContents
+    )
+      throw new Error('untrusted ipc sender')
+  }
+  const creating = new Promise((resolve) => {
+    ctx.state.waitReady = resolve
+  })
+  ctx.state.installed = [
+    plugin(),
+    { ...plugin(), manifest: { ...plugin().manifest, id: 'second' } },
+  ]
+  const done = ctx.settled()
+  ctx.workspace.changed('second', true)
+  await creating
+  try {
+    const retired = ctx.event(previous)
+    ctx.listeners.get(channels.acquire)(retired, 'desktop', hash)
+    assert.match(retired.returnValue.error, /no full computer access/)
+  } finally {
+    ctx.workspace.ready(ctx.event())
+    await done
+  }
+})
+
 test('consent challenges are single-use, hash-bound, expiry/lifetime checked', async (t) => {
   const ctx = await setup(t)
   const { fullAccessChallenge, consumeFullAccessChallenge } = ctx.module
@@ -435,20 +502,34 @@ test('remote popup constructors stay sandboxed and their renderer dies with the 
   const ctx = await setup(t, [plugin()])
   await ctx.workspace.initialize()
   await ctx.workspace.attach(ctx.current(), true)
-  const event = {}
-  ctx.current().webContents.emit('remote-get-builtin', event, 'BrowserWindow')
-  const child = new event.returnValue({
-    webPreferences: {
-      sandbox: false,
-      contextIsolation: false,
-      nodeIntegration: true,
-    },
-  })
-  assert.equal(child.options.webPreferences.sandbox, true)
-  assert.equal(child.options.webPreferences.contextIsolation, true)
-  assert.equal(child.options.webPreferences.nodeIntegration, false)
-  assert.equal(child.options.webPreferences.nodeIntegrationInWorker, false)
-  assert.equal(child.options.webPreferences.nodeIntegrationInSubFrames, false)
+  const children = []
+  for (const name of ['BrowserWindow', 'electron', 'electron/main']) {
+    const event = {}
+    ctx
+      .current()
+      .webContents.emit(
+        name === 'BrowserWindow' ? 'remote-get-builtin' : 'remote-require',
+        event,
+        name,
+      )
+    const Constructor =
+      name === 'BrowserWindow'
+        ? event.returnValue
+        : event.returnValue.BrowserWindow
+    const child = new Constructor({
+      webPreferences: {
+        sandbox: false,
+        contextIsolation: false,
+        nodeIntegration: true,
+      },
+    })
+    children.push(child)
+    assert.equal(child.options.webPreferences.sandbox, true)
+    assert.equal(child.options.webPreferences.contextIsolation, true)
+    assert.equal(child.options.webPreferences.nodeIntegration, false)
+    assert.equal(child.options.webPreferences.nodeIntegrationInWorker, false)
+    assert.equal(child.options.webPreferences.nodeIntegrationInSubFrames, false)
+  }
   ctx.current().webContents.emit('destroyed')
-  assert.equal(child.isDestroyed(), true)
+  for (const child of children) assert.equal(child.isDestroyed(), true)
 })

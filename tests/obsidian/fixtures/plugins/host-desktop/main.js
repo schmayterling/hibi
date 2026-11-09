@@ -76,8 +76,11 @@ module.exports = class DesktopFixture extends Plugin {
       url: new URL('https://example.test/fixture').hostname,
       dom: document === window.document && item instanceof HTMLElement,
       remote: remote.app.getName(),
-      openWindow: async () => {
-        const child = new remote.BrowserWindow({
+      openWindow: async (fromRequire = false) => {
+        const Child = fromRequire
+          ? remote.require('electron').BrowserWindow
+          : remote.BrowserWindow
+        const child = new Child({
           show: false,
           webPreferences: {
             sandbox: false,

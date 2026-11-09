@@ -773,8 +773,16 @@ export function InstalledObsidian({
       {window.hibiObsidianDesktop && (
         <SettingRow
           id="obsidian-trusted-workspace"
-          label="Trusted workspace mode"
-          description="Full-access plugins can read and write any file and run programs. Hibi is using a less isolated workspace until their access is revoked."
+          label={
+            inventory.desktop?.revoking
+              ? 'Revocation pending'
+              : 'Trusted workspace mode'
+          }
+          description={
+            inventory.desktop?.revoking
+              ? 'This window still has computer access. Hibi is retrying the switch after keeping your edits. Save your notes if it keeps failing, or retry now.'
+              : 'Full-access plugins and this Hibi window can read and write any file and run programs. Plugins without their own full-access grant are paused.'
+          }
         >
           <Button
             disabled={busy}
@@ -786,6 +794,11 @@ export function InstalledObsidian({
           >
             Revoke all full access
           </Button>
+          {inventory.desktop?.revoking && (
+            <Button onClick={() => window.hibiObsidianSession?.switch()}>
+              Retry workspace switch
+            </Button>
+          )}
         </SettingRow>
       )}
       <div className="settings-group addon-list">
@@ -807,9 +820,9 @@ export function InstalledObsidian({
               description={
                 <>
                   {manifest.description}
-                  {inventory.runtimeErrors[manifest.id] && (
+                  {(plugin.error || inventory.runtimeErrors[manifest.id]) && (
                     <span className="addon-revoked">
-                      {inventory.runtimeErrors[manifest.id]}
+                      {plugin.error || inventory.runtimeErrors[manifest.id]}
                     </span>
                   )}
                 </>

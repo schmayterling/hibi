@@ -432,6 +432,10 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
   const childId = await page.evaluate(() =>
     window.__hibiDesktopFixture.openWindow(),
   )
+  const requireChild = await page.evaluate(() =>
+    window.__hibiDesktopFixture.openWindow(true),
+  )
+  assert.notEqual(requireChild, childId)
   const secondary = await app.evaluate(() => globalThis.__desktopSecondary)
   for (const kind of [
     'addon-window.html',
@@ -467,6 +471,22 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
     void window.__hibiDesktopFixture.request(url).catch(() => {})
   }, networkBase + '/hang')
   await hung
+  await app.evaluate(({ ipcMain }) => {
+    const channel = 'document:flushed',
+      original = ipcMain.listeners(channel)[0]
+    ipcMain.removeListener(channel, original)
+    const blocked = (event, token, error) =>
+      original(
+        event,
+        token,
+        token === 'ready' ? error : 'fixture revoke flush blocked',
+      )
+    ipcMain.on(channel, blocked)
+    globalThis.__restoreRevokeFlush = () => {
+      ipcMain.removeListener(channel, blocked)
+      ipcMain.on(channel, original)
+    }
+  })
   const sandboxPage = app.waitForEvent('window')
   await page
     .getByRole('button', {
@@ -474,6 +494,12 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
       exact: true,
     })
     .click()
+  await page.getByText('Revocation pending', { exact: true }).waitFor()
+  assert.equal(
+    await page.evaluate(() => typeof window.hibiObsidianDesktop),
+    'object',
+  )
+  await app.evaluate(() => globalThis.__restoreRevokeFlush())
   page = await sandboxPage
   await ended
   page.setDefaultTimeout(8000)
@@ -522,6 +548,15 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
   assert.equal(
     await readFile(join(outside, 'unloaded.txt'), 'utf8'),
     'unloaded\n',
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  const reloaded = await page.evaluate(() => window.hibi.getDocument())
+  assert.match(reloaded.markdown, /unsaved (left|right)/)
+  assert.equal(reloaded.tabs.length, 2)
+  assert.equal(
+    await page.evaluate(() => typeof window.hibiObsidianDesktop),
+    'undefined',
   )
   await fixture.assertUnchanged()
 })
@@ -603,5 +638,307 @@ test('persisted desktop permission starts in trusted mode and an empty draft sur
   )[0]
   assert.equal(record.enabled, false)
   assert.equal(record.fullAccess, undefined)
+  await fixture.assertUnchanged()
+})
+
+async function seedPlugins(fixture, entries) {
+  const server = await createServer({
+    configFile: false,
+    cacheDir: join(fixture.root, 'seed-cache'),
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false, ws: false },
+    appType: 'custom',
+  })
+  try {
+    const { ObsidianStore, readObsidianPackage } = await server.ssrLoadModule(
+      '/src/addons/obsidian/store.ts',
+    )
+    const store = new ObsidianStore(join(fixture.overlay, 'obsidian', 'global'))
+    const records = []
+    for (const entry of entries) {
+      const source = await readObsidianPackage(entry.folder)
+      await store.install(source)
+      if (entry.data) await store.saveData(source.manifest.id, entry.data)
+      records.push(
+        await store.setEnabled(
+          source.manifest.id,
+          true,
+          () => {},
+          entry.fullAccess === true,
+        ),
+      )
+    }
+    await writeFile(
+      join(fixture.overlay, 'addons.json'),
+      JSON.stringify({ obsidian: true }),
+    )
+    return records
+  } finally {
+    await server.close()
+  }
+}
+
+test('trusted workspace pauses a portable peer until its own native full-access consent and resumes only granted code', {
+  timeout: 60000,
+}, async (t) => {
+  const fixture = await fixtureVault(t, 'host-desktop', { cleanup: false })
+  const peer = await fixtureVault(t, 'host-portable-peer')
+  const outside = join(fixture.root, 'outside')
+  await mkdir(outside)
+  await seedPlugins(fixture, [
+    {
+      folder: fixture.folder,
+      fullAccess: true,
+      data: { outside, skipExternal: true },
+    },
+    { folder: peer.folder },
+  ])
+  const app = await electron.launch({
+    args: [resolve('.'), '--user-data-dir=' + fixture.overlay],
+  })
+  t.after(async () => {
+    try {
+      await app.close()
+      await fixture.assertUnchanged()
+    } finally {
+      await fixture.dispose()
+    }
+  })
+  let page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(() => !!window.__hibiDesktopFixture)
+  assert.equal(
+    await page.evaluate(() => typeof window.__hibiPortablePeer),
+    'undefined',
+  )
+  await assert.rejects(
+    page.evaluate(() =>
+      window.hibi.invokeAddonProfile('obsidian', 'preparePluginLoad', {
+        id: 'host-portable-peer',
+        hash: 'a'.repeat(64),
+      }),
+    ),
+    /need full computer access/,
+  )
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  const row = page.locator(
+    '[data-setting-id="installed-obsidian-host-portable-peer"]',
+  )
+  await row
+    .getByText(
+      'Paused in trusted workspace mode. Grant full computer access or disable this plugin.',
+      { exact: true },
+    )
+    .waitFor()
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 0 })
+  })
+  const grant = row.getByRole('button', {
+    name: 'Grant full computer access to Portable peer',
+    exact: true,
+  })
+  await grant.click()
+  await page
+    .getByRole('dialog', {
+      name: 'Full computer access for Portable peer?',
+      exact: true,
+    })
+    .getByRole('button', { name: 'Grant full access and enable', exact: true })
+    .click()
+  await row
+    .getByText(
+      'Paused in trusted workspace mode. Grant full computer access or disable this plugin.',
+      { exact: true },
+    )
+    .waitFor()
+  assert.equal(
+    await page.evaluate(() => typeof window.__hibiPortablePeer),
+    'undefined',
+  )
+  await page.waitForFunction(() => {
+    const button = document.querySelector(
+      '[aria-label="Grant full computer access to Portable peer"]',
+    )
+    return button && !button.disabled
+  })
+  const declined = (
+    await page.evaluate(() => window.hibi.queryAddon('obsidian', 'list'))
+  ).find((plugin) => plugin.manifest.id === 'host-portable-peer')
+  assert.equal(declined.fullAccess, undefined)
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await grant.click()
+  const next = app.waitForEvent('window')
+  await page
+    .getByRole('dialog', {
+      name: 'Full computer access for Portable peer?',
+      exact: true,
+    })
+    .getByRole('button', { name: 'Grant full access and enable', exact: true })
+    .click()
+  page = await next
+  page.setDefaultTimeout(8000)
+  await page.waitForFunction(() => window.__hibiPortablePeer?.loaded)
+  assert.equal(await page.evaluate(() => window.__hibiPortablePeer.node), true)
+  assert.deepEqual(await defaults(page), {
+    require: 'undefined',
+    process: 'undefined',
+    desktop: 'object',
+  })
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  const sandbox = app.waitForEvent('window')
+  await page
+    .getByRole('button', { name: 'Revoke all full access', exact: true })
+    .click()
+  page = await sandbox
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(() => !window.hibiObsidianDesktop)
+  assert.equal(
+    await page.evaluate(() => typeof window.__hibiPortablePeer),
+    'undefined',
+  )
+  for (const plugin of await page.evaluate(() =>
+    window.hibi.queryAddon('obsidian', 'list'),
+  )) {
+    assert.equal(plugin.enabled, false)
+    assert.equal(plugin.fullAccess, undefined)
+  }
+  await fixture.assertUnchanged()
+  await peer.assertUnchanged()
+})
+
+test('tampered granted package starts safely, stays visible for repair and can revoke without reading its code', {
+  timeout: 60000,
+}, async (t) => {
+  const fixture = await fixtureVault(t, 'host-desktop', { cleanup: false })
+  const [record] = await seedPlugins(fixture, [
+    { folder: fixture.folder, fullAccess: true },
+  ])
+  await writeFile(
+    join(
+      fixture.overlay,
+      'obsidian',
+      'global',
+      'packages',
+      record.manifest.id,
+      record.hash,
+      'main.js',
+    ),
+    'throw new Error("tampered fixture must never run")',
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), '--user-data-dir=' + fixture.overlay],
+  })
+  t.after(async () => {
+    try {
+      await app.close()
+      await fixture.assertUnchanged()
+    } finally {
+      await fixture.dispose()
+    }
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForDocumentEditor(app, page)
+  assert.deepEqual(await defaults(page), {
+    require: 'undefined',
+    process: 'undefined',
+    desktop: 'undefined',
+  })
+  assert.equal((await preferences(app)).sandbox, true)
+  assert.equal((await preferences(app)).remote, false)
+  const [damaged] = await page.evaluate(() =>
+    window.hibi.queryAddon('obsidian', 'list'),
+  )
+  assert.equal(damaged.fullAccess, undefined)
+  assert.equal(damaged.enabled, false)
+  assert.match(damaged.error, /stored plugin hash/)
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.getByText(damaged.error, { exact: true }).waitFor()
+  await page.evaluate(() =>
+    window.hibi.invokeAddon('obsidian', 'revokeFullAccess'),
+  )
+  const raw = JSON.parse(
+    await readFile(
+      join(
+        fixture.overlay,
+        'obsidian',
+        'global',
+        'state',
+        record.manifest.id,
+        'package.json',
+      ),
+      'utf8',
+    ),
+  )
+  assert.equal(raw.enabled, false)
+  assert.equal(raw.fullAccess, undefined)
+  assert.equal(raw.fullAccessHash, undefined)
+  await page.evaluate(() =>
+    window.hibi.invokeAddon('obsidian', 'remove', { id: 'host-desktop' }),
+  )
+  assert.deepEqual(
+    await page.evaluate(() => window.hibi.queryAddon('obsidian', 'list')),
+    [],
+  )
+  await fixture.assertUnchanged()
+})
+
+test('turning the host off retains capture support until trusted renderer is destroyed', {
+  timeout: 60000,
+}, async (t) => {
+  const fixture = await fixtureVault(t, 'host-desktop', { cleanup: false })
+  const outside = join(fixture.root, 'outside')
+  await mkdir(outside)
+  await seedPlugins(fixture, [
+    {
+      folder: fixture.folder,
+      fullAccess: true,
+      data: { outside, skipExternal: true },
+    },
+  ])
+  const app = await electron.launch({
+    args: [resolve('.'), '--user-data-dir=' + fixture.overlay],
+  })
+  t.after(async () => {
+    try {
+      await app.close()
+      await fixture.assertUnchanged()
+    } finally {
+      await fixture.dispose()
+    }
+  })
+  let page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(() => !!window.__hibiDesktopFixture)
+  const sandbox = app.waitForEvent('window')
+  await page.evaluate(() => window.hibi.setAddonEnabled('obsidian', false))
+  page = await sandbox
+  page.setDefaultTimeout(8000)
+  await waitForDocumentEditor(app, page)
+  assert.deepEqual(await defaults(page), {
+    require: 'undefined',
+    process: 'undefined',
+    desktop: 'undefined',
+  })
+  assert.equal((await preferences(app)).sandbox, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getAddonStates())).find(
+      (addon) => addon.id === 'obsidian',
+    ).enabled,
+    false,
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '',
+  )
   await fixture.assertUnchanged()
 })

@@ -824,6 +824,7 @@ export function* noteCacheEntries(
     if (node.name === 'ListItem') {
       let parent = node.parent
       while (parent && parent.name !== 'ListItem') parent = parent.parent
+      const first = node.parent!.getChild('ListItem')!
       const marker = node.getChild('Task')?.getChild('TaskMarker')
       const content = node.getChild('Task') ?? node.getChild('Paragraph')
       const task = marker
@@ -837,7 +838,9 @@ export function* noteCacheEntries(
         kind: 'listItem',
         value: {
           position: position(node.from, node.to),
-          parent: parent ? position(parent.from, parent.to).start.line : -1,
+          parent: parent
+            ? position(parent.from, parent.to).start.line
+            : -position(first.from, first.to).start.line,
           ...(task !== undefined ? { task } : {}),
           ...(id ? { id } : {}),
         },

@@ -76,7 +76,7 @@ test('rich cache keeps raw crlf/bom/utf16 positions and nested block ownership',
   assert.equal(values(rows, 'embed')[0].original, '![[image.png|alt]]')
   assert.equal(values(rows, 'tag')[0].tag, '#Raw/Tag')
   const items = values(rows, 'listItem')
-  assert.equal(items[0].parent, -1)
+  assert.equal(items[0].parent, -2)
   assert.equal(items[0].task, 'x')
   assert.equal(items[0].id, 'item')
   assert.equal(items[1].parent, items[0].position.start.line)
@@ -343,6 +343,35 @@ test('single markdown and yaml parse covers body and property references', () =>
   }
 })
 
+test('root list parents group disjoint lists by negative first source line', () => {
+  for (const eol of ['\n', '\r\n', '\r']) {
+    const source =
+      '\uFEFF' +
+      [
+        '- first',
+        '- peer',
+        '',
+        '1. second',
+        '   - nested',
+        '     - deeper',
+        '2. peer',
+      ].join(eol)
+    const items = values(entries(source), 'listItem')
+    assert.deepEqual(
+      items.map((item) => [item.position.start.line, item.parent]),
+      [
+        [0, -0],
+        [1, -0],
+        [3, -3],
+        [4, 3],
+        [5, 4],
+        [6, -3],
+      ],
+    )
+    assert.equal(Object.is(items[0].parent, -0), true)
+  }
+})
+
 test('raw numeric coordinate golden covers bom/crlf/astral/tab and nested grammar', () => {
   const source =
     '\uFEFF# 😀\r\n\r\n> - [X] [[n]] #T ^b\r\n>   -\t![x](a.png)\r\n'
@@ -365,7 +394,7 @@ test('raw numeric coordinate golden covers bom/crlf/astral/tab and nested gramma
   })
   assert.deepEqual(
     values(rows, 'listItem').map((item) => item.parent),
-    [-1, 2],
+    [-2, 2],
   )
   for (const source of [
     '\uFEFF# 😀\r# second',

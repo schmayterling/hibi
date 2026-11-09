@@ -445,6 +445,46 @@ test('the settings page lists themes with their attribution and offers their opt
   )
 })
 
+test('community installs are reachable through the addon and refuse bad input offline', {
+  timeout: 60000,
+}, async (t) => {
+  const { profile } = await themedVault(t)
+  const { page } = await launch(profile)
+  const call = (method, input) =>
+    page.evaluate(
+      ([method, input]) =>
+        window.hibi.invokeAddon('obsidian-themes', method, input),
+      [method, input],
+    )
+  assert.deepEqual(
+    await call('installRepo', {
+      repo: '../etc',
+      name: 'X',
+      requestId: 'r1',
+    }),
+    {
+      ok: false,
+      code: 'invalid',
+      message: 'This theme has no valid GitHub repository.',
+    },
+  )
+  assert.deepEqual(
+    await call('screenshot', {
+      repo: 'a/b',
+      path: '../x.png',
+      requestId: 'r2',
+    }),
+    { ok: false, code: 'invalid', message: 'This theme has no screenshot.' },
+  )
+  assert.deepEqual(await call('cancelInstall', { requestId: 'none' }), {
+    cancelled: false,
+  })
+  await assert.rejects(
+    call('installRepo', { repo: 'a/b', name: 'X' }),
+    /request id/,
+  )
+})
+
 test('--disable-obsidian-themes starts without the chosen theme', {
   timeout: 60000,
 }, async (t) => {

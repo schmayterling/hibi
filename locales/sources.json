@@ -2162,6 +2162,9 @@
   "380ca3b00419": [
     "src/addons/mcp-server/types.ts"
   ],
+  "2955950fb0aa": [
+    "src/addons/obsidian-themes/native.ts"
+  ],
   "a9ccbf1ab39f": [
     "src/shared/addon-manifest.ts"
   ],
@@ -6511,6 +6514,9 @@
   "599193b03841": [
     "src/main/download.ts"
   ],
+  "c94292602c10": [
+    "src/addons/obsidian-themes/community.ts"
+  ],
   "81ecb0c8082a": [
     "src/main/download.ts"
   ],
@@ -6755,6 +6761,9 @@
   ],
   "bfffe147f4f5": [
     "src/main/workspace-files.ts"
+  ],
+  "a993dc39a917": [
+    "src/addons/obsidian-themes/community.ts"
   ],
   "6aa88449912f": [
     "src/shared/addon-manifest.ts"
@@ -7357,6 +7366,9 @@
   ],
   "2a116f351782": [
     "src/main/files.ts"
+  ],
+  "c62ced74f930": [
+    "src/addons/obsidian-themes/native.ts"
   ],
   "609876d22bea": [
     "src/shared/addon-manifest.ts"

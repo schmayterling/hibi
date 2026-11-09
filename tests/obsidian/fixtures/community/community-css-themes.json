@@ -1,0 +1,31 @@
+[
+  {
+    "name": "Heavy Grid",
+    "author": "Hibi fixtures",
+    "repo": "hibi-fixtures/heavy-grid",
+    "screenshot": "screenshot.png",
+    "modes": ["dark", "light"]
+  },
+  {
+    "name": "Paper Lantern",
+    "author": "Hibi fixtures",
+    "repo": "hibi-fixtures/paper-lantern",
+    "screenshot": "images/shot.webp",
+    "modes": ["light"],
+    "branch": "main"
+  },
+  { "name": "No Repo", "author": "x", "repo": "not a repo" },
+  {
+    "name": "Escaping Branch",
+    "author": "x",
+    "repo": "a/b",
+    "branch": "../../x"
+  },
+  {
+    "name": "Escaping Shot",
+    "author": "x",
+    "repo": "a/c",
+    "screenshot": "../../../etc/passwd",
+    "modes": ["dark", "sepia"]
+  }
+]

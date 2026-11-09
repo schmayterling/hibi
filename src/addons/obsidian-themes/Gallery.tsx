@@ -33,13 +33,16 @@ export function Gallery({
     ...installed
       .filter(
         (item) =>
-          item.source === 'folder' &&
+          item.source !== 'vault' &&
           !vault?.themes.some((theme) => theme.hash === item.hash),
       )
       .map((item) => ({
         value: item.id,
         manifest: item.manifest,
-        source: 'Added from a folder',
+        source:
+          item.source === 'community'
+            ? `From the community directory (${item.repository}${item.ref ? ` at ${item.commit?.slice(0, 7) ?? item.ref}` : ''})`
+            : 'Added from a folder',
       })),
   ]
   if (!entries.length) return null

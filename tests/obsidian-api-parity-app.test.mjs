@@ -435,11 +435,9 @@ test('trusted API fixture has main-process networking, real moment and local pro
           let missingLookupRejected = false
           try {
             Map.prototype.get = () => ({ activate() {} })
-            try {
-              globalThis.__hibiObsidianHost.take('not-a-pending-load')
-            } catch {
-              missingLookupRejected = true
-            }
+            missingLookupRejected =
+              globalThis.__hibiObsidianHost.take('not-a-pending-load') ===
+              undefined
           } finally {
             Map.prototype.get = get
           }

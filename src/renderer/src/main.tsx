@@ -123,6 +123,10 @@ import { viewNotifications } from './view-notifications'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 import { WorkspacesSidebar } from './WorkspacesSidebar'
 import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
+import type {
+  ObsidianSessionBridge,
+  WorkspaceSessionHost,
+} from './workspace-session'
 
 startupMark('renderer-entry')
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
@@ -571,6 +575,7 @@ function App() {
   }, [splitLeftId, splitRightId, availableFlavors, flavorOverride])
   const [resetEditor, setResetEditor] = useState(0)
   const busyRef = useRef(false)
+  const sessionSuspended = useRef(false)
   const savingCommand = useRef<Promise<boolean> | null>(null)
   const pendingSave = useRef<Promise<boolean> | null>(null)
   const saveCancellation = useRef({ canceled: false })
@@ -582,8 +587,8 @@ function App() {
     setBusy(true)
   }
   function endBusy() {
-    busyRef.current = focusUnsafe.current
-    setBusy(focusUnsafe.current)
+    busyRef.current = focusUnsafe.current || sessionSuspended.current
+    setBusy(busyRef.current)
     // Paused editing drops them; otherwise they run once the caller's cleanup ends.
     if (!busyRef.current) queueMicrotask(runWaiting)
     else {
@@ -607,7 +612,11 @@ function App() {
   const shownTab = () =>
     addonViews.snapshot().activeTab ?? currentDocument.current?.tabId
   function wait(key: string | symbol, run: Waiting, forTab = false): void {
-    if (fileDialogOpen.current || focusUnsafe.current) {
+    if (
+      fileDialogOpen.current ||
+      focusUnsafe.current ||
+      sessionSuspended.current
+    ) {
       run(false)
       return
     }
@@ -1379,34 +1388,92 @@ function App() {
     setFindOpen(true)
   }
 
+  const currentSession: WorkspaceSessionHost = {
+    runtime: documentRuntime,
+    views: editorViewRegistry,
+    shell: {
+      split: splitTabs,
+      selectedMode,
+      settings: { open: settingsOpen, category: settingsCategory },
+      sidebar: { left: sidebarOpen, right: rightSidebarOpen, zen },
+    },
+    accept: acceptDocument,
+    suspend(value) {
+      sessionSuspended.current = value
+      if (value) {
+        setSavingTab(null)
+        startBusy()
+      } else endBusy()
+    },
+    settle: async () => {
+      await Promise.all([
+        savingCommand.current,
+        pendingSave.current,
+        focusQueue.current,
+      ])
+      if (focusUnsafe.current)
+        throw new Error('Could not synchronize document focus.')
+    },
+    autosaving: autosaveStatus.label === 'Autosave · saving',
+    error: setError,
+  }
+  const sessionHost = useRef(currentSession)
+  sessionHost.current = currentSession
   useEffect(() => {
     let active = true
+    const bridge = (
+      window as typeof window & {
+        hibiObsidianSession?: ObsidianSessionBridge
+      }
+    ).hibiObsidianSession
+    const session =
+      bridge &&
+      import('./workspace-session').then(({ createWorkspaceSession }) =>
+        createWorkspaceSession(
+          bridge,
+          () => sessionHost.current,
+          (shell) => {
+            splitTabsRef.current = shell.split
+            setSplitTabs(shell.split)
+            setSelectedMode(shell.selectedMode)
+            setSettingsOpen(shell.settings.open)
+            setSettingsCategory(shell.settings.category)
+            setSidebarOpen(shell.sidebar.left)
+            setRightSidebarOpen(shell.sidebar.right)
+            setZen(shell.sidebar.zen)
+          },
+        ),
+      )
     startupMark('bootstrap-document-effect')
     window.hibi.bootstrap
       .document()
-      .then(({ info, document, hotkeys, externalPending, introduction }) => {
-        startupMark('bootstrap-document-result')
-        if (active) {
-          initialExternalPending.current = externalPending
-          setIntroductionOpen(
-            introduction && localStorage.getItem('introduction') === 'pending'
-              ? 'automatic'
-              : null,
-          )
-          void workspaceView.refresh().catch((error: unknown) => {
-            if (active)
-              setError(error instanceof Error ? error.message : String(error))
-          })
-          setInfo(info)
-          acceptDocument(document)
-          setHotkeys(hotkeys)
-        }
-      })
+      .then(
+        async ({ info, document, hotkeys, externalPending, introduction }) => {
+          startupMark('bootstrap-document-result')
+          if (active) {
+            initialExternalPending.current = externalPending
+            setIntroductionOpen(
+              introduction && localStorage.getItem('introduction') === 'pending'
+                ? 'automatic'
+                : null,
+            )
+            void workspaceView.refresh().catch((error: unknown) => {
+              if (active)
+                setError(error instanceof Error ? error.message : String(error))
+            })
+            setInfo(info)
+            if (session) await (await session).bootstrap(document)
+            else acceptDocument(document)
+            setHotkeys(hotkeys)
+          }
+        },
+      )
       .catch(() => {
         if (active) setFailed(true)
       })
     return () => {
       active = false
+      void session?.then((session) => session.dispose())
     }
   }, [acceptDocument, workspaceView, setError])
 

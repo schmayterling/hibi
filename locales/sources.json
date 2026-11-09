@@ -7531,6 +7531,9 @@
     "src/addons/obsidian/api/core/ui.tsx",
     "src/addons/obsidian/api/network/index.ts"
   ],
+  "8ef744b1291c": [
+    "src/addons/obsidian/api/network/capabilities.ts"
+  ],
   "c6adbcf38611": [
     "src/addons/obsidian/runtime.ts"
   ],
@@ -7548,6 +7551,9 @@
   ],
   "6499048cecec": [
     "src/addons/obsidian/runtime.ts"
+  ],
+  "e0bc6fe1e61f": [
+    "src/addons/obsidian/api/network/capabilities.ts"
   ],
   "436d187cf65a": [
     "src/addons/obsidian/api/network/index.ts"
@@ -7744,6 +7750,9 @@
     "src/shared/hotkeys.ts"
   ],
   "a544107127ac": [
+    "src/addons/obsidian/api/network/native.ts"
+  ],
+  "5f6ea93870c9": [
     "src/addons/obsidian/api/network/native.ts"
   ],
   "f8889763cb31": [

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { createServer as createRawServer } from 'node:net'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
@@ -110,7 +110,7 @@ test('trusted API fixture has main-process networking, real moment and local pro
     server.closeAllConnections()
     server.close()
   })
-  const app = await electron.launch({
+  let app = await electron.launch({
     args: [resolve('.'), '--user-data-dir=' + fixture.overlay],
     env: { ...process.env, LANG: 'fr_FR.UTF-8' },
   })
@@ -122,7 +122,7 @@ test('trusted API fixture has main-process networking, real moment and local pro
       await fixture.dispose()
     }
   })
-  const page = await app.firstWindow()
+  let page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ session }, cert) => {
@@ -158,8 +158,65 @@ test('trusted API fixture has main-process networking, real moment and local pro
     name: 'Enable API parity',
     exact: true,
   })
+  const scriptResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/main.js'),
+  )
   await enabled.click()
-  await page.waitForFunction(() => window.__apiParity?.rendered)
+  await page.waitForFunction(
+    () => window.__apiParity?.rendered && !window.__apiParity.plugin.isUnloaded,
+  )
+  const loadedScript = await scriptResponse
+  assert.equal(loadedScript.headers()['cache-control'], 'no-store')
+  const capabilityMatch = /bridge\.activate\("([a-f0-9-]{36})"\)/.exec(
+    await loadedScript.text(),
+  )
+  assert.ok(
+    capabilityMatch,
+    'main must mint a capability while loading the plugin script',
+  )
+  const capability = capabilityMatch[1]
+  await t.test(
+    'renderer callers cannot borrow an enabled plugin ID for native networking',
+    async () => {
+      const before = hits.length
+      const result = await page.evaluate(async (base) => {
+        const plugins = await window.hibi.queryAddon('obsidian', 'list', {})
+        const plugin = plugins.find((entry) => entry.enabled)
+        const input = {
+          id: plugin.manifest.id,
+          requestId: crypto.randomUUID(),
+          request: { url: base + '/review-bypass', method: 'POST', body: 'x' },
+        }
+        const errors = []
+        for (const method of ['requestUrl', 'cancelRequestUrl']) {
+          try {
+            await window.hibi.invokeAddonProfile('obsidian', method, input)
+            errors.push(null)
+          } catch (error) {
+            errors.push(error.message)
+          }
+        }
+        const asset = await window.fetch(
+          'app://hibi/obsidian-plugins/global/' +
+            plugin.manifest.id +
+            '/' +
+            plugin.hash +
+            '/main.js',
+        )
+        return { errors, assetStatus: asset.status }
+      }, base)
+      assert.equal(
+        hits.length,
+        before,
+        'non-plugin renderer code sent a request',
+      )
+      assert.ok(result.errors.every((error) => /capability/i.test(error)))
+      assert.ok(
+        result.assetStatus >= 400,
+        'script capabilities must not be readable through renderer fetch',
+      )
+    },
+  )
   await t.test(
     'requestUrl sends methods, binary, headers and follows redirects without CORS',
     async () => {
@@ -200,12 +257,6 @@ test('trusted API fixture has main-process networking, real moment and local pro
           } catch {
             jsonError = true
           }
-          let loopError = false
-          try {
-            await f.requestUrl(base + '/loop')
-          } catch {
-            loopError = true
-          }
           const methods = []
           for (const method of [
             'GET',
@@ -214,11 +265,15 @@ test('trusted API fixture has main-process networking, real moment and local pro
             'DELETE',
             'OPTIONS',
             'CUSTOM',
+            'custom-Verb',
           ]) {
             methods.push(
               (
                 await f.requestUrl({
-                  url: (method === 'CUSTOM' ? customBase : base) + '/echo',
+                  url:
+                    (['CUSTOM', 'custom-Verb'].includes(method)
+                      ? customBase
+                      : base) + '/echo',
                   method,
                 })
               ).json.method,
@@ -240,7 +295,6 @@ test('trusted API fixture has main-process networking, real moment and local pro
             statusError,
             empty: empty.status,
             jsonError,
-            loopError,
             methods,
             head: [head.status, head.text],
             fetchSame: f.fetch === window.fetch,
@@ -267,7 +321,6 @@ test('trusted API fixture has main-process networking, real moment and local pro
       assert.match(actual.statusError, /404/)
       assert.equal(actual.empty, 204)
       assert.equal(actual.jsonError, true)
-      assert.equal(actual.loopError, true)
       assert.deepEqual(actual.methods, [
         'GET',
         'POST',
@@ -275,6 +328,7 @@ test('trusted API fixture has main-process networking, real moment and local pro
         'DELETE',
         'OPTIONS',
         'CUSTOM',
+        'CUSTOM-VERB',
       ])
       assert.deepEqual(actual.head, [200, ''])
       assert.equal(actual.fetchSame, true)
@@ -286,6 +340,33 @@ test('trusted API fixture has main-process networking, real moment and local pro
     },
   )
 
+  await t.test(
+    'redirect loops fail at their explicit bound before fixture deadline',
+    async () => {
+      const result = await page.evaluate(async (base) => {
+        let timer
+        try {
+          return await Promise.race([
+            window.__apiParity.requestUrl(base + '/loop').then(
+              () => ({ kind: 'resolved' }),
+              (error) => ({ kind: 'rejected', message: error.message }),
+            ),
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve({ kind: 'deadline' }), 2000)
+            }),
+          ])
+        } finally {
+          clearTimeout(timer)
+        }
+      }, base)
+      assert.equal(
+        result.kind,
+        'rejected',
+        'redirect bound did not fire before fixture deadline',
+      )
+      assert.match(result.message, /redirect limit|ERR_TOO_MANY_REDIRECTS/)
+    },
+  )
   await t.test(
     'moment is same real function globally, sets user locale, and switches locales synchronously',
     async () => {
@@ -314,6 +395,12 @@ test('trusted API fixture has main-process networking, real moment and local pro
       assert.equal(
         await page.evaluate(() => window.__apiParity.protocolError),
         undefined,
+      )
+      assert.equal(
+        await page
+          .getByText('Other Hibi', { exact: true })
+          .getAttribute('href'),
+        null,
       )
       assert.equal(
         await page
@@ -379,7 +466,7 @@ test('trusted API fixture has main-process networking, real moment and local pro
         )
     }, base)
     await started
-    await enabled.click()
+    await page.evaluate(() => window.__apiParity.plugin.unload())
     await disconnected
     assert.match(
       await page.evaluate(() => window.__apiParity.pending),
@@ -399,6 +486,158 @@ test('trusted API fixture has main-process networking, real moment and local pro
     )
     assert.equal(hits.length, before)
     assert.equal(await page.locator('#parity-links').count(), 0)
+    const stale = await page.evaluate(
+      async ({ base, capability }) => {
+        const plugins = await window.hibi.queryAddon('obsidian', 'list', {})
+        const id = plugins.find((plugin) => plugin.enabled).manifest.id
+        const errors = []
+        for (const method of ['requestUrl', 'cancelRequestUrl']) {
+          try {
+            await window.hibi.invokeAddonProfile('obsidian', method, {
+              id,
+              capability,
+              requestId: crypto.randomUUID(),
+              request: { url: base + '/stale-capability' },
+            })
+            errors.push(null)
+          } catch (error) {
+            errors.push(error.message)
+          }
+        }
+        return errors
+      },
+      { base, capability },
+    )
+    assert.ok(
+      stale.every((error) => /capability/i.test(error)),
+      'a direct unload must revoke main authority while its installed plugin is still enabled',
+    )
+    assert.equal(hits.length, before)
+    await enabled.click()
+    await page.waitForFunction(() => typeof window.moment === 'undefined')
     assert.equal(await page.evaluate(() => typeof window.moment), 'undefined')
   }
+
+  await t.test(
+    'registered handlers receive cold-launch Hibi links after plugins load',
+    async () => {
+      await enabled.click()
+      await page.waitForFunction(
+        () =>
+          window.__apiParity?.rendered && !window.__apiParity.plugin.isUnloaded,
+      )
+      assert.equal(
+        await page.evaluate(
+          async (base) =>
+            (await window.__apiParity.requestUrl(base + '/reload-capability'))
+              .status,
+          base,
+        ),
+        200,
+      )
+      await app.close()
+      app = await electron.launch({
+        args: [
+          resolve('.'),
+          '--user-data-dir=' + fixture.overlay,
+          'hibi://obsidian/parity-fixture?from=cold&flag&empty=',
+          'obsidian://parity-fixture?from=foreign',
+        ],
+      })
+      page = await app.firstWindow()
+      page.setDefaultTimeout(8000)
+      await page.waitForFunction(() => window.__apiParity?.seen.length === 1)
+      assert.deepEqual(
+        await page.evaluate(() =>
+          window.__apiParity.seen.map((params) => ({ ...params })),
+        ),
+        [{ from: 'cold', flag: 'true', empty: '', action: 'parity-fixture' }],
+      )
+      assert.equal(
+        await page.evaluate(
+          async (base) =>
+            (await window.__apiParity.requestUrl(base + '/cold-capability'))
+              .status,
+          base,
+        ),
+        200,
+      )
+    },
+  )
+
+  await t.test(
+    'actual note link reaches plugin handler and preserves note bytes',
+    async () => {
+      const note = join(fixture.root, 'protocol-note.md')
+      const source =
+        'See [Note protocol](obsidian://parity-fixture?from=note) here.\n'
+      await writeFile(note, source)
+      await app.evaluate(({ dialog }, note) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [note],
+        })
+      }, note)
+      await clickMenu(app, 'Open…')
+      const link = page.getByRole('link', {
+        name: 'Note protocol',
+        exact: true,
+      })
+      await link.waitFor()
+      await link.click({
+        modifiers: ['Shift'],
+      })
+      await page.waitForFunction(() =>
+        window.__apiParity.seen.some((params) => params.from === 'note'),
+      )
+      assert.equal(await readFile(note, 'utf8'), source)
+    },
+  )
+  await t.test(
+    'links clicked while addon is disabled never replay when it is enabled again',
+    async () => {
+      await clickMenu(app, 'Settings')
+      await page
+        .getByRole('tab', { name: 'Addon Manager', exact: true })
+        .click()
+      const host = page.getByRole('checkbox', {
+        name: 'Obsidian plugins',
+        exact: true,
+      })
+      await host.click()
+      await page.waitForFunction(
+        () =>
+          window.__apiParity.plugin.isUnloaded &&
+          typeof window.moment === 'undefined',
+      )
+      await app.evaluate(({ app }) => {
+        app.emit(
+          'open-url',
+          { preventDefault() {} },
+          'hibi://obsidian/parity-fixture?from=disabled',
+        )
+      })
+      await host.click()
+      await page.waitForFunction(
+        () =>
+          window.__apiParity?.rendered && !window.__apiParity.plugin.isUnloaded,
+      )
+      await app.evaluate(({ app }) => {
+        app.emit(
+          'open-url',
+          { preventDefault() {} },
+          'hibi://obsidian/parity-fixture?from=reenabled',
+        )
+      })
+      await page.waitForFunction(() =>
+        window.__apiParity.seen.some((params) => params.from === 'reenabled'),
+      )
+      assert.deepEqual(
+        await page.evaluate(() =>
+          window.__apiParity.seen.map((params) => ({ ...params })),
+        ),
+        [{ from: 'reenabled', action: 'parity-fixture' }],
+      )
+    },
+  )
 })

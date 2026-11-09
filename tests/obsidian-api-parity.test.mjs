@@ -7,7 +7,7 @@ async function modules(t) {
   const server = await createServer({
     configFile: false,
     optimizeDeps: { noDiscovery: true, include: [] },
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
   })
   t.after(() => server.close())
@@ -151,4 +151,171 @@ test('core exports real moment with shared window identity and restores globals 
     Object.getOwnPropertyDescriptor(globalThis, 'moment'),
     previous,
   )
+})
+
+test('protocol built-ins use current Hibi vault and preserve explicit empty values', async (t) => {
+  const load = await modules(t)
+  const { dispatchObsidianProtocol } = await load('api/protocol/index.ts')
+  const { parseObsidianProtocol } = await load('api/protocol/parse.ts')
+  const parsed = parseObsidianProtocol(
+    'obsidian://fixture?flag&empty=&plus=a+b&encoded=a%2Bb',
+  )
+  assert.deepEqual(parsed, {
+    flag: 'true',
+    empty: '',
+    plus: 'a b',
+    encoded: 'a+b',
+    action: 'fixture',
+  })
+  const calls = []
+  const file = { path: 'created.md' }
+  const app = {
+    vault: {
+      getName: () => 'Fixture',
+      async create(path, text) {
+        calls.push(['create', path, text])
+        return file
+      },
+    },
+    workspace: {
+      async openLinkText(...args) {
+        calls.push(['open', ...args])
+      },
+      getLeaf(newPane) {
+        return {
+          async openFile(value) {
+            calls.push(['new', newPane, value])
+          },
+        }
+      },
+    },
+  }
+  assert.equal(
+    await dispatchObsidianProtocol(app, 'obsidian://open?vault=Fixture'),
+    true,
+  )
+  assert.deepEqual(calls, [])
+  assert.equal(
+    await dispatchObsidianProtocol(
+      app,
+      'obsidian://open?vault=Fixture&file=note',
+    ),
+    true,
+  )
+  assert.equal(
+    await dispatchObsidianProtocol(
+      app,
+      'hibi://obsidian/new?name=created&content=',
+    ),
+    true,
+  )
+  assert.deepEqual(calls, [
+    ['open', 'note', '', false],
+    ['create', 'created.md', ''],
+    ['new', false, file],
+  ])
+  await assert.rejects(
+    dispatchObsidianProtocol(app, 'obsidian://open?vault=Other&file=secret'),
+    /linked vault/,
+  )
+  await assert.rejects(
+    dispatchObsidianProtocol(app, 'obsidian://search?query=needle'),
+    /no Hibi equivalent/,
+  )
+})
+
+test('calling Plugin.unload directly cancels its requests and refuses stale API references', async (t) => {
+  const load = await modules(t)
+  const { createCoreApi } = await load('api/core/index.ts')
+  const { Component } = await load('api/core/component.ts')
+  fakeDom(t)
+  const owner = new Component()
+  t.after(() => owner.unload())
+  const pending = Promise.withResolvers()
+  const calls = []
+  window.hibi = {
+    invokeAddonProfile(_addon, method, input) {
+      calls.push({ method, input })
+      return method === 'requestUrl' ? pending.promise : Promise.resolve()
+    },
+  }
+  const api = createCoreApi(
+    { owner, hibi: {}, isCurrent: () => !owner.isUnloaded },
+    {},
+    { id: 'fixture', name: 'Fixture' },
+  )
+  const plugin = new api.Plugin()
+  const result = api.requestUrl('http://localhost')
+  const cancelled = assert.rejects(result, /cancel|unload/i)
+  plugin.unload()
+  assert.equal(calls[1]?.method, 'cancelRequestUrl')
+  await cancelled
+  await assert.rejects(api.requestUrl('http://localhost/stale'), /unloaded/)
+  assert.throws(
+    () => plugin.registerObsidianProtocolHandler('stale', () => {}),
+    /unloaded/,
+  )
+  pending.reject(new Error('late cancellation'))
+})
+
+test('protocol action names retain valid namespaced and encoded public API strings', async (t) => {
+  const load = await modules(t)
+  const { Plugin } = await load('api/core/plugin.tsx')
+  const { Component } = await load('api/core/component.ts')
+  const { dispatchObsidianProtocol } = await load('api/protocol/index.ts')
+  const owner = new Component()
+  t.after(() => owner.unload())
+  const app = {}
+  const plugin = new Plugin(
+    app,
+    { id: 'fixture' },
+    { owner, hibi: {}, isCurrent: () => !owner.isUnloaded },
+  )
+  const seen = []
+  for (const action of ['plugin.action.v1', 'résumé']) {
+    plugin.registerObsidianProtocolHandler(action, (params) =>
+      seen.push(params.action),
+    )
+    assert.equal(
+      await dispatchObsidianProtocol(
+        app,
+        'obsidian://' + encodeURIComponent(action),
+      ),
+      true,
+    )
+    assert.equal(
+      await dispatchObsidianProtocol(
+        app,
+        'hibi://obsidian/' + encodeURIComponent(action),
+      ),
+      true,
+    )
+  }
+  assert.deepEqual(seen, [
+    'plugin.action.v1',
+    'plugin.action.v1',
+    'résumé',
+    'résumé',
+  ])
+})
+
+test('reusing request options cannot change an earlier request HTTP error policy', async (t) => {
+  const load = await modules(t)
+  const { createRequestUrl } = await load('api/core/network.ts')
+  const { Component } = await load('api/core/component.ts')
+  const owner = new Component()
+  t.after(() => owner.unload())
+  const response = Promise.withResolvers()
+  const requestUrl = createRequestUrl(owner, 'fixture', () => response.promise)
+  const options = { url: 'http://localhost', throw: true }
+  const first = requestUrl(options)
+  options.throw = false
+  const second = requestUrl(options)
+  response.resolve({
+    status: 404,
+    headers: {},
+    arrayBuffer: new ArrayBuffer(0),
+  })
+  await assert.rejects(first, /404/)
+  assert.equal((await second).status, 404)
 })

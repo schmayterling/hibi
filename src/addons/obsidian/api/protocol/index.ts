@@ -11,7 +11,7 @@ export function registerObsidianProtocol(
   action: string,
   handler: ObsidianProtocolHandler,
 ) {
-  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(action) || typeof handler !== 'function')
+  if (typeof action !== 'string' || !action || typeof handler !== 'function')
     throw new Error('Choose a protocol action and handler.')
   let actions = handlers.get(app)
   if (!actions) {
@@ -42,8 +42,9 @@ export async function dispatchObsidianProtocol(app: App, value: string) {
   if (!['open', 'new', 'search'].includes(params.action)) return false
   if (params.vault && params.vault !== app.vault.getName())
     throw new Error('Open the linked vault in Hibi first.')
-  if (params.action === 'open' && params.file) {
-    await app.workspace.openLinkText(params.file, '', !!params.newpane)
+  if (params.action === 'open') {
+    if (params.file)
+      await app.workspace.openLinkText(params.file, '', !!params.newpane)
     return true
   }
   if (params.action === 'new') {

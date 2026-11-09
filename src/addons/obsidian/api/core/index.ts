@@ -16,11 +16,17 @@ export function createCoreApi(
   host: PluginEnvironment,
   app: App,
   manifest: PluginManifest,
+  capability: () => string | undefined = () => undefined,
 ) {
   host.owner.register(acquireDomHelpers())
-  const moment = acquireMoment(host.owner)
   const requestOwner = host.owner.addChild(new Component())
-  const requestUrl = createRequestUrl(requestOwner, manifest.id)
+  const moment = acquireMoment(requestOwner)
+  const requestUrl = createRequestUrl(
+    requestOwner,
+    manifest.id,
+    undefined,
+    capability,
+  )
   class BoundPlugin extends Plugin {
     constructor(pluginApp = app, pluginManifest = manifest) {
       super(pluginApp, pluginManifest, host)

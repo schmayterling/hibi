@@ -160,7 +160,7 @@ async function environment(t, { plain = false } = {}) {
             return {
               target,
               sequence: 1,
-              configDir: '.obsidian',
+              ...(plain ? {} : { configDir: '.obsidian' }),
               name: 'Fixture',
               settings: state.settings,
               activePath: state.openPath,
@@ -585,6 +585,7 @@ test('frontmatter pair patches support additions and deletions without rewriting
 
 test('plain folder exposes its tree and supports note edits without creating configuration', async (t) => {
   const env = await environment(t, { plain: true })
+  assert.equal(env.vault.configDir, undefined)
   assert.equal(await env.vault.adapter.exists('.obsidian'), false)
   assert.equal(env.vault.getMarkdownFiles()[0].path, 'untouched.md')
   assert.deepEqual((await readdir(env.fixture.vault)).sort(), ['untouched.md'])

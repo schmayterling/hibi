@@ -2,6 +2,7 @@ import { errorMessage } from '../../shared/errors'
 import type { AddonContext } from '../api'
 import { createCoreApi } from './api/core'
 import { Component } from './api/core/component'
+import { reportError } from './api/core/events'
 import { Keymap, Scope } from './api/core/keymap'
 import type { Plugin } from './api/core/plugin'
 import { prepareMoment } from './api/moment'
@@ -248,6 +249,15 @@ export class ObsidianHost {
       }
       const activate = (token: string) => {
         capability = token
+        void invokeObsidianProfile('activateRequestUrl', {
+          id: manifest.id,
+          capability: token,
+        }).catch((error) => {
+          if (!owner.isUnloaded) {
+            reportError(error)
+            owner.unload()
+          }
+        })
       }
       let exports: unknown
       if (descriptor.fullAccess) {

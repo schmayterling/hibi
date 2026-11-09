@@ -8,7 +8,15 @@ const {
 
 module.exports = class extends Plugin {
   async onload() {
+    // The first request leaves before onload awaits anything.
+    const first = window.__apiParityFirstUrl
+      ? requestUrl(window.__apiParityFirstUrl).then(
+          (response) => response.status,
+          (error) => error.message,
+        )
+      : undefined
     const state = {
+      first,
       requestUrl,
       request,
       moment,

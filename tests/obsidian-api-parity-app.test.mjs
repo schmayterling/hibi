@@ -161,6 +161,88 @@ test('trusted API fixture has main-process networking, real moment and local pro
   const scriptResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname.endsWith('/main.js'),
   )
+  await page.evaluate(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'globalThis')
+    const state = {
+      descriptor,
+      stolen: [],
+      calls: 0,
+      shadowed: false,
+    }
+    window.__apiShadowProbe = state
+    const fake = Object.create(window)
+    Object.defineProperty(fake, '__hibiObsidianHost', {
+      value: {
+        take(identity) {
+          state.calls++
+          Object.defineProperty(window, 'globalThis', descriptor)
+          const bridge = window.__hibiObsidianHost.take(identity)
+          return {
+            ...bridge,
+            activate(token) {
+              state.stolen.push(token)
+              bridge.activate(token)
+            },
+          }
+        },
+      },
+    })
+    new MutationObserver((records, observer) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (node.tagName !== 'SCRIPT' || !node.src.includes('/main.js?load='))
+            continue
+          observer.disconnect()
+          state.shadowed = true
+          Object.defineProperty(window, 'globalThis', {
+            configurable: true,
+            writable: true,
+            value: fake,
+          })
+        }
+    }).observe(document.head, { childList: true })
+  })
+  // Page code wraps every reachable IPC entry before the plugin loads.
+  await page.evaluate((base) => {
+    const state = { tokens: [], wrapped: [] }
+    window.__apiIpcProbe = state
+    window.__apiParityFirstUrl = `${base}/first-onload`
+    const spy = (real) =>
+      function (id, method, input) {
+        if (typeof input?.capability === 'string')
+          state.tokens.push(input.capability)
+        return real.call(this, id, method, input)
+      }
+    for (const name of ['hibi', 'hibiTransport']) {
+      const real = window[name].invokeAddonProfile
+      const wrapped = spy(real)
+      const attempts = [
+        () => {
+          window[name].invokeAddonProfile = wrapped
+        },
+        () =>
+          Object.defineProperty(window[name], 'invokeAddonProfile', {
+            value: wrapped,
+          }),
+        () =>
+          Object.defineProperty(window, name, {
+            value: { ...window[name], invokeAddonProfile: wrapped },
+          }),
+        () => {
+          window[name] = { ...window[name], invokeAddonProfile: wrapped }
+        },
+      ]
+      for (const attempt of attempts) {
+        try {
+          attempt()
+        } catch {}
+        if (window[name].invokeAddonProfile === wrapped) {
+          state.wrapped.push(name)
+          break
+        }
+      }
+    }
+  }, base)
   await enabled.click()
   await page.waitForFunction(
     () => window.__apiParity?.rendered && !window.__apiParity.plugin.isUnloaded,
@@ -175,6 +257,103 @@ test('trusted API fixture has main-process networking, real moment and local pro
     'main must mint a capability while loading the plugin script',
   )
   const capability = capabilityMatch[1]
+  await t.test(
+    'shadowing globalThis cannot intercept script activation or native network authority',
+    async () => {
+      const result = await page.evaluate(async (base) => {
+        const state = window.__apiShadowProbe
+        Object.defineProperty(window, 'globalThis', state.descriptor)
+        const id = (await window.hibi.queryAddon('obsidian', 'list', {})).find(
+          (plugin) => plugin.enabled,
+        ).manifest.id
+        let direct
+        if (state.stolen.length) {
+          direct = (
+            await window.hibi.invokeAddonProfile('obsidian', 'requestUrl', {
+              id,
+              capability: state.stolen.at(-1),
+              requestId: crypto.randomUUID(),
+              request: {
+                url: base + '/shadow-theft',
+                method: 'POST',
+                body: 'x',
+              },
+            })
+          ).status
+        }
+        return {
+          calls: state.calls,
+          stolen: state.stolen.length,
+          shadowed: state.shadowed,
+          direct,
+          realStatus: (
+            await window.__apiParity.requestUrl(base + '/shadow-real-plugin')
+          ).status,
+        }
+      }, base)
+      assert.equal(
+        hits.includes('/shadow-theft'),
+        false,
+        'globalThis shadow stole native network authority',
+      )
+      assert.deepEqual(result, {
+        calls: 0,
+        stolen: 0,
+        shadowed: true,
+        direct: undefined,
+        realStatus: 200,
+      })
+    },
+  )
+  await t.test(
+    'wrapped renderer IPC methods never see a capability, and onload requests run after activation',
+    async () => {
+      const result = await page.evaluate(async (base) => {
+        const state = window.__apiIpcProbe
+        const realStatus = (
+          await window.__apiParity.requestUrl(`${base}/ipc-real-plugin`)
+        ).status
+        const id = (await window.hibi.queryAddon('obsidian', 'list', {})).find(
+          (plugin) => plugin.enabled,
+        ).manifest.id
+        let direct
+        if (state.tokens.length)
+          direct = await window.hibi
+            .invokeAddonProfile('obsidian', 'requestUrl', {
+              id,
+              capability: state.tokens.at(-1),
+              requestId: crypto.randomUUID(),
+              request: { url: `${base}/ipc-theft`, method: 'POST', body: 'x' },
+            })
+            .then(
+              (response) => response.status,
+              (error) => error.message,
+            )
+        return {
+          wrapped: state.wrapped.includes('hibi'),
+          transportWrapped: state.wrapped.includes('hibiTransport'),
+          tokens: state.tokens.length,
+          direct,
+          first: await window.__apiParity.first,
+          realStatus,
+        }
+      }, base)
+      assert.equal(
+        hits.includes('/ipc-theft'),
+        false,
+        'wrapped IPC stole native network authority',
+      )
+      assert.deepEqual(result, {
+        wrapped: true,
+        transportWrapped: false,
+        tokens: 0,
+        direct: undefined,
+        first: 200,
+        realStatus: 200,
+      })
+      assert.ok(hits.includes('/first-onload'))
+    },
+  )
   await t.test(
     'script replays cannot replace the bridge, steal a capability or revoke the loaded plugin',
     async () => {

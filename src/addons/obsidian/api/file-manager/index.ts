@@ -239,6 +239,7 @@ export class FileManager {
   }
   getNewFileParent(sourcePath: string, _newFilePath = '') {
     const vault = this.context.app.vault
+    if (vault.target === null) throw new Error('Open a folder first.')
     const settings = vault.settings
     const path =
       settings?.newFileLocation === 'folder'

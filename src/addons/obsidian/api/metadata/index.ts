@@ -62,6 +62,7 @@ export class MetadataCache extends Events {
   }
 
   async start() {
+    if (this.context.app.vault.target === null) return
     const stream = await this.context.hibi.workspace.subscribeChanges(
       (event) => {
         const previous = this.target

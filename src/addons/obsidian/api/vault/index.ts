@@ -91,23 +91,26 @@ export class Vault extends Events {
   readonly #identities = new WeakMap<TAbstractFile, string>()
   readonly #writes = new Map<TAbstractFile, Promise<unknown>>()
   readonly #root: TFolder
-  readonly #target: WorkspaceTarget
-  #info: VaultInfo
+  readonly #target: WorkspaceTarget | null
+  #info: VaultInfo | null
   #disposed = false
   #refresh: Promise<void> = Promise.resolve()
   #stop: (() => void) | undefined
-  private constructor(hibi: AddonContext, info: VaultInfo) {
+  private constructor(hibi: AddonContext, info: VaultInfo | null) {
     super()
     this.#hibi = hibi
     this.#info = info
-    this.#target = Object.freeze({ ...info.target })
+    this.#target = info ? Object.freeze({ ...info.target }) : null
     this.#root = new TFolder(this, '')
     this.#files.set('', this.#root)
   }
   static async create(context: ApiContext) {
     const state = await context.hibi.workspace.get()
-    if (!state?.id || state.workspaceGeneration === undefined)
-      throw new Error('Open a vault before starting plugins.')
+    if (!state?.id || state.workspaceGeneration === undefined) {
+      const vault = new Vault(context.hibi, null)
+      context.register(() => vault.dispose())
+      return vault
+    }
     const target = {
       workspaceId: state.id,
       workspaceGeneration: state.workspaceGeneration,
@@ -137,21 +140,22 @@ export class Vault extends Events {
     this.#stop = undefined
   }
   get configDir() {
-    return this.#info.configDir
+    return this.#info?.configDir
   }
   get settings() {
-    return this.#info.settings
+    return this.#info?.settings ?? null
   }
   get target() {
     return this.#target
   }
   getName() {
-    return this.#info.name
+    return this.#info?.name ?? ''
   }
   getRoot() {
     return this.#root
   }
   getAbstractFileByPath(path: string) {
+    if (!this.#target) return null
     return this.#files.get(vaultPath(path, this.configDir, true)) ?? null
   }
   getFileByPath(path: string) {
@@ -183,6 +187,8 @@ export class Vault extends Events {
   }
   #assert() {
     if (this.#disposed) throw new Error('This vault API has stopped.')
+    if (!this.#target) throw new Error('Open a folder first.')
+    return this.#target
   }
   #path(file: TAbstractFile) {
     this.#assert()
@@ -191,19 +197,19 @@ export class Vault extends Events {
     return vaultPath(file.path, this.configDir)
   }
   #query<T>(method: string, data: Record<string, unknown> = {}) {
-    this.#assert()
+    const target = this.#assert()
     return this.#hibi.native.query<T>(method, {
       ...data,
-      vaultId: this.target.workspaceId,
-      target: this.target,
+      vaultId: target.workspaceId,
+      target,
     })
   }
   #invoke<T>(method: string, data: Record<string, unknown>) {
-    this.#assert()
+    const target = this.#assert()
     return this.#hibi.native.invoke<T>(method, {
       ...data,
-      vaultId: this.target.workspaceId,
-      target: this.target,
+      vaultId: target.workspaceId,
+      target,
     })
   }
   async info() {
@@ -331,7 +337,7 @@ export class Vault extends Events {
           current.documentId === target.documentId &&
           current.documentGeneration === target.documentGeneration,
       )
-    const path = this.#info.documents.find(
+    const path = this.#info?.documents.find(
       (document) => document.tabId === open?.tabId,
     )?.path
     return path ? this.getFileByPath(path) : null
@@ -345,7 +351,7 @@ export class Vault extends Events {
       if (read.status !== 'read') throw new Error(read.message)
       return read.source
     }
-    const read = await this.#hibi.workspace.readText(this.target, path)
+    const read = await this.#hibi.workspace.readText(this.#assert(), path)
     if (!read.ok) throw new Error(read.message)
     return read.value.markdown
   }
@@ -354,7 +360,7 @@ export class Vault extends Events {
   }
   async readBinary(file: TFile) {
     const read = await this.#hibi.workspace.readBinary(
-      this.target,
+      this.#assert(),
       this.#path(file),
     )
     if (!read.ok) throw new Error(read.message)
@@ -382,7 +388,7 @@ export class Vault extends Events {
       const open = this.#open(path, info)
       const read = open
         ? this.#hibi.documents.readSource(open.target)
-        : await this.#hibi.workspace.readText(this.target, path)
+        : await this.#hibi.workspace.readText(this.#assert(), path)
       if ('status' in read && read.status !== 'read')
         throw new Error(read.message)
       if ('ok' in read && !read.ok) throw new Error(read.message)
@@ -426,7 +432,7 @@ export class Vault extends Events {
     this.#assert()
     path = vaultPath(path, this.configDir)
     const result = await this.#hibi.workspace.createText(
-      this.target,
+      this.#assert(),
       path,
       data,
     )
@@ -441,7 +447,7 @@ export class Vault extends Events {
     this.#assert()
     path = vaultPath(path, this.configDir)
     const result = await this.#hibi.workspace.createBinary(
-      this.target,
+      this.#assert(),
       path,
       new Uint8Array(data),
     )
@@ -455,6 +461,7 @@ export class Vault extends Events {
     return file
   }
   async createFolder(path: string) {
+    this.#assert()
     await this.#invoke('vaultCreateFolder', {
       path: vaultPath(path, this.configDir),
     })
@@ -499,6 +506,7 @@ export class Vault extends Events {
   }
   readonly adapter = {
     exists: async (path: string) => {
+      if (!this.#target) return false
       try {
         path = vaultPath(path, this.configDir, true)
       } catch {
@@ -509,12 +517,14 @@ export class Vault extends Events {
       )
     },
     stat: async (path: string) => {
+      if (!this.#target) return null
       const entry = await this.#query<VaultEntry | null>('vaultStat', {
         path: vaultPath(path, this.configDir, true),
       })
       return entry ? { ...entry.stat, type: entry.kind } : null
     },
     read: async (path: string) => {
+      this.#assert()
       const file = this.getFileByPath(path)
       if (!file) throw new Error('This vault file is unavailable.')
       return this.read(file)
@@ -525,6 +535,7 @@ export class Vault extends Events {
       else await this.create(path, data)
     },
     list: async (path: string) => {
+      if (!this.#target) return { files: [], folders: [] }
       path = vaultPath(path, this.configDir, true)
       const info = await this.info()
       const result = { files: [] as string[], folders: [] as string[] }

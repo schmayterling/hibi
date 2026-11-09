@@ -20,12 +20,15 @@ export const fileReadOnly = (error: unknown) =>
  */
 export const PATIENT_RENAME: readonly number[] = Array(100).fill(100)
 
+/** For a save nobody is waiting on. */
+export const BRIEF_RENAME: readonly number[] = [50, 100, 200, 400, 800]
+
 /** Retry brief Windows sharing violations without changing the rename operation. */
 export async function retryRename<T>(
   rename: () => Promise<T>,
   beforeRetry?: () => void | Promise<void>,
   signal?: AbortSignal,
-  delays: readonly number[] = [50, 100, 200, 400, 800],
+  delays: readonly number[] = BRIEF_RENAME,
 ): Promise<T> {
   let originalError: unknown
   for (let attempt = 0; ; attempt++) {

@@ -22,6 +22,14 @@ async function lockFileAccess(path: string) {
   }
 }
 
+export const markedReadOnly = (path: string) =>
+  Object.assign(
+    new Error(
+      `Could not save ${basename(path)} because it is marked read-only. Your text is still here and the file is unchanged. Turn off Read-only in the file's properties, or use Save as.`,
+    ),
+    { code: 'EREADONLY' },
+  )
+
 export function validateMarkdown(value: unknown): asserts value is string {
   if (typeof value !== 'string')
     throw new Error('Choose a UTF-8 text document.')
@@ -225,44 +233,46 @@ export async function writeText(
           throw error
         await copyFile(temp, path, constants.COPYFILE_EXCL)
       }
-    } else
+    } else {
+      // Filling the copy can outlast the program writing or removing the file,
+      // and so can a wait for the rename.
+      const unchangedOutside = async () => {
+        const now = await stat(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error
+          return null
+        })
+        if (
+          now?.size !== existing?.size ||
+          now?.mtimeMs !== existing?.mtimeMs ||
+          now?.ino !== existing?.ino
+        )
+          throw Object.assign(
+            new Error(
+              'Could not save because this file changed outside Hibi while Hibi was waiting to save it. Your text is still here. Save again to review the change.',
+            ),
+            { code: 'ECHANGED' },
+          )
+      }
+      if (renameDelays) await unchangedOutside()
       await retryRename(
         () => {
           checkCommit()
           return rename(temp, path).catch((error) => {
             // Node reports the read-only attribute as a mode with no write bits.
             if (fileHeldOpen(error) && existing && !(existing.mode & 0o200))
-              throw Object.assign(
-                new Error(
-                  `Could not save ${basename(path)} because it is marked read-only. Your text is still here and the file is unchanged. Turn off Read-only in the file's properties, or use Save as.`,
-                ),
-                { code: 'EREADONLY' },
-              )
+              throw markedReadOnly(path)
             throw error
           })
         },
-        // A wait this long can outlast the program writing or removing the file.
         renameDelays &&
           (async () => {
             onRefused?.()
-            const now = await stat(path).catch(
-              (error: NodeJS.ErrnoException) => {
-                if (error.code !== 'ENOENT') throw error
-                return null
-              },
-            )
-            if (
-              now?.size !== existing?.size ||
-              now?.mtimeMs !== existing?.mtimeMs ||
-              now?.ino !== existing?.ino
-            )
-              throw new Error(
-                'Could not save because this file changed outside Hibi while Hibi was waiting to save it. Your text is still here. Save again to review the change.',
-              )
+            await unchangedOutside()
           }),
         undefined,
         renameDelays,
       )
+    }
   } finally {
     try {
       await unlink(temp).catch((error: NodeJS.ErrnoException) => {

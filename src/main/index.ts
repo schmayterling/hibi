@@ -300,7 +300,6 @@ import {
   snapshotWorkspace,
   subscribeWorkspaceChanges,
   workspaceChangeSnapshot,
-  workspaceId,
   workspaceRelativePath,
   workspaceRoot,
 } from './workspace'
@@ -948,18 +947,11 @@ async function serveAssetResponse(request: Request): Promise<Response> {
       parsed.hostname === 'hibi' &&
       parsed.pathname.startsWith('/obsidian-plugins/')
     ) {
-      const vault = workspaceRoot()
-      const identity = workspaceId()
       const generation = getAddonActivationGeneration('obsidian')
-      if (!vault || !identity || generation === null)
-        return new Response(null, { status: 403 })
+      if (generation === null) return new Response(null, { status: 403 })
       const { obsidianPluginAsset } = await import('../addons/obsidian/native')
-      const asset = await obsidianPluginAsset(request, vault, identity)
-      if (
-        generation !== getAddonActivationGeneration('obsidian') ||
-        workspaceRoot() !== vault ||
-        workspaceId() !== identity
-      )
+      const asset = await obsidianPluginAsset(request)
+      if (generation !== getAddonActivationGeneration('obsidian'))
         return new Response(null, { status: 403 })
       return asset
         ? new Response(asset.body, {

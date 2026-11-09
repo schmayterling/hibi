@@ -35,10 +35,13 @@ test('obsidian packages and overlays stay outside the source vault', async (t) =
     store.enabledPackage('host-smoke', source.hash),
     /disabled/,
   )
-  assert.deepEqual(await store.loadData('host-smoke'), {
+  assert.equal(await store.loadData('host-smoke'), null)
+  assert.equal(await store.settingsOffer('host-smoke', fixture.vault), true)
+  assert.deepEqual(await store.importVaultData('host-smoke', fixture.vault), {
     enabled: false,
     seeded: true,
   })
+  assert.equal(await store.settingsOffer('host-smoke', fixture.vault), false)
   await Promise.all([
     store.saveData('host-smoke', { enabled: true }),
     store.loadData('host-smoke'),

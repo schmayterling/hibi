@@ -42,6 +42,10 @@ try {
       .resize(192, 192)
       .png({ compressionLevel: 9 })
       .toFile(resolve(`src/renderer/src/assets/app-icon${suffix}.png`))
+  // Icon Composer packages keep unpadded sources; macOS applies its own mask.
+  await mkdir(resolve('build/hibi.icon/Assets'), { recursive: true })
+  await cp(source, resolve('build/hibi.icon/Assets/light.png'))
+  await cp(darkSource, resolve('build/hibi.icon/Assets/dark.png'))
   const iconset = join(folder, 'hibi.iconset')
   await mkdir(iconset)
   for (const size of [16, 32, 128, 256, 512]) {

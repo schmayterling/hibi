@@ -34,6 +34,7 @@ import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
+import { APP_ICON_CHANNELS } from '../shared/app-icon'
 import { BACKGROUND_CHANNELS, QUICK_NOTE_COMMAND } from '../shared/background'
 import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -128,7 +129,14 @@ import {
   windowAddonName,
 } from './addons'
 import { analysisService } from './analysis'
-import { appIconPath, applyAppIcon } from './app-icon'
+import {
+  appIconPath,
+  applyAppIcon,
+  flushAppIcon,
+  getAppIconMode,
+  loadAppIconMode,
+  saveAppIconMode,
+} from './app-icon'
 import {
   appearanceColors,
   loadAppearance,
@@ -721,6 +729,8 @@ app.on('will-quit', (event) => {
     event.preventDefault()
     if (nativeStopping) return
     nativeStopping = stopNativeAddons()
+      .catch(console.error)
+      .then(flushAppIcon)
       .catch(console.error)
       .finally(() => {
         nativeStopped = true
@@ -1576,9 +1586,10 @@ if (!app.requestSingleInstanceLock()) {
       void preferences.catch(() => {})
       await Promise.all([
         startupSpan('appearance', loadAppearance),
+        startupSpan('app-icon', loadAppIconMode),
         startupSpan('window-controls', loadWindowControls),
       ])
-      applyAppIcon()
+      void applyAppIcon().catch(console.error)
       const handle = (
         channel: string,
         listener: Parameters<typeof ipcMain.handle>[1],
@@ -1794,6 +1805,10 @@ if (!app.requestSingleInstanceLock()) {
         await saveUiCase(value)
         installMenu()
       })
+      handle(APP_ICON_CHANNELS.get, () => getAppIconMode())
+      handle(APP_ICON_CHANNELS.set, (_event, value: unknown) =>
+        saveAppIconMode(value),
+      )
       handle(APPEARANCE_CHANNEL, async (event, value: unknown) => {
         const window = trustedWindow(event)
         const saved = saveAppearance(value)
@@ -3011,8 +3026,17 @@ if (!app.requestSingleInstanceLock()) {
           return renamed
         }),
       )
+      if (process.platform === 'darwin') {
+        const subscription = systemPreferences.subscribeNotification(
+          'AppleInterfaceThemeChangedNotification',
+          () => void applyAppIcon().catch(console.error),
+        )
+        app.once('will-quit', () =>
+          systemPreferences.unsubscribeNotification(subscription),
+        )
+      }
       nativeTheme.on('updated', () => {
-        applyAppIcon()
+        void applyAppIcon().catch(console.error)
         mainWindow?.setBackgroundColor(appearanceColors().background)
         if (process.platform !== 'darwin' && !windowControlsHidden())
           mainWindow?.setTitleBarOverlay(titleBarColors())

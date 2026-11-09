@@ -375,6 +375,8 @@ export type DesktopApi = {
       target?: import('./foundation-contracts').WorkspaceTarget
     },
   ) => Promise<void>
+  getAppIconMode: () => Promise<import('./app-icon').AppIconMode>
+  setAppIconMode: (mode: import('./app-icon').AppIconMode) => Promise<void>
   setAppearance: (
     appearance: import('./colorschemes').NativeAppearance,
   ) => Promise<void>

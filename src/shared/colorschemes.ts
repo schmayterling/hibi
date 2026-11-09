@@ -42,7 +42,7 @@ export type Colorscheme = {
   appearance: 'light' | 'dark'
   author: string
   license: { name: string; text: string; source?: string }
-  /** Heading the theme picker lists the colorscheme under. */
+  /** Heading the theme picker lists the colorscheme under; the picker checks it. */
   group?: string
   colors: ColorschemeColors
 }
@@ -111,11 +111,7 @@ export function defineColorscheme(input: ColorschemeInput): Colorscheme {
     !input.license.text.trim() ||
     input.license.text.length > 32000 ||
     (input.license.source !== undefined &&
-      !/^https:\/\//.test(input.license.source)) ||
-    (input.group !== undefined &&
-      (typeof input.group !== 'string' ||
-        !input.group.trim() ||
-        input.group.length > 60))
+      !/^https:\/\//.test(input.license.source))
   )
     throw new Error(
       'This color scheme has an invalid ID, name, author, appearance, or license details.',

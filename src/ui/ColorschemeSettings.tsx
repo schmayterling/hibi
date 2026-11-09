@@ -2,16 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { Select, SettingRow } from './Controls'
 import type { ColorschemeStore } from './colorschemes'
 import './colorschemes.css'
-
-// Ungrouped colorschemes first, then each group in the order it appears.
-function groups<T extends { group?: string }>(schemes: readonly T[]) {
-  const found = new Map<string, T[]>([['', []]])
-  for (const scheme of schemes) {
-    const group = scheme.group ?? ''
-    found.set(group, [...(found.get(group) ?? []), scheme])
-  }
-  return [...found]
-}
+import { colorschemeGroups as groups } from './colorscheme-groups'
 
 export function ColorschemeSettings({
   store,

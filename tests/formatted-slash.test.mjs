@@ -7,6 +7,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -220,8 +221,10 @@ test('formatted slash offers transform commands and preserves crlf outside its e
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, path)
-  await pressShortcut(app, `${mod}+o`)
-  await matches(source)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await matches(source)
+  })
   await editor().waitFor()
   await page.evaluate(() => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root
@@ -246,8 +249,10 @@ test('formatted slash follows syntax settings and accepts Tab', {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, path)
-  await pressShortcut(app, `${mod}+o`)
-  await matches('/h2')
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await matches('/h2')
+  })
   for (const enabled of [false, true]) {
     await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: /^syntax$/i, exact: true }).click()

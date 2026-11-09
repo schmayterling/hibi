@@ -58,6 +58,7 @@ async function open(
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, `${mod}+o`)
+  await page.getByRole('tab', { name: 'note.md', exact: true }).waitFor()
   const view = (name) =>
     page
       .locator('.view-switch')

@@ -12,6 +12,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -1431,6 +1432,127 @@ for (const [layout, doc, target] of [
     })
     assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
   })
+
+test("a new width lays out a huge paragraph at the pane's top in the frame that paints it", {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(
+    async ({ doc, at, start }) => {
+      await window.tables.mount(
+        doc,
+        { width: 1400, height: 800 },
+        { editable: true, slice: 100000 },
+      )
+      const view = window.tables.view()
+      const pane = document.querySelector('.rich-pane')
+      const panes = document.querySelector('.editor-panes')
+      const frame = () => new Promise(requestAnimationFrame)
+      const settle = async () => {
+        for (let frames = 0; frames < 30; frames++) await frame()
+      }
+      const text = (pos) => {
+        const { node, offset } = view.domAtPos(pos, 1)
+        return node.nodeType === Node.TEXT_NODE && offset < node.length
+          ? { node, offset }
+          : null
+      }
+      const where = (pos) => {
+        if (
+          !view.visibleRanges.some(
+            (range) => range.from <= pos && pos < range.to,
+          )
+        )
+          return null
+        const drawn = text(pos) ?? text(pos + 1)
+        if (!drawn) return view.coordsAtPos(pos, 1).top
+        const range = document.createRange()
+        range.setStart(drawn.node, drawn.offset)
+        range.setEnd(drawn.node, drawn.offset + 1)
+        return range.getClientRects()[0].top
+      }
+      const rowAtTop = (y = 1) => {
+        const caret = document.caretPositionFromPoint(
+          view.contentDOM.getBoundingClientRect().left +
+            Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
+            1,
+          pane.getBoundingClientRect().top + y,
+        )
+        return view.posAtDOM(caret.offsetNode, caret.offset)
+      }
+      // The text the view says it shows, as the reading place reads it when
+      // an update ends, is text the page draws.
+      const undrawn = []
+      let checking = false
+      window.tables.extend(
+        view.constructor.updateListener.of(({ view }) => {
+          if (!checking) return
+          for (const { from, to } of view.visibleRanges)
+            for (const pos of to - from > 4 ? [from + 1, to - 3] : [])
+              if (!text(pos) && !text(pos + 1)) undrawn.push(pos)
+        }),
+      )
+      for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+        // Advance within the joined block so viewport work keeps its head.
+        const next = Math.min(
+          at,
+          Math.max(start, view.lineBlockAt(start).to - 1),
+        )
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(next, {
+            y: 'start',
+            yMargin: 0,
+          }),
+        })
+        for (let frames = 0; frames < 4; frames++) await frame()
+      }
+      await settle()
+      // The whole paragraph parsed, one line from its start: the screen is
+      // far into it. Parsing ahead runs while the page is idle.
+      for (let i = 0; view.lineBlockAt(at).from !== start; i++) {
+        if (i === 600) return 'paragraph not parsed'
+        await new Promise((done) => setTimeout(done, 100))
+      }
+      await settle()
+      await settle()
+      // A few rows above the place held, still inside the text drawn.
+      pane.scrollTop -= 600
+      await settle()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+      })
+      for (let frames = 0; frames < 3; frames++) await frame()
+      const pos = rowAtTop()
+      const top = where(pos)
+      const offs = []
+      checking = true
+      for (const width of [1200, 800, 1400]) {
+        panes.style.width = `${width}px`
+        // What the frame paints: this task runs after it.
+        await frame()
+        await new Promise((done) => setTimeout(done))
+        const painted = where(pos)
+        await settle()
+        const settled = where(pos)
+        for (const shown of [painted, settled])
+          offs.push(shown === null ? null : shown - top)
+      }
+      checking = false
+      return { offs, undrawn }
+    },
+    {
+      doc: hugeParagraph,
+      at: hugeParagraph.indexOf('line 15000 of'),
+      start: hugeParagraphs.length + 2,
+    },
+  )
+  const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
+  assert.ok(
+    typeof result === 'object' &&
+      !result.undrawn.length &&
+      result.offs.every(rowsHeld),
+    JSON.stringify(result),
+  )
+})
 
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>
@@ -3030,7 +3152,11 @@ test('edit keys stay in a table action cell while its parse is pending', {
 test('document commands leave an undrawn action cell intact and focused', {
   timeout: 30000,
 }, async (t) => {
-  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  // Longer than one parse chunk: the action's reparse is still pending when
+  // the key comes, as in a long note.
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph text'.repeat(450)
   for (const key of [
     { key: 'Tab' },
     { key: 'Tab', shiftKey: true },
@@ -3054,6 +3180,11 @@ test('document commands leave an undrawn action cell intact and focused', {
       const result = await harness.evaluate((key) => {
         const view = window.tables.view()
         const done = window.tables.runTableAction('row-after')
+        const waiting = {
+          pending: window.tables.settling(),
+          focused: view.hasFocus,
+          cell: !!document.activeElement?.closest('td, th'),
+        }
         const before = view.state.doc
         const event = new KeyboardEvent('keydown', {
           ...key,
@@ -3062,12 +3193,20 @@ test('document commands leave an undrawn action cell intact and focused', {
         })
         view.contentDOM.dispatchEvent(event)
         return {
+          waiting,
           done,
           prevented: event.defaultPrevented,
           unchanged: view.state.doc === before,
           focused: view.hasFocus,
         }
       }, key)
+      // The action's cell has not drawn yet when the key comes.
+      assert.deepEqual(result.waiting, {
+        pending: true,
+        focused: true,
+        cell: false,
+      })
+      delete result.waiting
       assert.deepEqual(result, {
         done: true,
         prevented: true,
@@ -3382,13 +3521,20 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   const run = async (note, start, keys, stale, drawn) => {
     let cells = null
     await harness.evaluate(
-      (doc) =>
+      ({ doc, stale }) =>
         window.tables.mount(
           doc,
           { width: 1000, height: 800 },
-          { editable: true, slice: 0 },
+          // The settled run parses each edit in its own transaction, so it
+          // never waits on idle slices; the other does. Undo steps follow the
+          // same policy in both, whatever a machine's pace.
+          {
+            editable: true,
+            slice: stale ? 0 : 100000,
+            historyGroupDelay: 3600000,
+          },
         ),
-      note,
+      { doc: note, stale },
     )
     await harness.waitForFunction(() => !window.tables.settling())
     // The last row is virtualized; a source selection brings it into view.
@@ -4303,6 +4449,7 @@ test('unfinished syntax never resolves or writes cells with old spans', {
   }
   // A settled parse may reuse its tree; its mapped widgets still need a new snapshot.
   await mount(doc)
+  await harness.waitForFunction(() => window.tables.parsed())
   await harness.evaluate(() => {
     const view = window.tables.view()
     view.focus()
@@ -6079,7 +6226,6 @@ test('two views of a tab keep the table sizes each other stores', {
           window.tables.layouts('two').some((table) => table.key === key),
         ),
       keys,
-      { timeout: 3000 },
     )
     .catch(() => {})
   assert.deepEqual(
@@ -6615,7 +6761,6 @@ test('a save that waits for the workspace stays ahead of the next one', {
     (expected) =>
       JSON.stringify(window.tables.layouts('queue')[0]?.rows) === expected,
     JSON.stringify(heights),
-    { timeout: 5000 },
   )
 })
 
@@ -6736,10 +6881,19 @@ const openFormatted = async () => {
   })
   await page.reload()
   await waitForDocumentEditor(app, page)
-  await pressShortcut(
-    app,
-    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
-  )
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (revision) => {
+        const current = await window.hibi.getDocument()
+        return current.name === 'tables.md' && current.revision > revision
+      },
+      revision,
+    )
+  })
   await page.locator('.rich-pane .hibi-lp-table').first().waitFor()
   // Hidden windows have no focus; editors need a focused page.
   const session = await page.context().newCDPSession(page)
@@ -7113,13 +7267,14 @@ test('toolbar formatting preserves genuine DOM picks across table redraws', {
             filePaths: [file],
           })
         }, file)
-        await clickMenu(app, 'Open…')
-        await waitForAsync(
-          page,
-          async (name) => (await window.hibi.getDocument()).name === name,
-          name,
-        )
-        await waitForDocumentEditor(app, page)
+        await openInDocumentEditor(app, page, async () => {
+          await clickMenu(app, 'Open…')
+          await waitForAsync(
+            page,
+            async (name) => (await window.hibi.getDocument()).name === name,
+            name,
+          )
+        })
         const rich = page.getByRole('textbox', {
           name: 'Document editor',
           exact: true,
@@ -7286,8 +7441,10 @@ test('in the app, text typed before an added row draws reaches its cell', {
   timeout: 60000,
 }, async () => {
   await openFormatted()
+  // A table longer than one parse chunk, so the added row's reparse is
+  // still pending when the next key comes.
   const doc = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
-    { length: 80 },
+    { length: 400 },
     (_, row) => `| r${row} | v${row} |`,
   ).join('\n')}\n`
   const file = join(folder, 'slow-tab.md')
@@ -7301,7 +7458,7 @@ test('in the app, text typed before an added row draws reaches its cell', {
   await clickMenu(app, 'Open…')
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(
-    () => document.activeElement?.closest('td')?.textContent.trim() === 'v79',
+    () => document.activeElement?.closest('td')?.textContent.trim() === 'v399',
   )
   // No user setting forces a parse to miss its slice. Exhaust its deadline
   // during Tab and hold idle work until the early key has arrived.
@@ -7357,7 +7514,7 @@ test('in the app, text typed before an added row draws reaches its cell', {
   await page.waitForFunction(
     () =>
       document.activeElement?.closest('td')?.parentElement.dataset.line ===
-      '82',
+      '402',
   )
   await page.keyboard.type('y')
   await waitForAsync(

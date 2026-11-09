@@ -1,21 +1,11 @@
 import { isolateHistory } from '@codemirror/commands'
 import { type EditorState, Transaction } from '@codemirror/state'
-import { type EditorView, ViewPlugin } from '@codemirror/view'
+import type { EditorView } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { uncovered } from '../../renderer/src/chunked-markdown.ts'
 import { formattedSyntaxTree } from '../../renderer/src/formatted-contributions.ts'
-import type { ViewId } from '../../shared/foundation-contracts'
 import { type LookupTarget, wordAt } from './lookup.ts'
 import { readPreferences } from './settings.ts'
-
-export const trackSourceViews = (
-  views: Map<EditorView, ViewId>,
-  viewId: ViewId,
-) =>
-  ViewPlugin.define((view) => {
-    views.set(view, viewId)
-    return { destroy: () => views.delete(view) }
-  })
 
 /**
  * Syntax whose text the formatted view does not show as text: destinations,

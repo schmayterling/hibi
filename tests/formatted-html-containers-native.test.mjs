@@ -7,6 +7,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -52,7 +53,17 @@ async function open(name, doc, token) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async ({ name, doc }) => {
+        const current = await window.hibi.getDocument()
+        return current.name === name && current.markdown === doc
+      },
+      { name, doc },
+    )
+  })
   await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
 }
 

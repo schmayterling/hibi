@@ -174,3 +174,53 @@ for (const [name, shift, flags] of [
     assert.equal(view.measureScheduled, -1)
   })
 }
+
+test('codemirror draws what its last pass measured when the measure loop gives up', (t) => {
+  globalThis.Window = class {}
+  t.after(() => {
+    delete globalThis.Window
+  })
+  const warn = t.mock.method(console, 'warn')
+  const pane = { scrollTop: 0, scrollHeight: 4000, clientHeight: 560 }
+  let measured = 0,
+    drawn = 0
+  const view = {
+    state: EditorState.create({ doc: 'line' }),
+    destroyed: false,
+    measureScheduled: -1,
+    measureRequests: [],
+    scrollDOM: pane,
+    observer: { forceFlush() {} },
+    inputState: { update() {} },
+    updatePlugins() {},
+    updateAttrs() {},
+    docView: {
+      update() {
+        drawn = measured
+        return false
+      },
+    },
+    viewState: {
+      scrollParent: pane,
+      scrollOffset: 0,
+      scrollAnchorPos: 0,
+      scrollAnchorHeight: 0,
+      scaleY: 1,
+      editorHeight: pane.clientHeight,
+      scrollTarget: null,
+      getScrollOffset: () => pane.scrollTop,
+      scrollAnchorAt: () => ({ from: 0, top: 0 }),
+      lineBlockAt: () => ({ from: 0, top: 0 }),
+      // Each pass names other text to draw, as a long line's moving gaps do.
+      measure() {
+        if (++measured > 20) throw new Error('the measure loop did not stop')
+        return 4 // Viewport.
+      },
+    },
+  }
+  EditorView.prototype.measure.call(view)
+  assert.equal(measured, 7)
+  assert.equal(drawn, measured)
+  assert.equal(warn.mock.callCount(), 1)
+  assert.equal(view.measureScheduled, -1)
+})

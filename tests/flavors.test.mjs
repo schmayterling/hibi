@@ -7,6 +7,7 @@ import { setTimeout } from 'node:timers/promises'
 import { mathFlavor } from '../src/addons/math/syntax.ts'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -42,12 +43,13 @@ test('enabled math rechecks notes containing only mid-line display math', {
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'midline.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'midline.md',
+    )
+  })
   const status = page
     .locator('[data-status-id="flavor"]')
     .filter({ hasText: /math/i })
@@ -371,6 +373,8 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
       .count(),
     0,
   )
+  const reopenRevision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
   await pressShortcut(app, `${mod}+o`)
   await page.waitForFunction(
     () =>
@@ -378,6 +382,12 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
         .querySelector('.rich-pane [aria-label="Document editor"]')
         ?.getAttribute('contenteditable') === 'false',
   )
+  await waitForAsync(
+    page,
+    async (revision) => (await window.hibi.getDocument()).revision > revision,
+    reopenRevision,
+  )
+  await waitForDocumentEditor(app, page)
   assert.equal(
     await page
       .locator('.rich-pane [aria-label="Document editor"] .katex')
@@ -471,6 +481,7 @@ test('math source bytes survive source and visual view round trips and saving', 
   await pressShortcut(app, `${mod}+Shift+]`)
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
+  await page.locator('.editor-panes.mode-normal').waitFor()
   await page.waitForFunction(
     (displays) =>
       document.querySelectorAll(
@@ -526,6 +537,7 @@ test('math source bytes survive source and visual view round trips and saving', 
   await pressShortcut(app, `${mod}+Shift+]`)
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
+  await page.locator('.editor-panes.mode-normal').waitFor()
   await page.waitForFunction(
     (displays) =>
       document.querySelectorAll(

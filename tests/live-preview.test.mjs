@@ -3269,3 +3269,126 @@ test('a far viewport reached during an edit reparse becomes formatted when idle 
     { timeout: 150000 },
   )
 })
+
+test('multi-line input over select-all keeps the first block of a note not parsed yet', {
+  timeout: 120000,
+}, async () => {
+  const tail = 'old tail paragraph\n\n'.repeat(120000)
+  const notes = [
+    ['paragraph', 'first\n\n' + tail],
+    ['heading', '## first\n\n' + tail],
+    ['list', '- first\n- second\n\n' + tail],
+    ['quote', '> first\n\n' + tail],
+    ['fence', '```js\nconst a = 1\n```\n\n' + tail],
+    ['crlf', 'first\r\n\r\n' + tail.replaceAll('\n', '\r\n')],
+  ]
+  // Hidden metadata and a byte order mark keep what the parsed note gives.
+  const kept = [
+    ['frontmatter', '---\ntitle: a\n---\nfirst\n\n' + tail, true],
+    ['bom', '\uFEFFfirst\n\n' + tail],
+  ]
+  // The input as the editor's own multi-line input runs it: the handlers,
+  // then the default insert. Held, the view keeps the snapshot it opened with.
+  const input = (held) =>
+    harness.evaluate(
+      async ({ doc, frontmatter, held }) => {
+        const preview = window.livePreview
+        const setTimer = window.setTimeout
+        const idle = window.requestIdleCallback
+        const waiting = []
+        if (held) {
+          window.setTimeout = (run, delay, ...args) =>
+            delay
+              ? setTimer(run, delay, ...args)
+              : waiting.push(() => run(...args)) && 0
+          window.requestIdleCallback = (run) =>
+            waiting.push(() =>
+              run({ timeRemaining: () => 0, didTimeout: true }),
+            ) && 0
+        }
+        try {
+          await preview.mount(
+            doc,
+            { width: 800, height: 600 },
+            { slice: 0, editable: true, frontmatter },
+          )
+          if (!held)
+            await new Promise(function wait(resolve) {
+              if (preview.covered(0, 1)) resolve()
+              else setTimer(() => wait(resolve), 16)
+            })
+          const view = preview.view()
+          const covered = preview.covered(0, 1)
+          view.dispatch({
+            selection: { anchor: 0, head: view.state.doc.length },
+          })
+          const before = view.state.doc
+          const changes = []
+          const dispatch = view.dispatch.bind(view)
+          view.dispatch = (...specs) => {
+            const transaction = specs[0]?.startState
+              ? specs[0]
+              : view.state.update(...specs)
+            changes.push(transaction.changes)
+            return dispatch(transaction)
+          }
+          const { from, to } = view.state.selection.main
+          const insert = () =>
+            view.state.update(view.state.replaceSelection('x\ny'))
+          const handled = view.state
+            .facet(view.constructor.inputHandler)
+            .some((handler) => handler(view, from, to, 'x\ny', insert))
+          if (!handled) dispatch(insert())
+          view.dispatch = dispatch
+          const ranges = []
+          for (const change of changes)
+            change.iterChanges((fromA, toA) => ranges.push([fromA, toA]))
+          return {
+            covered,
+            handled,
+            length: before.length,
+            ranges,
+            text: view.state.doc.toString(),
+          }
+        } finally {
+          window.setTimeout = setTimer
+          window.requestIdleCallback = idle
+          for (const run of waiting) run()
+        }
+      },
+      {
+        doc: held.doc,
+        frontmatter: held.frontmatter ?? false,
+        held: held.held,
+      },
+    )
+  const results = {}
+  for (const [name, doc, frontmatter] of notes) {
+    const opened = await input({ doc, frontmatter, held: true })
+    results[name] = opened.text
+    // The view opened with the note's start not parsed, as a large note does.
+    assert.equal(opened.covered, false, name)
+    const parsed = await input({ doc, frontmatter, held: false })
+    assert.equal(parsed.covered, true, name)
+    // The same blocks as once the parse has read the start.
+    assert.equal(opened.text, parsed.text, name)
+    assert.equal(opened.handled, true, name)
+    // One change replaces the whole note.
+    assert.deepEqual(opened.ranges, [[0, opened.length]], name)
+  }
+  assert.equal(results.paragraph, 'x\n\ny')
+  for (const [name, doc, frontmatter] of kept) {
+    const opened = await input({ doc, frontmatter, held: true })
+    const parsed = await input({ doc, frontmatter, held: false })
+    assert.equal(opened.text, parsed.text, name)
+  }
+  // A first block the preview's budget cannot finish keeps the default insert.
+  const fence = await input({
+    doc: '```js\n' + 'old tail line\n'.repeat(120000) + '```\n',
+    held: true,
+  })
+  assert.deepEqual(
+    { covered: fence.covered, handled: fence.handled, text: fence.text },
+    { covered: false, handled: false, text: 'x\ny' },
+  )
+})

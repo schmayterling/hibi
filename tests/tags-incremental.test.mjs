@@ -11,7 +11,8 @@ import {
 } from '../src/addons/tags/decorations.ts'
 import { scheduleTagCounts } from '../src/addons/tags/schedule.ts'
 
-test('tag count reads source after input settles and reuses document versions', async () => {
+test('tag count reads source after input settles and reuses document versions', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   let current = 'first'
   let reads = 0
   const sent = []
@@ -29,7 +30,9 @@ test('tag count reads source after input settles and reuses document versions', 
     assert.equal(reads, 0, 'edit callback must not materialize source')
     current = 'second'
     counter.refresh('second')
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    t.mock.timers.tick(249)
+    assert.equal(reads, 0, 'source stays unread before the debounce')
+    t.mock.timers.tick(1)
     assert.deepEqual(
       sent.map((job) => job.key),
       ['second'],
@@ -55,6 +58,7 @@ test('source tag scanning stays inside visible lines and skips frontmatter', (t)
     'ending #last',
   ].join('\n')
   let state = SourceState.create({ doc: source, extensions: [markdown()] })
+  t.mock.method(Date, 'now', () => 0)
   assert.ok(ensureSyntaxTree(state, state.doc.length, 1000))
   state = state.update({}).state
   const first = state.doc.line(2)
@@ -137,7 +141,7 @@ test('unclosed frontmatter skips whole-note rescans but finds a new closing fenc
   )
 })
 
-test('source tags wait for distant syntax before highlighting code fences', () => {
+test('source tags wait for distant syntax before highlighting code fences', (t) => {
   const source = [
     ...Array.from({ length: 10000 }, (_, index) => `ordinary line ${index}`),
     '```md',
@@ -161,6 +165,7 @@ test('source tags wait for distant syntax before highlighting code fences', () =
     return found
   }
   assert.deepEqual(tags(state), [])
+  t.mock.method(Date, 'now', () => 0)
   assert.ok(ensureSyntaxTree(state, visible.to, 1000))
   assert.deepEqual(tags(state), [], 'uncommitted syntax remains unavailable')
   const parsed = state.update({}).state

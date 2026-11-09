@@ -16,6 +16,7 @@ import { parse } from '@babel/parser'
 import { collectLicenses } from '../scripts/licenses.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const { version: appVersion } = JSON.parse(
   await readFile('package.json', 'utf8'),
@@ -361,6 +362,11 @@ test('licenses open on their own settings page and dialogs stay readable', {
       globalThis.openedUrl = url
     }
   })
+  // A link reaches main's shell after the page handles it.
+  const opened = (url) =>
+    waitForAsync(app, (_electron, url) => globalThis.openedUrl === url, url, {
+      label: `opens ${url}`,
+    })
   for (const [name, url] of [
     ['may', 'https://github.com/schmayterling'],
     [
@@ -369,35 +375,20 @@ test('licenses open on their own settings page and dialogs stay readable', {
     ],
   ]) {
     await panel.getByRole('link', { name, exact: true }).press('Enter')
-    assert.equal(await app.evaluate(() => globalThis.openedUrl), url)
+    await opened(url)
   }
   await panel
     .getByRole('link', { name: /support hibi development/i })
     .press('Enter')
-  assert.equal(
-    await app.evaluate(() => globalThis.openedUrl),
-    'https://github.com/sponsors/schmayterling',
-  )
+  await opened('https://github.com/sponsors/schmayterling')
   await panel.getByRole('link', { name: /^docs$/i }).click()
-  assert.equal(
-    await app.evaluate(() => globalThis.openedUrl),
-    'https://docs.hibi.garden/',
-  )
+  await opened('https://docs.hibi.garden/')
   await panel.getByRole('link', { name: /^report an issue$/i }).click()
-  assert.equal(
-    await app.evaluate(() => globalThis.openedUrl),
-    'https://github.com/schmayterling/hibi/issues',
-  )
+  await opened('https://github.com/schmayterling/hibi/issues')
   await panel.getByRole('link', { name: /^contribute$/i }).click()
-  assert.equal(
-    await app.evaluate(() => globalThis.openedUrl),
-    'https://github.com/schmayterling/hibi',
-  )
+  await opened('https://github.com/schmayterling/hibi')
   await panel.getByRole('link', { name: /^join the discord$/i }).click()
-  assert.equal(
-    await app.evaluate(() => globalThis.openedUrl),
-    'https://discord.gg/v9r4cABUP2',
-  )
+  await opened('https://discord.gg/v9r4cABUP2')
   await mkdir('test-results', { recursive: true })
   await page.screenshot({
     path: 'test-results/hibi-settings.png',

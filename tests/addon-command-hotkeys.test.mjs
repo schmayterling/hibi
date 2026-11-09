@@ -6,6 +6,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 async function pressAddonShortcut(app, shortcut) {
   const parts = shortcut.split('+')
@@ -16,17 +17,16 @@ async function pressAddonShortcut(app, shortcut) {
     alt: parts.includes('Alt'),
     shift: parts.includes('Shift'),
   }
-  // Retry only if Electron did not deliver the complete chord to main.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const before = await app.evaluate(() => globalThis.commandTestInputs.length)
-    await pressShortcut(app, shortcut)
-    for (let check = 0; check < 20; check++) {
-      const inputs = await app.evaluate(
-        (_electron, from) => globalThis.commandTestInputs.slice(from),
-        before,
-      )
-      if (
-        inputs.some(
+  const from = await app.evaluate(() => globalThis.commandTestInputs.length)
+  // One press: a chord that is only late would run the command twice if sent
+  // again. One that never reaches Electron fails here.
+  await pressShortcut(app, shortcut)
+  await waitForAsync(
+    app,
+    (_electron, { from, key, expected }) =>
+      globalThis.commandTestInputs
+        .slice(from)
+        .some(
           (input) =>
             input.key.toLowerCase() === key &&
             input.control === expected.control &&
@@ -35,13 +35,10 @@ async function pressAddonShortcut(app, shortcut) {
             input.shift === expected.shift &&
             !input.isComposing &&
             !input.isAutoRepeat,
-        )
-      )
-        return
-      await delay(10)
-    }
-  }
-  throw new Error('Native addon shortcut chord did not reach Electron.')
+        ),
+    { from, key, expected },
+    { label: `the native ${shortcut} chord reaches Electron` },
+  )
 }
 
 async function waitForAddonHotkey(page, present, shortcut) {
@@ -223,19 +220,15 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   const enabled = page.locator('#addon-command-probe')
   await enabled.click()
   await waitForAddonHotkey(page, false)
-  await app.evaluate(async ({ Menu }) => {
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const addons = Menu.getApplicationMenu()?.items.find(
-        ({ label }) => label.toLowerCase() === 'addons',
-      )
-      if (
-        !addons?.submenu?.items.some(({ label }) => label === 'Example action')
-      )
-        return
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    throw new Error('Addon menu item remained after disable.')
-  })
+  await waitForAsync(
+    app,
+    ({ Menu }) =>
+      !Menu.getApplicationMenu()
+        ?.items.find(({ label }) => label.toLowerCase() === 'addons')
+        ?.submenu?.items.some(({ label }) => label === 'Example action'),
+    undefined,
+    { label: 'the addon menu item is removed after disable' },
+  )
   await assert.rejects(clickMenu(app, 'Example action'), /unavailable/)
 
   await enabled.click()
@@ -300,16 +293,13 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
       .isDisabled(),
     true,
   )
-  await app.evaluate(async () => {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (typeof globalThis.releaseAddonRecording === 'function') {
-        globalThis.releaseAddonRecording()
-        return
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    throw new Error('Shortcut recording request did not reach main process.')
-  })
+  await waitForAsync(
+    app,
+    () => typeof globalThis.releaseAddonRecording === 'function',
+    undefined,
+    { label: 'the shortcut recording request reaches main' },
+  )
+  await app.evaluate(() => globalThis.releaseAddonRecording())
   await page.waitForFunction(
     () =>
       document

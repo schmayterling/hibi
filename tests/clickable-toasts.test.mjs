@@ -80,7 +80,7 @@ test('the update notice opens About at the update status by click or keyboard', 
   const focus = `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+N`
   const hotkeys = await page.evaluate(() => window.hibi.getHotkeys())
   assert.equal(hotkeys['focus-notifications'], '')
-  await pressShortcut(app, focus)
+  await pressShortcut(app, focus, { delivered: true })
   await page.evaluate(() => new Promise(requestAnimationFrame))
   assert.equal(
     await tab.evaluate((element) => element === document.activeElement),

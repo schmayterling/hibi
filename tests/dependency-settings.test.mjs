@@ -169,6 +169,8 @@ test('dependency settings discover addon requirements, manage shared paths, and 
   await card.getByText('Not found', { exact: true }).waitFor()
   await card.locator('summary').click()
   await card.getByRole('link', { name: /installation guide/i }).click()
+  // The link reaches main's shell after the page handles it.
+  await waitForAsync(app, () => globalThis.dependencyUrls.length > 0)
   assert.deepEqual(await app.evaluate(() => globalThis.dependencyUrls), [
     'https://example.com/install',
   ])

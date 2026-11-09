@@ -26,6 +26,35 @@ test('owned strings preserve every UTF-16 unit across copy blocks, including lon
   }
 })
 
+test('only text long enough to share a parent is copied', (t) => {
+  // A Tab over 16384 code lines parses 16384 one-unit inserts in four layers.
+  const parent = `${'x'.repeat(8192)}${Math.random()}`
+  const changes = Array.from({ length: 16384 }, (_, line) => ({
+    from: line * 64,
+    to: line * 64,
+    insert: '\t',
+  }))
+  changes.push(
+    { from: 16384 * 64, to: 16384 * 64 + 1, insert: parent.slice(1, 13) },
+    { from: 16384 * 64 + 2, to: 16384 * 64 + 3, insert: parent.slice(1, 14) },
+  )
+  const clone = t.mock.method(globalThis, 'structuredClone')
+  const parsed = parseSourceOperation({
+    document: { tabId: 'test', revision: 0 },
+    operationId: 'tab',
+    baseVersion: 0,
+    contentVersion: 1,
+    origin: 'source',
+    historyGroup: 'indent',
+    changes,
+  })
+  assert.deepEqual(
+    clone.mock.calls.map(({ arguments: [text] }) => text),
+    [parent.slice(1, 14)],
+  )
+  assert.deepEqual(parsed.changes, changes)
+})
+
 test('only privately validated immutable messages bypass repeated parsing', () => {
   const changes = [{ from: 0, to: 0, insert: 'before' }]
   const parsed = parseSourceOperation({

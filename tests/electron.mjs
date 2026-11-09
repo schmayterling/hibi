@@ -1131,6 +1131,34 @@ export async function waitForFormattedEditor(
   return editor
 }
 
+/**
+ * Run `open`, which shows another document, and wait for that document's
+ * editor. The window mounts a new editor for each document, and the one shown
+ * before stays ready until it is replaced, also while a screen such as
+ * settings hides it.
+ */
+export async function openInDocumentEditor(application, page, open, options) {
+  const shown = await page
+    .locator('#document-editor-panel')
+    .getByRole('textbox', {
+      name: options?.name ?? 'Document editor',
+      exact: true,
+      includeHidden: true,
+    })
+    .elementHandles()
+  try {
+    await open()
+    for (const editor of shown)
+      await waitForAsync(page, (editor) => !editor.isConnected, editor, {
+        label: 'the editor shown before the open is replaced',
+        ...(options?.timeout === undefined ? {} : { timeout: options.timeout }),
+      })
+  } finally {
+    await Promise.all(shown.map((editor) => editor.dispose()))
+  }
+  await waitForDocumentEditor(application, page, options)
+}
+
 export const APP_STATE_TIMEOUT = 7000
 // This Playwright build treats Promise-valued waitForFunction predicates as
 // truthy before they resolve. Evaluate and await async checks in the host.

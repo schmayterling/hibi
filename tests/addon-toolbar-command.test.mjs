@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -118,7 +122,7 @@ test('installed toolbar command captures rich and source selection and stays own
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await clickMenu(app, 'Open…')
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   const rich = page.locator(
     '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
   )

@@ -290,6 +290,7 @@ async function openFind(
   markdown,
   instrument = false,
   renderedProbe = false,
+  slide = false,
 ) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-find-'))
   const app = await electron.launch({
@@ -360,6 +361,19 @@ async function openFind(
     async (markdown) => (await window.hibi.getDocument()).markdown === markdown,
     markdown,
   )
+  // The formatted pane slides back in from the source view's side, and is
+  // still off screen while the reader finds.
+  if (slide) {
+    await waitForAsync(page, () =>
+      document
+        .querySelector('.rich-pane')
+        .getAnimations()
+        .every((animation) => animation.playState === 'finished'),
+    )
+    await page.evaluate(() =>
+      document.documentElement.style.setProperty('--motion-pane', '3600s'),
+    )
+  }
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await rich.waitFor()
   await rich.focus()
@@ -541,6 +555,7 @@ test('formatted find follows the active syntax configuration', {
       .getByRole('button', { name: /^back to app$/i, exact: true })
       .click()
     await pressShortcut(app, `${mod}+f`)
+    await waitForAsync(input, (element) => element === document.activeElement)
     const ranges = enabled
       ? [
           [0, 13],
@@ -773,6 +788,7 @@ test('formatted find reopens the existing query on a second shortcut without cha
   await count('1/3')
   await rich.click()
   await pressShortcut(app, mod + '+f')
+  await waitForAsync(input, (element) => element === document.activeElement)
   assert.equal(await input.inputValue(), 'hello world')
   assert.equal(
     await input.evaluate((element) => element === document.activeElement),
@@ -1088,9 +1104,9 @@ for (const kind of ['code', 'wrapped', 'wide code start']) {
   })
 }
 
-async function countedDenseFind(t) {
+async function countedDenseFind(t, slide = false) {
   const dense = 'needle word '.repeat(10000).trimEnd()
-  const fixture = await openFind(t, dense, true)
+  const fixture = await openFind(t, dense, true, false, slide)
   await fixture.input.fill('NEEDLE')
   await fixture.page.waitForFunction(() => window.findWork.held.length > 0)
   const workers = await findWorkers(fixture.page)
@@ -1116,51 +1132,138 @@ async function countedDenseFind(t) {
   return { ...fixture, dense, workers, initial, owners }
 }
 
-test('formatted find selection-only moves reuse worker search work and keep renderer folding bounded', {
-  timeout: 60000,
-}, async (t) => {
-  const { page, rich, input, count, dense, workers, owners } =
-    await countedDenseFind(t)
-  await page.evaluate(() => {
-    window.findWork.lower = window.findWork.normalized = 0
-    window.findWork.measuring = true
+// Off screen, as while the formatted pane slides in, the find window is
+// what the view draws.
+for (const [name, slide] of [
+  [
+    'formatted find selection-only moves reuse worker search work and keep renderer folding bounded',
+    false,
+  ],
+  [
+    'formatted find selection-only moves keep worker search work bounded while the formatted pane slides in',
+    true,
+  ],
+])
+  test(name, { timeout: 60000 }, async (t) => {
+    const { page, rich, input, count, dense, workers, owners } =
+      await countedDenseFind(t, slide)
+    await page.evaluate(() => {
+      window.findWork.lower = window.findWork.normalized = 0
+      window.findWork.measuring = true
+    })
+    for (const [key, expected] of [
+      ['Enter', '2/10000'],
+      ['Shift+Enter', '1/10000'],
+      ['Shift+Enter', '10000/10000'],
+      ['Enter', '1/10000'],
+    ]) {
+      await input.press(key)
+      await count(expected)
+    }
+    const measured = await foldWork(workers)
+    const main = await page.evaluate(() => {
+      window.findWork.measuring = false
+      return {
+        lower: window.findWork.lower,
+        normalized: window.findWork.normalized,
+        requests: window.findWork.requests,
+      }
+    })
+    assert.ok(
+      measured.lower < dense.length,
+      JSON.stringify({ measured, owners }),
+    )
+    assert.ok(
+      measured.normalized < dense.length,
+      JSON.stringify({ measured, owners }),
+    )
+    assert.ok(
+      main.lower < dense.length && main.normalized < dense.length,
+      JSON.stringify(main),
+    )
+    assert.equal(
+      await rich.locator('.cm-searchMatch-selected').textContent(),
+      'needle',
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      dense,
+    )
   })
-  for (const [key, expected] of [
-    ['Enter', '2/10000'],
-    ['Shift+Enter', '1/10000'],
-    ['Shift+Enter', '10000/10000'],
-    ['Enter', '1/10000'],
-  ]) {
+
+// Matches on the formatted pane's screen that are not highlighted, read
+// where the screen's text is.
+function unmarkedOnScreen() {
+  const element = document.querySelector('.rich-pane .cm-content')
+  const view = element.cmTile.root.view
+  const box = element.getBoundingClientRect()
+  const clip = element.closest('.rich-pane').getBoundingClientRect()
+  const x =
+    box.left + Number.parseFloat(getComputedStyle(element).paddingLeft) + 1
+  const from = view.posAtCoords({ x, y: Math.max(box.top, clip.top) + 1 })
+  const to = view.posAtCoords({ x, y: Math.min(box.bottom, clip.bottom) - 1 })
+  const marked = new Set(
+    [...element.querySelectorAll('.cm-searchMatch')].map((mark) =>
+      view.posAtDOM(mark, 0),
+    ),
+  )
+  const matches = [...view.state.doc.toString().matchAll(/needle/g)]
+    .map((match) => match.index)
+    .filter((at) => at < to && at + 6 > from)
+  return {
+    left: box.left,
+    matches: matches.length,
+    unmarked: matches.filter((at) => !marked.has(at)).length,
+  }
+}
+
+// A match found while the formatted pane slides in, off screen, is shown
+// with the matches around it once the pane is in place, or snaps there when
+// motion is reduced; one near the text the pane drew already is, as the pane
+// comes in.
+for (const [key, expected, halfway, reduced] of [
+  ['Enter', '2/10000', true, false],
+  ['Shift+Enter', '10000/10000', false, false],
+  ['Shift+Enter', '10000/10000', false, true],
+])
+  test(`formatted find highlights what the formatted pane shows once it ${reduced ? 'snaps' : 'slides'} in after ${key}`, {
+    timeout: 60000,
+  }, async (t) => {
+    const { page, rich, input, count } = await countedDenseFind(t, true)
     await input.press(key)
     await count(expected)
-  }
-  const measured = await foldWork(workers)
-  const main = await page.evaluate(() => {
-    window.findWork.measuring = false
-    return {
-      lower: window.findWork.lower,
-      normalized: window.findWork.normalized,
-      requests: window.findWork.requests,
+    // The jump settles while the pane is still off screen.
+    await page.evaluate(async () => {
+      for (let frame = 0; frame < 30; frame++)
+        await new Promise(requestAnimationFrame)
+    })
+    if (reduced) await page.emulateMedia({ reducedMotion: 'reduce' })
+    for (const end of halfway ? [false, true] : [true]) {
+      // Highlights that follow the pane are there within its next frames.
+      const shown = await page.evaluate(
+        `(async () => {
+          for (const animation of document
+            .querySelector('.rich-pane')
+            .getAnimations())
+            if (${end}) animation.finish()
+            else {
+              animation.pause()
+              animation.currentTime =
+                animation.effect.getComputedTiming().duration / 2
+            }
+          for (let frame = 0; frame < 30; frame++)
+            await new Promise(requestAnimationFrame)
+          return (${unmarkedOnScreen})()
+        })()`,
+      )
+      assert.ok(shown.left < 900 && shown.matches > 0, JSON.stringify(shown))
+      assert.equal(shown.unmarked, 0, JSON.stringify({ end, ...shown }))
     }
+    assert.equal(
+      await rich.locator('.cm-searchMatch-selected').textContent(),
+      'needle',
+    )
   })
-  assert.ok(measured.lower < dense.length, JSON.stringify({ measured, owners }))
-  assert.ok(
-    measured.normalized < dense.length,
-    JSON.stringify({ measured, owners }),
-  )
-  assert.ok(
-    main.lower < dense.length && main.normalized < dense.length,
-    JSON.stringify(main),
-  )
-  assert.equal(
-    await rich.locator('.cm-searchMatch-selected').textContent(),
-    'needle',
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    dense,
-  )
-})
 
 test('formatted find moving to an adjacent match restyles highlights without rewriting rendered text', {
   timeout: 45000,

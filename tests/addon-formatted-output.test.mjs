@@ -6,9 +6,10 @@ import test from 'node:test'
 import {
   electron,
   expectPageError,
+  openInDocumentEditor,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -68,12 +69,15 @@ async function open(t, source, code, prepare) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    source,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
+  })
   await page
     .locator('.editor-panes[data-source-ready="true"] .rich-pane .cm-content')
     .waitFor()
@@ -248,11 +252,16 @@ test('layout output beyond its node is reported with its owner and later blocks 
   )
   await caretAtEnd(page)
   await type(page, ['1', '2', '3'])
+  const expected = source.replace('end', 'end12')
   await pressShortcut(app, 'Backspace')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    expected,
+  )
   await frame(page)
   const after = await state(page)
   t.diagnostic(JSON.stringify({ after, errors }))
-  const expected = source.replace('end', 'end12')
   assert.equal(after.canonical, expected)
   assert.equal(after.view, expected)
   assert.match(after.text, /\bend12\n/)
@@ -293,7 +302,7 @@ test('a view update that throws while drawing resynchronizes the formatted view 
   await page.evaluate(() => {
     window.failOnce = true
   })
-  await type(page, ['1', '2', '3'])
+  await withHeldClock(page, () => type(page, ['1', '2', '3']))
   const after = await state(page)
   t.diagnostic(JSON.stringify({ after, errors }))
   const expected = source.replace('end', 'end123')

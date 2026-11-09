@@ -107,6 +107,7 @@ test('find in document searches rich text and offscreen markdown without editing
   await waitForCount('1/3')
   await rich.click()
   await pressShortcut(app, shortcut)
+  await waitForAsync(input, (element) => element === document.activeElement)
   assert.equal(
     await input.evaluate((element) => element === document.activeElement),
     true,
@@ -199,6 +200,7 @@ test('find in document searches rich text and offscreen markdown without editing
   assert.equal(await source.locator('.cm-searchMatch-selected').count(), 1)
   await rich.focus()
   await pressShortcut(app, shortcut)
+  await waitForAsync(input, (element) => element === document.activeElement)
   await waitForCount('1/1')
   await rich.locator('.cm-searchMatch-selected').waitFor()
   assert.equal(await rich.locator('.cm-searchMatch-selected').count(), 1)

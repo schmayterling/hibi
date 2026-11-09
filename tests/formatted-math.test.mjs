@@ -9,6 +9,7 @@ import {
   after,
   before,
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -87,7 +88,19 @@ async function open(name) {
     },
     join(folder, 'notes', name),
   )
-  await pressShortcut(app, `${mod}+o`)
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async ({ name, revision }) => {
+        const current = await window.hibi.getDocument()
+        return current.name === name && current.revision > revision
+      },
+      { name, revision },
+    )
+  })
 }
 
 /** Reload the window with the marker setting. */
@@ -650,6 +663,7 @@ test('display blocks read to their closing line and end with their list item, as
     source,
   )
   await page.locator('.rich-pane [data-type="block-math"]').waitFor()
+  await waitForDocumentEditor(app, page)
   const start = source.indexOf('$$'),
     end = source.length - 1
   for (const [key, from, to, expected] of [

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
@@ -129,13 +129,14 @@ test('side-by-side panes keep their own undo steps and selections', {
           filePaths: [file],
         })
       }, file)
-      await clickMenu(app, 'Open…')
-      await waitForAsync(
-        page,
-        async (name) => (await window.hibi.getDocument()).name === name,
-        `note-${index}.md`,
-      )
-      await waitForDocumentEditor(app, page)
+      await openInDocumentEditor(app, page, async () => {
+        await clickMenu(app, 'Open…')
+        await waitForAsync(
+          page,
+          async (name) => (await window.hibi.getDocument()).name === name,
+          `note-${index}.md`,
+        )
+      })
       if (!(await page.locator('.mode-side-by-side').count()))
         await page
           .getByRole('button', { name: /^side-by-side$/i, exact: true })
@@ -194,8 +195,13 @@ test('side-by-side panes keep their own undo steps and selections', {
       for (const group of [...item.groups].reverse()) {
         await pressShortcut(app, `${mod}+z`)
         const expected = before[group[0]],
-          pane = item.steps[group[0]][0],
-          now = await state()
+          pane = item.steps[group[0]][0]
+        await waitForAsync(
+          page,
+          async (text) => (await window.hibi.getDocument()).markdown === text,
+          expected.text,
+        )
+        const now = await state()
         assert.equal(now.text, expected.text, `undo ${group}`)
         assert.deepEqual(now[pane], expected[pane], `undo ${group} ${pane}`)
       }
@@ -203,8 +209,13 @@ test('side-by-side panes keep their own undo steps and selections', {
       for (const group of item.groups) {
         await pressShortcut(app, redo)
         const expected = after[group.at(-1)],
-          pane = item.steps[group.at(-1)][0],
-          now = await state()
+          pane = item.steps[group.at(-1)][0]
+        await waitForAsync(
+          page,
+          async (text) => (await window.hibi.getDocument()).markdown === text,
+          expected.text,
+        )
+        const now = await state()
         assert.equal(now.text, expected.text, `redo ${group}`)
         assert.deepEqual(now[pane], expected[pane], `redo ${group} ${pane}`)
       }

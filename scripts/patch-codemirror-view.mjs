@@ -70,6 +70,36 @@ const patches = [
     }
     gapSize(line, from, to, structure) {`,
   ],
+  // The measure loop gives up after its seventh pass, as when a very long
+  // wrapped line's gaps move with each new height. It stopped right after
+  // measuring, before drawing what that pass found: the view then named text
+  // as drawn, and placed gaps, that the page did not have, and anything
+  // reading positions in that frame, as the reading place does, read the
+  // text a gap's height away. The last pass now draws what it measured
+  // before the loop stops.
+  [
+    `                if (i > 5) {
+                    console.warn(this.measureRequests.length
+                        ? "Measure loop restarted more than 5 times"
+                        : "Viewport failed to stabilize");
+                    break;
+                }`,
+    `                let last = i > 5;
+                if (last)
+                    console.warn(this.measureRequests.length
+                        ? "Measure loop restarted more than 5 times"
+                        : "Viewport failed to stabilize");`,
+  ],
+  [
+    `                if (redrawn)
+                    this.docView.updateSelection(true);
+                if (!update.viewportChanged && this.measureRequests.length == 0) {`,
+    `                if (redrawn)
+                    this.docView.updateSelection(true);
+                if (last)
+                    break;
+                if (!update.viewportChanged && this.measureRequests.length == 0) {`,
+  ],
   // A widget that throws while it draws, as any addon's can, fails the whole
   // update: the text is ahead of the DOM, and redrawing fails the same way
   // after CodeMirror has dropped its old plugins and content, which leaves the

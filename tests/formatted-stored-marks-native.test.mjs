@@ -6,7 +6,7 @@ import test from 'node:test'
 import { marked } from 'marked'
 import {
   electron,
-  waitForDocumentEditor,
+  openInDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
@@ -177,13 +177,14 @@ test('stored mark review cases through native input and toolbar', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      `${name}.md`,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${name}.md`,
+      )
+    })
     await rich.focus()
     await rich.evaluate(
       (element, raw) =>
@@ -253,6 +254,12 @@ test('stored mark review cases through native input and toolbar', {
     assert.equal(marked.parseInline(typed), marked.parseInline('a ``bx`y``'))
     await history(source, typed)
     await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
     assert.equal(await snapshot(), source)
     await page.keyboard.type('Z')
     const replaced = await snapshot()
@@ -404,6 +411,10 @@ test('stored mark review cases through native input and toolbar', {
     await action('bold')
     await page.keyboard.type('X')
     await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === 'plain end',
+    )
     assert.equal(await snapshot(), 'plain end')
     await page.keyboard.type('Y')
     const typed = await snapshot()

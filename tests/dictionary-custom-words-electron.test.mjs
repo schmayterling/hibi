@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -131,12 +132,13 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
     await waitForDocumentEditor(app, page)
   }
 
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+  })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,

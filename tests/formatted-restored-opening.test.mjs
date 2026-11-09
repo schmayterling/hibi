@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
+import { uncovered } from '../src/renderer/src/chunked-markdown.ts'
 import {
   formattedSyntax,
   restoredOpening,
@@ -54,4 +55,29 @@ test('a view restored deep in a note reads inline syntax at its place, not at th
   )
   // A new view reads its first 8 KB.
   assert.ok(parsed(t, [], {}, 1).every((from) => from < 8192 + 64))
+})
+
+test('a restored note shorter than a chunk opens parsed within its ceiling on a slow first slice', (t) => {
+  // The rebuilt reading note: a view restored near its end. Before, a boundary
+  // scan of the whole note came first, and at 16 ms per clock read the
+  // ceiling ended the parse with nothing parsed.
+  const note = `${Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')}end\n\n`
+  const at = note.indexOf('line 300')
+  const opened = (step) => {
+    let now = 0
+    t.mock.method(performance, 'now', () => {
+      now += step
+      return now
+    })
+    const syntax = formattedSyntax({})
+    const state = EditorState.create({
+      doc: note,
+      extensions: [restoredOpening.of(at), syntax.extension],
+    })
+    t.mock.restoreAll()
+    return syntax.tree(state)
+  }
+  assert.equal(uncovered(opened(16), 0, note.length), false)
+  // The ceiling still ends a parse step that takes all of it.
+  assert.equal(uncovered(opened(48), at, note.length), true)
 })

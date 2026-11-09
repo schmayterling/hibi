@@ -1254,6 +1254,7 @@
     "src/addons/vim/Settings.tsx"
   ],
   "8c3440194015": [
+    "src/shared/admitted-operations.ts",
     "src/shared/document-journal.ts"
   ],
   "dad252a1ef19": [
@@ -7240,6 +7241,9 @@
   ],
   "7786cacd2ef2": [
     "src/addons/dictionary/PackSettings.tsx"
+  ],
+  "ffa7aa26add4": [
+    "src/shared/admitted-operations.ts"
   ],
   "b0291a853226": [
     "src/main/file-associations.ts"

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { setTimeout as delay } from 'node:timers/promises'
 import { gitDecorations } from '../src/addons/git/decorations.ts'
 import { explorerDecorations } from '../src/renderer/src/explorer-decorations.ts'
 
@@ -30,11 +29,13 @@ test('git markers cover staged, unstaged, new, renamed, deleted, and conflicting
   assert.deepEqual(gitDecorations([]), [])
 })
 
-test('explorer providers discard results from previous workspaces and disposed owners', async () => {
+test('explorer providers discard results from previous workspaces and disposed owners', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const pending = []
   const wait = async (condition) => {
-    const deadline = Date.now() + 2000
-    while (!condition() && Date.now() < deadline) await delay(20)
+    await new Promise(setImmediate)
+    t.mock.timers.tick(150)
+    await new Promise(setImmediate)
     assert.ok(condition())
   }
   const workspace = (id) => ({
@@ -67,7 +68,7 @@ test('explorer providers discard results from previous workspaces and disposed o
     await wait(() => pending.length === 3)
     remove()
     pending[2].resolve([{ path: 'same.md', label: 'disposed', badge: 'M' }])
-    await delay(20)
+    await new Promise(setImmediate)
     assert.equal(explorerDecorations.snapshot().size, 0)
     const removeNew = explorerDecorations.register('test.git', {
       id: 'git',
@@ -82,13 +83,15 @@ test('explorer providers discard results from previous workspaces and disposed o
   }
 })
 
-test('explorer providers publish only changed decorations and keep the last provider for a path', async () => {
+test('explorer providers publish only changed decorations and keep the last provider for a path', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const results = { first: [], second: [] }
   const calls = { first: 0, second: 0 }
   let publications = 0
   const wait = async (condition) => {
-    const deadline = Date.now() + 2000
-    while (!condition() && Date.now() < deadline) await delay(20)
+    await new Promise(setImmediate)
+    t.mock.timers.tick(150)
+    await new Promise(setImmediate)
     assert.ok(condition())
   }
   const provider = (id) => ({
@@ -167,7 +170,8 @@ test('explorer providers publish only changed decorations and keep the last prov
   }
 })
 
-test('explorer providers may mutate and return the same decoration objects', async () => {
+test('explorer providers may mutate and return the same decoration objects', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const item = {
     path: 'a.md',
     label: 'Status 1',
@@ -177,8 +181,9 @@ test('explorer providers may mutate and return the same decoration objects', asy
   let calls = 0
   let publications = 0
   const wait = async (condition) => {
-    const deadline = Date.now() + 2000
-    while (!condition() && Date.now() < deadline) await delay(20)
+    await new Promise(setImmediate)
+    t.mock.timers.tick(150)
+    await new Promise(setImmediate)
     assert.ok(condition())
   }
   const unsubscribe = explorerDecorations.subscribe(() => publications++)

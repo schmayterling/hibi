@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -244,10 +245,17 @@ test('a review addon applies source edits atomically, preserves undo, and reject
     return result
   })
   assert.equal(busy.status, 'busy')
-  await clickMenu(app, 'New')
-  await waitForAsync(
+  await openInDocumentEditor(
+    app,
     page,
-    async () => (await window.hibi.getDocument()).markdown === '',
+    async () => {
+      await clickMenu(app, 'New')
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).markdown === '',
+      )
+    },
+    { name: 'Markdown editor' },
   )
   assert.equal(
     await page.evaluate(

@@ -13,6 +13,7 @@ import {
 import {
   after,
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -798,13 +799,13 @@ test('native table picks retain multiline caret positions, scalar boundaries and
             app,
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
-          assert.equal((await acceptedInput(page)).markdown, before.markdown)
+          await waitForInputSource(page, before.markdown)
           await pressShortcut(
             app,
             process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
           )
+          await waitForInputSource(page, actual.markdown)
           const redone = await acceptedInput(page)
-          assert.equal(redone.markdown, actual.markdown)
           assert.deepEqual(await cmCaretText(rich), result.caret)
           await page.keyboard.insertText('Q')
           const continued = await acceptedInput(page)
@@ -1003,7 +1004,7 @@ test('partial native table picks keep unselected cell text and one-step history'
               app,
               process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
             )
-            assert.equal((await acceptedInput(page)).markdown, source)
+            await waitForInputSource(page, source)
           },
         )
 })
@@ -1106,18 +1107,15 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
         key === 'x' ? 'cut' : 'copy',
       )
     else await page.keyboard.press('ControlOrMeta+' + key)
-    const deadline = performance.now() + 3000
-    const types = await app.evaluate(async ({ BrowserWindow }, end) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents
-      while (Date.now() < end) {
-        const types = await contents.executeJavaScript(
-          'window.copiedTypes',
-          false,
-        )
-        if (types) return types
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-    }, Date.now() + 3000)
+    const copied = ({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        'window.copiedTypes',
+        false,
+      )
+    await waitForAsync(app, copied, undefined, {
+      label: 'the page wrote a copy',
+    })
+    const types = await app.evaluate(copied)
     assert.ok(types?.length, 'the page wrote a copy')
     const read = () =>
       app.evaluate(async ({ clipboard }) => {
@@ -1136,8 +1134,16 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       held.text === sentinel ||
       (types.includes('text/plain') && !held.text) ||
       (types.includes('text/html') && held.html === null)
-    let held = await read()
-    while (partial(held) && performance.now() < deadline) held = await read()
+    let held
+    await waitForAsync(
+      { evaluate: (predicate) => predicate() },
+      async () => {
+        held = await read()
+        return !partial(held)
+      },
+      undefined,
+      { label: 'every format the page wrote is on the clipboard' },
+    )
     assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
     assert.ok(!partial(held), 'every format the page wrote is on the clipboard')
     return held
@@ -1995,13 +2001,14 @@ async function launchInputFixture(t, source, counted = false) {
   await waitForFormattedEditor(app, page)
   cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    counted ? 'input.countmd' : 'input.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      counted ? 'input.countmd' : 'input.md',
+    )
+  })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -2033,13 +2040,14 @@ async function openInputFixture(source) {
       filePaths: [path],
     })
   }, path)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async (name) => (await window.hibi.getDocument()).name === name,
-    name,
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  })
   return { app, page, rich }
 }
 
@@ -2196,6 +2204,7 @@ async function inputWorkProbe(rich) {
       prevented: [],
       beforeinput: [],
       inputs: [],
+      batches: [],
     }
     const mapping = Object.getPrototypeOf(
       Object.getPrototypeOf(view.state.changes([])),
@@ -2209,6 +2218,18 @@ async function inputWorkProbe(rich) {
     }
     const update = view.update.bind(view)
     view.update = (transactions) => {
+      // Each batch as the source session reads it: its last transaction's
+      // public time and user event, and whether it edits or only selects.
+      const last = transactions.at(-1)
+      if (last)
+        window.cmInputWork.batches.push({
+          time: last.annotation(last.constructor.time),
+          typing: /^(input\.type|delete\.(backward|forward))(\.|$)/.test(
+            last.annotation(last.constructor.userEvent) ?? '',
+          ),
+          changed: transactions.some((transaction) => transaction.docChanged),
+          selection: transactions.some((transaction) => transaction.selection),
+        })
       for (const transaction of transactions)
         if (transaction.docChanged) {
           window.cmInputWork.changes++
@@ -2593,7 +2614,7 @@ test('native multiline input at the only empty list item retains the following p
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
     )
-    assert.equal((await acceptedInput(page)).markdown, oracle.source)
+    await waitForInputSource(page, oracle.source)
   })
 })
 
@@ -2757,12 +2778,12 @@ for (const hiddenSource of [false, true]) {
         app,
         process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
       )
-      assert.equal((await acceptedInput(page)).markdown, '')
+      await waitForInputSource(page, '')
       await pressShortcut(
         app,
         process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
       )
-      assert.equal((await acceptedInput(page)).markdown, 'hello')
+      await waitForInputSource(page, 'hello')
     })
     if (hiddenSource) {
       await page
@@ -3019,7 +3040,7 @@ for (const spaces of [1, 2]) {
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
     )
-    assert.equal((await acceptedInput(page)).markdown, '')
+    await waitForInputSource(page, '')
   })
 }
 
@@ -3058,12 +3079,12 @@ test('the original 200–256 KiB HTML/reference note stays natively editable thr
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
-  assert.equal((await acceptedInput(page)).markdown, original)
+  await waitForInputSource(page, original)
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
   )
-  assert.equal((await acceptedInput(page)).markdown, edited)
+  await waitForInputSource(page, edited)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await page.getByRole('button', { name: 'normal', exact: true }).click()
@@ -3367,6 +3388,7 @@ test('a separately typed cell space retains its caret and next word', {
       const { app, page, rich, file } = await launchInputFixture(t, source)
       const before = await acceptedInput(page)
       assert.equal(before.markdown, source)
+      await settledInputToolbar(page, 'undo', { disabled: true })
       const end = source.indexOf('south') + 5
       await rich.evaluate((element, anchor) => {
         element.cmTile.root.view.focus()
@@ -3430,15 +3452,44 @@ test('a separately typed cell space retains its caret and next word', {
           .count(),
         0,
       )
+      // The session starts a history step after a selection-only update or a
+      // non-typing edit, or more than 500 ms after the last edit: the space
+      // and the word are one step unless the checks between them took longer.
+      const glyphs = ' border'
+      const starts = []
+      let glyph = 0,
+        cut = true,
+        last = null
+      for (const batch of work.batches) {
+        if (!batch.changed) {
+          cut ||= batch.selection
+          continue
+        }
+        if (cut || batch.time - last.time > 500 || !last.typing)
+          starts.push(glyph)
+        glyph++
+        cut = false
+        last = batch
+      }
+      assert.equal(glyph, glyphs.length)
+      t.diagnostic(`history steps start at ${starts.join(',')}`)
+      const typedTo = (count) =>
+        source.replace('south', `south${glyphs.slice(0, count)}`)
       const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-      await pressShortcut(app, mod + '+z')
-      assert.equal((await acceptedInput(page)).markdown, source)
-      await pressShortcut(
-        app,
-        process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
-      )
+      for (const count of starts.toReversed()) {
+        await pressShortcut(app, mod + '+z')
+        await waitForInputSource(page, typedTo(count))
+      }
+      await settledInputToolbar(page, 'undo', { disabled: true })
+      for (const count of [...starts.slice(1), glyphs.length]) {
+        await pressShortcut(
+          app,
+          process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
+        )
+        await waitForInputSource(page, typedTo(count))
+      }
+      await settledInputToolbar(page, 'redo', { disabled: true })
       const redone = await acceptedInput(page)
-      assert.equal(redone.markdown, typed.markdown)
       await checkCaret(end + ' border'.length)
       const receipt = await page.evaluate(() => window.hibi.saveDocument(false))
       assert.equal(receipt.saveReceipt, true)

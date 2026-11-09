@@ -7,7 +7,7 @@ import {
   launchBenchmarkApp,
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
-import { waitForDocumentEditor } from './electron.mjs'
+import { openInDocumentEditor, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -40,12 +40,20 @@ test('tab shortcuts wrap and preserve source drafts without saving', {
     ids.push((await page.evaluate(() => window.hibi.getDocument())).tabId)
   }
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  const cycle = async (key, id) => {
-    await pressShortcut(app, `${mod}+Alt+${key}`)
-    await waitForAsync(
+  // `editor` is the one the window's current view shows the note in.
+  const cycle = async (key, id, editor = 'Document editor') => {
+    await openInDocumentEditor(
+      app,
       page,
-      async (id) => (await window.hibi.getDocument()).tabId === id,
-      id,
+      async () => {
+        await pressShortcut(app, `${mod}+Alt+${key}`)
+        await waitForAsync(
+          page,
+          async (id) => (await window.hibi.getDocument()).tabId === id,
+          id,
+        )
+      },
+      { name: editor },
     )
     await page.locator(`#document-tab-${id}[aria-selected="true"]`).waitFor()
   }
@@ -57,8 +65,8 @@ test('tab shortcuts wrap and preserve source drafts without saving', {
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, 'draft a')
-  await cycle('Right', ids[1])
-  await cycle('Left', ids[0])
+  await cycle('Right', ids[1], 'Markdown editor')
+  await cycle('Left', ids[0], 'Markdown editor')
   await waitForAsync(page, async () => {
     const state = await window.hibi.getDocument()
     return state.markdown === 'draft a' && state.dirty

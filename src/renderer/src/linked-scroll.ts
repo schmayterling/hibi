@@ -102,9 +102,15 @@ export function linkScroll(
   // CodeMirror panes report caret and text changes, and focus leaving, as
   // hibi:editor-interactions-invalidate; only the focused view's report hands
   // control. Focus counts when it comes: their reports of focus are a moment
-  // late, and the other pane scrolled in that moment keeps the lead.
+  // late, and the other pane scrolled in that moment keeps the lead. Nor does
+  // a caret the view placed itself, as a long note's opening caret moves
+  // once the formatted view parses its end.
   const edited = (event: Event) => {
-    if ((event.target as Element).contains(document.activeElement)) selection()
+    if (
+      (event.target as Element).contains(document.activeElement) &&
+      !(event as CustomEvent<{ placed?: boolean }>).detail?.placed
+    )
+      selection()
   }
   // Their selectionchange also fires when a view redraws an unchanged
   // selection, as after the other pane scrolls it, which hands no control.

@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   electron,
   expectPageError,
+  openInDocumentEditor,
   waitForAppState,
   waitForAsync,
   waitForDocumentEditor,
@@ -177,6 +178,48 @@ test('editor readiness requires settled app, addons and editable active pane', {
     await waitForDocumentEditor(app, page)
   }
   assert.equal(errors.mock.callCount(), 4)
+  // An open mounts a new editor; the one shown before stays ready until then.
+  await openInDocumentEditor(app, page, () =>
+    page.evaluate(() => {
+      const shown = document.querySelector(
+        '#document-editor-panel [role="textbox"]',
+      )
+      setTimeout(() => {
+        shown.replaceWith(shown.cloneNode(true))
+        window.replaced = true
+      }, 200)
+    }),
+  )
+  assert.equal(await page.evaluate(() => window.replaced), true)
+  await assert.rejects(
+    openInDocumentEditor(app, page, async () => {
+      throw new Error('open probe')
+    }),
+    /open probe/,
+  )
+  // An open that leaves the shown editor in place never passes for one that
+  // replaced it.
+  await assert.rejects(
+    openInDocumentEditor(app, page, () => {}, { timeout: 50 }),
+    /the editor shown before the open is replaced/,
+  )
+  // Nor does one hidden before the open and shown again by it.
+  const editor = page.locator('#document-editor-panel [role="textbox"]')
+  await editor.evaluate((element) => {
+    element.style.visibility = 'hidden'
+  })
+  await assert.rejects(
+    openInDocumentEditor(
+      app,
+      page,
+      () =>
+        editor.evaluate((element) => {
+          element.style.visibility = ''
+        }),
+      { timeout: 50 },
+    ),
+    /the editor shown before the open is replaced/,
+  )
   await page
     .locator('#document-editor-panel [role="textbox"]')
     .evaluate((element) => element.setAttribute('aria-label', 'Probe editor'))

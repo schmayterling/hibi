@@ -373,6 +373,7 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
   )
   assert.equal(await page.evaluate(() => window.richRefreshes), 0)
   await pressShortcut(app, `${mod}+Shift+[`)
+  await waitForDocumentEditor(app, page)
   // Accepted difference: the rich editor refreshes its highlighting once when
   // shown; the language ended as it was, so CodeMirror has nothing to redraw.
   await page.waitForFunction(

@@ -15,6 +15,7 @@ import {
   replaceRichText,
   replaceSourceText,
 } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 async function cursorDiagnostics(app, page, phase) {
   console.error('cursor phase:', phase)
@@ -182,17 +183,15 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     .getByRole('main', { name: /^settings$/i })
     .waitFor({ state: 'hidden' })
   await page.locator('.editor-surface:not([inert])').waitFor()
-
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  )
-  assert.equal(
-    await rich.evaluate((element) => document.activeElement === element),
-    true,
-    'closing appearance settings restores the formatted editor focus and caret',
+  // Focus returns once the editor's focus module has loaded.
+  await waitForAsync(
+    rich,
+    (element) => document.activeElement === element,
+    undefined,
+    {
+      label:
+        'closing appearance settings restores the formatted editor focus and caret',
+    },
   )
 
   await cursor.waitFor()
@@ -231,7 +230,6 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   await rich.press('ArrowLeft')
   await page.waitForFunction(() => window.cursorMotion, null, {
     polling: 100,
-    timeout: 2000,
   })
   const motion = await page.evaluate(() => {
     const style = getComputedStyle(

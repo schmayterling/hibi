@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  openInDocumentEditor,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -95,8 +99,7 @@ async function openSplit(t, original) {
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, () => clickMenu(app, 'Open…'))
   await waitForAsync(
     page,
     async (original) => (await window.hibi.getDocument()).markdown === original,
@@ -165,7 +168,17 @@ async function cmSplit(t, original) {
       )
     if (!sourceMode) {
       const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
-      if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
+      if (tail) {
+        await waitForAsync(
+          page,
+          (tail) =>
+            document
+              .querySelector('.rich-pane .cm-content')
+              ?.innerText.includes(tail),
+          tail,
+        )
+        assert.ok((await rich.innerText()).includes(tail), tail)
+      }
       if (
         !released &&
         (await source.evaluate((element) => document.activeElement === element))
@@ -268,6 +281,11 @@ test('math split edits render current source, save exactly and share history wit
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    typed,
   )
   assert.notEqual(await exact(), `${typed} later`)
   await select(

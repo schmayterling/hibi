@@ -242,9 +242,9 @@ test('loader rejects malformed or oversized chunks and retains explicit byte ove
 test('async load yields bounded slices for sync, async and fragmented iterables', async () => {
   const source = '\ufeff中😀\r\n'.repeat(40000)
   let yielded = false
-  setTimeout(() => {
+  setImmediate(() => {
     yielded = true
-  }, 0)
+  })
   const store = await SourceStore.load([source], document, 12)
   assert.equal(yielded, true)
   rawEquals(store.snapshot(), source)

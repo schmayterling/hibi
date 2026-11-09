@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -574,11 +575,13 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await page.evaluate(() => {
     window.viewsFixture.handles.follow = window.viewsFixture.follow.open()
   })
-  await clickMenu(app, 'New')
-  await page.waitForFunction(
-    (id) => window.viewsFixture.context.editor.getDocument().tabId !== id,
-    first,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'New')
+    await page.waitForFunction(
+      (id) => window.viewsFixture.context.editor.getDocument().tabId !== id,
+      first,
+    )
+  })
   await replaceRichText(page, editor, 'second document')
   const second = await page.evaluate(
     () => window.viewsFixture.context.editor.getDocument().tabId,
@@ -593,14 +596,16 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
       document.querySelector('.addon-sidebar .bound-text')?.textContent ===
       'second document',
   )
-  const focused = await page.evaluate(() =>
-    window.viewProps['view-fixture.panel:first'].focusDocument(),
-  )
-  assert.equal(focused, true)
-  await page.waitForFunction(
-    (id) => window.viewsFixture.context.editor.getDocument().tabId === id,
-    first,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    const focused = await page.evaluate(() =>
+      window.viewProps['view-fixture.panel:first'].focusDocument(),
+    )
+    assert.equal(focused, true)
+    await page.waitForFunction(
+      (id) => window.viewsFixture.context.editor.getDocument().tabId === id,
+      first,
+    )
+  })
   assert.equal(await editor.textContent(), 'first document')
   const firstRevision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision

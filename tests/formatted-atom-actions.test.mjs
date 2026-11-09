@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
-  waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
@@ -122,13 +122,14 @@ test('toolbar actions on selected atoms preserve their containers', {
         filePaths: [file],
       })
     }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      name,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        name,
+      )
+    })
     await page.locator('.rich-pane [aria-label="Document editor"]').focus()
     await page.waitForFunction(() =>
       document

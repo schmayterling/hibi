@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -235,12 +236,14 @@ test('the history view lists every save asked for and thins autosaves, keeping o
     (await page.evaluate(() => window.hibi.listVersions())).map(
       ({ automatic }) => automatic ?? false,
     )
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async (text) => (await window.hibi.getDocument()).markdown === text,
-    texts.original,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      texts.original,
+    )
+  })
   await page.waitForFunction(
     () =>
       document.querySelector('[aria-label="Document editor"]')
@@ -331,12 +334,14 @@ test('the history view leaves out an autosave within 3 minutes of a point it lis
   page.setDefaultTimeout(8000)
   await waitForFormattedEditor(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
-  await pressShortcut(app, `${mod}+o`)
-  await waitForAsync(
-    page,
-    async (text) => (await window.hibi.getDocument()).markdown === text,
-    texts.original,
-  )
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      texts.original,
+    )
+  })
   await page.waitForFunction(
     () =>
       document.querySelector('[aria-label="Document editor"]')
@@ -414,12 +419,14 @@ test('the history view lists as a point a text no saved version holds: after Sav
         filePaths: [file],
       })
     }, file)
-    await pressShortcut(app, `${mod}+o`)
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      name,
-    )
+    await openInDocumentEditor(app, page, async () => {
+      await pressShortcut(app, `${mod}+o`)
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        name,
+      )
+    })
     await page.waitForFunction(
       () =>
         document.querySelector('[aria-label="Document editor"]')
@@ -530,7 +537,13 @@ test('the history view lists as a point a text no saved version holds: after Sav
   assert.ok(oldest(await list()), 'after reopening what Save As wrote')
 
   // A note's first save has no earlier text to keep.
-  await pressShortcut(app, `${mod}+n`)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+n`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'untitled.md',
+    )
+  })
   await page.waitForFunction(
     () =>
       document.querySelector('[aria-label="Document editor"]')
@@ -648,8 +661,10 @@ test('going to a step or restoring a point shows the change in the editor, and a
       async (text) => (await window.hibi.getDocument()).markdown === text,
       text,
     )
-  await pressShortcut(app, `${mod}+o`)
-  await shows(original)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await shows(original)
+  })
   await page.waitForFunction(
     () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )
@@ -668,12 +683,12 @@ test('going to a step or restoring a point shows the change in the editor, and a
       document.querySelector('.rich-pane').scrollTop = 0
     })
   }
-  // Where the caret is and whether the view shows it, once it settles.
-  const caret = async () => {
-    let last = null
-    for (let read = 0; read < 20; read++) {
-      await page.waitForTimeout(100)
-      const now = await page.evaluate(() => {
+  // Where the caret is and whether the view shows it, once it reaches
+  // `expected`: the view scrolls to it at a later measure.
+  const caret = async (expected) => {
+    let now
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      now = await page.evaluate(() => {
         const pane = document.querySelector('.rich-pane')
         const { view } = pane.querySelector('.cm-content').cmTile.root
         const bounds = pane.getBoundingClientRect()
@@ -686,10 +701,9 @@ test('going to a step or restoring a point shows the change in the editor, and a
             box.bottom <= bounds.bottom + 1,
         }
       })
-      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
-    }
-    return last
+      return JSON.stringify(now) === JSON.stringify(expected)
+    }).catch(() => {})
+    return now
   }
   const openHistory = async () => {
     await clickMenu(app, 'Command palette')
@@ -721,7 +735,10 @@ test('going to a step or restoring a point shows the change in the editor, and a
   await history.getByRole('button', { name: /^go to step$/i }).click()
   await history.waitFor({ state: 'hidden' })
   await shows(original)
-  assert.deepEqual(await caret(), { at: original.length, shown: true })
+  assert.deepEqual(await caret({ at: original.length, shown: true }), {
+    at: original.length,
+    shown: true,
+  })
 
   // Restoring the text before that undo puts the caret after it, in view.
   await top()
@@ -733,7 +750,10 @@ test('going to a step or restoring a point shows the change in the editor, and a
   await history.getByRole('button', { name: /^restore$/i }).click()
   await history.waitFor({ state: 'hidden' })
   await shows(edited)
-  assert.deepEqual(await caret(), { at: edited.length, shown: true })
+  assert.deepEqual(await caret({ at: edited.length, shown: true }), {
+    at: edited.length,
+    shown: true,
+  })
 
   // An edit made while History is open: restoring then changes nothing.
   await top()
@@ -816,8 +836,10 @@ test('restoring a saved version shows the change in the editor, one chosen while
       async (text) => (await window.hibi.getDocument()).markdown === text,
       text,
     )
-  await pressShortcut(app, `${mod}+o`)
-  await shows(original)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await shows(original)
+  })
   await page.waitForFunction(
     () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )
@@ -836,12 +858,12 @@ test('restoring a saved version shows the change in the editor, one chosen while
       document.querySelector('.rich-pane').scrollTop = 0
     })
   }
-  // Where the caret is and whether the view shows it, once it settles.
-  const caret = async () => {
-    let last = null
-    for (let read = 0; read < 20; read++) {
-      await page.waitForTimeout(100)
-      const now = await page.evaluate(() => {
+  // Where the caret is and whether the view shows it, once it reaches
+  // `expected`: the view scrolls to it at a later measure.
+  const caret = async (expected) => {
+    let now
+    await waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      now = await page.evaluate(() => {
         const pane = document.querySelector('.rich-pane')
         const { view } = pane.querySelector('.cm-content').cmTile.root
         const bounds = pane.getBoundingClientRect()
@@ -854,10 +876,9 @@ test('restoring a saved version shows the change in the editor, one chosen while
             box.bottom <= bounds.bottom + 1,
         }
       })
-      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
-      last = now
-    }
-    return last
+      return JSON.stringify(now) === JSON.stringify(expected)
+    }).catch(() => {})
+    return now
   }
   // Restores a saved version of `text` from the History view.
   const restore = async (text) => {
@@ -914,7 +935,10 @@ test('restoring a saved version shows the change in the editor, one chosen while
   await openHistory()
   await restore(original)
   await shows(original)
-  assert.deepEqual(await caret(), { at: original.length, shown: true })
+  assert.deepEqual(await caret({ at: original.length, shown: true }), {
+    at: original.length,
+    shown: true,
+  })
 
   // A save held on its way to main keeps the app busy.
   const holdSave = async () => {
@@ -954,7 +978,10 @@ test('restoring a saved version shows the change in the editor, one chosen while
   assert.equal(await markdown(), `# ${original}`)
   await app.evaluate(() => globalThis.release())
   await shows(edited)
-  assert.deepEqual(await caret(), { at: edited.length, shown: true })
+  assert.deepEqual(await caret({ at: edited.length, shown: true }), {
+    at: edited.length,
+    shown: true,
+  })
 
   // A tab chosen before it goes first: the version isn't restored in that one.
   const other = join(profile, 'other.md')
@@ -994,8 +1021,10 @@ test('restoring a saved version shows the change in the editor, one chosen while
       filePaths: [windows],
     })
   }, windows)
-  await pressShortcut(app, `${mod}+o`)
-  await shows(lines)
+  await openInDocumentEditor(app, page, async () => {
+    await pressShortcut(app, `${mod}+o`)
+    await shows(lines)
+  })
   await page.waitForFunction(
     () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )
@@ -1018,9 +1047,14 @@ test('restoring a saved version shows the change in the editor, one chosen while
   await openHistory()
   await restore(lines)
   await shows(lines)
-  assert.deepEqual(await caret(), { at: inEditor, shown: true })
-  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
-  await shows(edited)
+  assert.deepEqual(await caret({ at: inEditor, shown: true }), {
+    at: inEditor,
+    shown: true,
+  })
+  await openInDocumentEditor(app, page, async () => {
+    await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+    await shows(edited)
+  })
 
   // A read-only editor takes no edit, as with its own undo.
   await page.waitForFunction(() => !!window.readonlyCodeMirror)
@@ -1080,8 +1114,10 @@ test('a saved version stays out of a note gone to while its text is read, and on
         filePaths: [file],
       })
     }, file)
-    await pressShortcut(app, `${mod}+o`)
-    await shows(text)
+    await openInDocumentEditor(app, page, async () => {
+      await pressShortcut(app, `${mod}+o`)
+      await shows(text)
+    })
     await page.waitForFunction(
       () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
     )
@@ -1168,8 +1204,10 @@ test('a saved version stays out of a note gone to while its text is read, and on
     await page.evaluate(async () => (await window.hibi.getDocument()).markdown),
     'the other note',
   )
-  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
-  await shows(edited)
+  await openInDocumentEditor(app, page, async () => {
+    await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+    await shows(edited)
+  })
   await page.waitForFunction(
     () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )

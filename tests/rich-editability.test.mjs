@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -90,12 +91,15 @@ test('empty formatted blocks remain editable and rich editing survives vim and v
     })
     const revision = (await page.evaluate(() => window.hibi.getDocument()))
       .revision
-    await pressShortcut(app, `${mod}+n`)
-    await waitForAsync(
-      page,
-      async (revision) => (await window.hibi.getDocument()).revision > revision,
-      revision,
-    )
+    await openInDocumentEditor(app, page, async () => {
+      await pressShortcut(app, `${mod}+n`)
+      await waitForAsync(
+        page,
+        async (revision) =>
+          (await window.hibi.getDocument()).revision > revision,
+        revision,
+      )
+    })
     await rich.waitFor()
 
     await waitForAsync(
@@ -242,13 +246,15 @@ test('canonical empty blocks remain editable across vim and source switches', {
     })
     const revision = (await page.evaluate(() => window.hibi.getDocument()))
       .revision
-    await pressShortcut(app, `${mod}+n`)
-    await waitForAsync(
-      page,
-      async (revision) => (await window.hibi.getDocument()).revision > revision,
-      revision,
-    )
-    await waitForDocumentEditor(app, page)
+    await openInDocumentEditor(app, page, async () => {
+      await pressShortcut(app, `${mod}+n`)
+      await waitForAsync(
+        page,
+        async (revision) =>
+          (await window.hibi.getDocument()).revision > revision,
+        revision,
+      )
+    })
     await waitForAsync(
       page,
       async () => (await window.hibi.getDocument()).markdown === '',

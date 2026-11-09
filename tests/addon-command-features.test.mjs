@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForAddonShortcut,
   waitForDocumentEditor,
 } from './electron.mjs'
@@ -114,12 +115,13 @@ async function waitingCommand(t, { sideBySide = false } = {}) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
-  )
-  await waitForDocumentEditor(app, page)
+  await openInDocumentEditor(app, page, async () => {
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+  })
   // Hidden windows have no focus; the panes' own focus needs emulating.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })

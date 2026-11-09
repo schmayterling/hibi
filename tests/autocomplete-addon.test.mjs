@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  openInDocumentEditor,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -521,13 +522,16 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
   await page
     .getByRole('button', { name: /^open workspace$/i, exact: true })
     .click()
-  await page.getByRole('treeitem', { name: /^note\.md$/i, exact: true }).click()
-  await waitForAsync(page, async () => {
-    const document = await window.hibi.getDocument()
-    const workspace = await window.hibi.getWorkspace()
-    return document.name === 'note.md' && workspace?.activePath === 'note.md'
+  await openInDocumentEditor(app, page, async () => {
+    await page
+      .getByRole('treeitem', { name: /^note\.md$/i, exact: true })
+      .click()
+    await waitForAsync(page, async () => {
+      const document = await window.hibi.getDocument()
+      const workspace = await window.hibi.getWorkspace()
+      return document.name === 'note.md' && workspace?.activePath === 'note.md'
+    })
   })
-  await waitForDocumentEditor(app, page)
   await learnWord('workspaceword')
   const workspaceId = await page.evaluate(
     async () => (await window.hibi.getWorkspace()).id,

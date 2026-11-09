@@ -1553,6 +1553,16 @@ export function SourceEditor({
               closeCompletion(view)
               return
             }
+            // Its provider makes the edit itself, after the popup closes.
+            const select = completionBroker.prepareSelection(
+              pending.request,
+              item,
+            )
+            if (select) {
+              closeCompletion(view)
+              select()
+              return
+            }
             const report = completionBroker.prepareAcceptance(
               pending.request,
               item,
@@ -2035,6 +2045,31 @@ export function SourceEditor({
           autocompletion({
             override: [sourceCompletions],
             selectOnOpen: false,
+            // A provider's own renderer draws its row; the label stays the accessible text.
+            optionClass: (option) => {
+              const item = completionItems.get(option)
+              return item && completionBroker.renderer(item)
+                ? 'hibi-completion-rendered'
+                : ''
+            },
+            addToOptions: [
+              {
+                position: 45,
+                render: (option) => {
+                  const item = completionItems.get(option)
+                  const render = item && completionBroker.renderer(item)
+                  if (!render) return null
+                  const element = editor.dom.ownerDocument.createElement('div')
+                  element.className = 'hibi-completion-content'
+                  try {
+                    render(element)
+                  } catch {
+                    return null
+                  }
+                  return element
+                },
+              },
+            ],
             defaultKeymap: false,
             // Like the rich view's list, the formatted view's answers keys as
             // soon as it opens, whatever the wall clock does. The source view
@@ -2042,6 +2077,11 @@ export function SourceEditor({
             ...(formatted
               ? { interactionDelay: Number.NEGATIVE_INFINITY }
               : {}),
+          }),
+          EditorView.baseTheme({
+            '.hibi-completion-rendered .cm-completionLabel': {
+              display: 'none',
+            },
           }),
           EditorState.transactionExtender.of((transaction) => {
             const state = transactionState(transaction)

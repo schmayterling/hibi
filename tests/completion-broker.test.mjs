@@ -1116,3 +1116,64 @@ test('completed owner result retracts before abort listener starts nested reques
   assert.equal(nestedCaptures, 0)
   assert.equal(result.updates.length, 2)
 })
+
+test('select providers run their own code once for a picked item, and render their rows', async () => {
+  const broker = new CompletionBroker()
+  const selected = []
+  const drawn = []
+  broker.register(
+    owner('plugin'),
+    () => [
+      { ...item('first', 0, ''), data: 'a' },
+      // Same range and text, different data: both stay.
+      { ...item('second', 0, ''), data: 'b' },
+      { ...item('long', 0, ''), data: 'x'.repeat(129) },
+    ],
+    0,
+    {
+      onSelect: (input, picked) => selected.push([input, picked.data]),
+      render: (picked, element) => drawn.push([picked.data, element]),
+    },
+  )
+  broker.register(owner('data'), () => [item('plain', -1)])
+  const { items, request: bounded } = await collect(broker, request()).final
+  assert.deepEqual(
+    items.map(({ label, data }) => [label, data]),
+    [
+      ['first', 'a'],
+      ['second', 'b'],
+      ['plain', undefined],
+    ],
+  )
+  const [first, second, plain] = items
+  // Data-only items keep the host edit and have no renderer.
+  assert.equal(broker.prepareSelection(bounded, plain), null)
+  assert.equal(broker.renderer(plain), null)
+  assert.ok(broker.prepareAcceptance(bounded, plain))
+  // Select items never take the host edit.
+  assert.equal(broker.prepareAcceptance(bounded, first), null)
+  const element = {}
+  broker.renderer(second)(element)
+  assert.deepEqual(drawn, [['b', element]])
+  assert.equal(
+    broker.prepareSelection(request({ contentVersion: 4 }), first),
+    null,
+  )
+  const select = broker.prepareSelection(bounded, first)
+  select()
+  select()
+  broker.prepareSelection(bounded, second)?.()
+  assert.deepEqual(selected, [[bounded, 'a']])
+})
+
+test('select and render callbacks must be functions', () => {
+  const broker = new CompletionBroker()
+  assert.throws(
+    () => broker.register(owner('bad'), () => [], 0, { onSelect: 'run' }),
+    /select or render/,
+  )
+  assert.throws(
+    () => broker.register(owner('bad'), () => [], 0, { render: {} }),
+    /select or render/,
+  )
+})

@@ -62,7 +62,7 @@ test('handwritten vault plugin runs through real native handlers and preserves p
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page
     .getByRole('checkbox', { name: 'Obsidian plugins', exact: true })
-    .check()
+    .click()
   await page.getByRole('tab', { name: 'Obsidian plugins', exact: true }).click()
   await page.getByRole('button', { name: 'Install copy', exact: true }).click()
   await page

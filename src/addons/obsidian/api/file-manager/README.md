@@ -4,4 +4,6 @@
 
 Only changed YAML pairs are serialized, with line wrapping disabled. Untouched pairs retain their original quoting, comments, indentation and line endings byte for byte. New blocks use block mappings; empty or comment-only blocks are accepted. Alias expansion is bounded. Invalid mappings or edits that would break aliases reject before writing.
 
+The factory remains available with no folder open; note mutations and `getNewFileParent` then reject with “Open a folder first.”
+
 `renameFile` delegates to the vault's shared workspace action. `generateMarkdownLink` uses the vault's Markdown/wiki preference and the metadata service's shortest/relative/absolute link policy. Markdown destinations encode path characters and fragments separately. Wiki filenames that cannot be represented safely reject. `getNewFileParent` follows root/current/configured-folder settings and rejects a missing configured folder.

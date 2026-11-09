@@ -300,6 +300,65 @@ test('native file pages include attachments and UI-ignored trees without followi
   await env.assertUnchanged()
 })
 
+test('native APIs work in a plain folder and refuse hidden writes without a config directory', async (t) => {
+  const env = await fixture(t)
+  const stored = join(env.root, 'stored-profile')
+  await rename(join(env.vault, '.obsidian'), stored)
+  const info = await env.queries.vaultInfo(env.input)
+  assert.equal(info.configDir, '.obsidian')
+  assert.equal(info.settings, null)
+  assert.equal(
+    (await env.queries.vaultStat({ ...env.input, path: 'untouched.md' })).kind,
+    'file',
+  )
+  assert.ok(
+    (await env.queries.vaultList({ ...env.input, sequence: 1 })).entries.some(
+      (item) => item.path === 'untouched.md',
+    ),
+  )
+  await env.methods.vaultCreateFolder({ ...env.input, path: 'notes' })
+  assert.deepEqual(await readdir(join(env.vault, 'notes')), [])
+  for (const path of [
+    '.obsidian/app.json',
+    '.obsidian-old/app.json',
+    '.tool/app.json',
+    'notes/.secret.md',
+  ]) {
+    await assert.rejects(env.methods.vaultCreateFolder({ ...env.input, path }))
+    await assert.rejects(
+      env.methods.vaultUpdateText({
+        ...env.input,
+        path,
+        expectedVersion: 'version',
+        markdown: 'x',
+      }),
+    )
+    await assert.rejects(
+      env.methods.vaultAction({ ...env.input, path, action: 'delete' }),
+    )
+  }
+  assert.deepEqual((await readdir(env.vault)).sort(), ['notes', 'untouched.md'])
+  await rm(join(env.vault, 'notes'), { recursive: true })
+  await rename(stored, join(env.vault, '.obsidian'))
+  await env.assertUnchanged()
+})
+
+test('native handlers are constructible without a folder and reject file operations cleanly', async (t) => {
+  const env = await fixture(t)
+  state.root = null
+  for (const [name, handler] of Object.entries({
+    ...env.queries,
+    ...env.methods,
+  }))
+    await assert.rejects(
+      handler({ ...env.input, path: 'untouched.md', action: 'delete' }),
+      /open a folder first/i,
+      name,
+    )
+  state.root = env.vault
+  await env.assertUnchanged()
+})
+
 test('custom configDir comes from shared detector and remains inaccessible', async (t) => {
   const env = await fixture(t)
   await rename(join(env.vault, '.obsidian'), join(env.vault, '.custom-vault'))

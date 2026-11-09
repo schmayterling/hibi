@@ -45,8 +45,9 @@ export function createMetadataNative(
         }
         if (!current()) return null
         const configuration = await obsidianConfiguration(root)
-        if (!configuration || !current()) return null
-        for (const folder of configuration.folders) vaultPath(path, folder)
+        if (!current()) return null
+        for (const folder of configuration?.folders ?? [])
+          vaultPath(path, folder)
         const parts = path.split('/')
         for (let index = 1; index <= parts.length; index++) {
           const stat = await lstat(join(root, ...parts.slice(0, index))).catch(

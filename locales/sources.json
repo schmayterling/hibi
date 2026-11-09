@@ -4555,6 +4555,10 @@
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "d25f3f0b3cc5": [
+    "src/addons/obsidian/api/file-manager/index.ts",
+    "src/addons/obsidian/api/vault/index.ts",
+    "src/addons/obsidian/api/vault/native.ts",
+    "src/addons/obsidian/api/workspace/index.ts",
     "src/main/workspace-settings.ts"
   ],
   "ce7d9af1008b": [
@@ -4565,9 +4569,6 @@
   ],
   "7693e6fba57c": [
     "src/addons/graph/Panel.tsx"
-  ],
-  "c44722ae953a": [
-    "src/addons/obsidian/api/vault/index.ts"
   ],
   "cc9f5ee62050": [
     "src/addons/obsidian/CommunityBrowser.tsx"

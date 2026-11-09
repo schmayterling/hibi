@@ -2,7 +2,9 @@
 
 The workspace adapter maps Hibi's mounted editor views to `WorkspaceLeaf` objects using exact document and view generations. `getActiveFile`, `getActiveLeaf`, `getLeaf`, `iterateAllLeaves`, `getLeavesOfType` and `rootSplit.children` describe those views. A detached view target becomes unavailable instead of resolving to a replacement editor.
 
-The editor contribution installs `setMarkdownViewFactory` for the vault lifetime. Its `MarkdownView` instances then back `leaf.view`, `getActiveViewOfType` and `activeEditor`. The editor lane supplies `editor-change` and `updateOptions`; this service supplies `file-open`, `active-leaf-change`, `layout-change`, layout readiness and the browser unload `quit` signal. Reloading the renderer also emits the unload signal.
+With no folder open, active-file and editor-leaf queries return `null` or empty lists, and folder lifecycle events stay silent. Layout readiness and custom sidebar views remain available for global plugin UI. Opening a file or link requires a folder. The host recreates contributions when a folder opens, closes or changes generation.
+
+The editor contribution installs `setMarkdownViewFactory` for the captured folder lifetime. Its `MarkdownView` instances then back `leaf.view`, `getActiveViewOfType` and `activeEditor`. The editor lane supplies `editor-change` and `updateOptions`; this service supplies `file-open`, `active-leaf-change`, `layout-change`, layout readiness and the browser unload `quit` signal. Reloading the renderer also emits the unload signal.
 
 `openLinkText` resolves existing notes through the metadata cache and uses Hibi's normal file opening flow. Unresolved links reject. Opening a file in an inactive pane, creating plugin-controlled editor splits/windows and restoring arbitrary layouts are unsupported. `getLeaf(true)` supplies a new request leaf; opening a note still follows Hibi's tab preferences. The root split is a read-only view of mounted editor leaves, not a complete Obsidian layout serializer.
 

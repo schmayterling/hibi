@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
 import { recordTokens } from '../src/shared/metadata-stream.ts'
@@ -154,8 +154,8 @@ test('metadata cursors bind owner, path, sequence, source version and worker ide
 
 test('metadata cursors survive unrelated editor changes but reject their own session changes', async () => {
   host.versions = [
-    { file: '/notes/note.md', tabId: 'note', contentVersion: 0 },
-    { file: '/notes/other.md', tabId: 'other', contentVersion: 0 },
+    { file: join('/notes', 'note.md'), tabId: 'note', contentVersion: 0 },
+    { file: join('/notes', 'other.md'), tabId: 'other', contentVersion: 0 },
   ]
   const first = await query({ kind: 'metadata', path: 'note.md' })
   assert.equal(first.ok, true)

@@ -1125,7 +1125,13 @@ export async function resolveWikiDocument(from: string | null, target: string) {
   }
   collect(entries)
   const path = wikiTarget(source, target, paths)
-  return path ? resolveWorkspaceFile(root, path) : null
+  // The tree can still list a file deleted outside Hibi: that target is gone.
+  return path
+    ? resolveWorkspaceFile(root, path).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      })
+    : null
 }
 
 export async function openWorkspaceFile(

@@ -142,6 +142,40 @@ test('detail reader rejects incomplete streams and invalid primitive tokens', ()
   )
 })
 
+test('typed list entries retain negative root groups and zero', () => {
+  for (const parent of [-17, 0, 6]) {
+    const entry = { kind: 'listItem', value: { parent, position } }
+    const reader = new DetailReader()
+    assert.deepEqual([...reader.write([...recordTokens(entry)])], [entry])
+    reader.finish()
+  }
+})
+
+test('mixed escaped strings and floats keep every serialized slice bounded', () => {
+  const entry = {
+    kind: 'frontmatter',
+    value: {
+      position,
+      values: {
+        escaped: String.fromCharCode(0).repeat(24000),
+        floats: Array(12000).fill(-1.7976931348623157e308),
+      },
+    },
+  }
+  const writer = new RecordWriter()
+  const reader = new DetailReader()
+  const entries = []
+  for (const tokens of [
+    ...writer.write(recordTokens(entry)),
+    writer.finish(),
+  ]) {
+    assert.ok(Buffer.byteLength(JSON.stringify(tokens)) <= recordSliceBytes)
+    entries.push(...reader.write(tokens))
+  }
+  reader.finish()
+  assert.deepEqual(entries, [entry])
+})
+
 test('frontmatter keys preserve data without changing object prototypes', () => {
   const values = JSON.parse(
     '{"__proto__":{"polluted":true},"constructor":{"prototype":"data"}}',
@@ -170,7 +204,7 @@ test('typed detail reader rejects malformed entries after primitive decoding', (
       kind: 'frontmatterLink',
       value: { link: 'ok', original: 'ok', key: 1, position },
     },
-    { kind: 'listItem', value: { parent: -2, position } },
+    { kind: 'listItem', value: { parent: 1.5, position } },
     { kind: 'section', value: { type: 1, position } },
     { kind: 'block', value: { id: 1, position } },
   ]

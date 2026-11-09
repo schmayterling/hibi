@@ -121,20 +121,29 @@ export function* recordTokens(value: unknown): Generator<RecordToken> {
 /** Carry a partial slice across small pages so cache batches need one reply. */
 export class RecordWriter {
   private tokens: RecordToken[] = []
-  private characters = 0;
+  private characters = 0
+  private bytes = 2;
 
   *write(tokens: Iterable<RecordToken>): Generator<RecordToken[]> {
     for (const token of tokens) {
       validateToken(token)
       const length = Array.isArray(token) ? token[0].length : 1
+      // Include worst-case JSON escaping, finite-double width, tuple syntax and commas.
+      const bytes = Array.isArray(token)
+        ? length * 6 + 11
+        : typeof token === 'number'
+          ? 27
+          : 6
       if (
         this.tokens.length >= recordSliceTokens ||
-        this.characters + length > recordSliceCharacters
+        this.characters + length > recordSliceCharacters ||
+        this.bytes + bytes > recordSliceBytes
       ) {
         yield this.finish()
       }
       this.tokens.push(token)
       this.characters += length
+      this.bytes += bytes
     }
   }
 
@@ -142,6 +151,7 @@ export class RecordWriter {
     const tokens = this.tokens
     this.tokens = []
     this.characters = 0
+    this.bytes = 2
     return tokens
   }
 }
@@ -337,7 +347,6 @@ function validDetailEntry(entry: unknown): entry is NoteCacheEntry {
       return (
         typeof value.parent === 'number' &&
         Number.isSafeInteger(value.parent) &&
-        value.parent >= -1 &&
         optionalText('task') &&
         optionalText('id')
       )

@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import test from 'node:test'
 import * as links from '../src/main/workspace-obsidian-links.ts'
 import { diffVault, fixtureVault, snapshotVault } from './vault-fidelity.mjs'
@@ -213,7 +213,7 @@ test('automatic updates disabled leave all referrers identical', async (t) => {
         rename(join(root, 'nested/Target.md'), join(root, 'moved/Target.md')),
       () =>
         rename(join(root, 'moved/Target.md'), join(root, 'nested/Target.md')),
-      join(root, '..', `profile-${root.split('/').at(-1)}`),
+      join(root, '..', `profile-${basename(root)}`),
     ),
     [],
   )

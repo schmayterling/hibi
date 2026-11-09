@@ -117,14 +117,18 @@ test('text-search worker reads profile ignore rules without importing Electron',
     dataDirectory: f.profile,
     extensions: ['md'],
   })
-  t.after(() => index.close())
-  const query = index.createQuery('paragraph', [])
   const matches = []
-  let result
-  do {
-    result = await index.page(query, 100)
-    matches.push(...result.matches)
-  } while (result.hasMore)
+  // Closed before the fixture's own cleanup: Windows can't delete an open database.
+  try {
+    const query = index.createQuery('paragraph', [])
+    let result
+    do {
+      result = await index.page(query, 100)
+      matches.push(...result.matches)
+    } while (result.hasMore)
+  } finally {
+    await index.close()
+  }
   assert.ok(matches.some((match) => match.path === 'crlf.md'))
   assert.ok(!matches.some((match) => match.path === 'syntax.md'))
   assert.deepEqual(diffVault(before, await snapshotVault(f.root)), [])

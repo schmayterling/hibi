@@ -77,9 +77,9 @@ revision, measured serially before the review fixes:
 | Retained main heap | 16.70 MB | 16.79 MB | +0.5% |
 | Median process peak RSS | 203.36 MB | 209.27 MB | +2.9% |
 
-The margin is 10% for these stable time and process-memory comparisons on this
-fixture. The initial implementation failed (+106% cold time); plain-run reuse
-and demand-only cache reconstruction fixed that regression.
+The margin is 10% for time and process-memory comparisons on this fixture.
+The initial implementation failed (+106% cold time); plain-run reuse and
+demand-only cache reconstruction fixed that regression.
 
 Worker used-heap samples are transient rather than post-GC retention. Median
 sampled peaks were 23.11 to 25.76 MB (+2.65 MB); runs ranged from 23.03–25.51 MB
@@ -98,9 +98,8 @@ for round in 1 2 3; do
 done
 ```
 
-| Review rerun median | Baseline | This change | Difference |
+| Loaded rerun median (noise-dominated) | Baseline | This change | Difference |
 | --- | ---: | ---: | ---: |
-| Cold index | 8,600 ms | 7,862 ms | −8.6% |
 | Warm cache | 1,910 ms | 1,981 ms | +3.7% |
 | Retained main heap | 16.65 MB | 16.72 MB | +0.4% |
 | Process peak RSS | 178.95 MB | 182.34 MB | +1.9% |
@@ -108,9 +107,15 @@ done
 
 Every warm read hit all 2,110 records. The laptop was loaded: baseline cold
 runs ranged from 7,909–12,107 ms and candidate runs from 6,322–10,285 ms.
-Warm ranges were 1,420–3,891 ms and 1,780–2,385 ms respectively. These noisy
-times are not evidence of a cold speedup; the reported single-run warm
-increase did not persist in the requested three-run medians.
+Warm ranges were 1,420–3,891 ms and 1,780–2,385 ms respectively. Per-pair warm
+changes were approximately +25%, −39% and +3.7%; this noise-dominated rerun
+does not establish the warm regression or a cold speedup.
+
+A quieter independent review compared `88e08d002` with `9f9ab6ac` in three
+alternating pairs. Rounded warm times were 601/818, 623/676 and 617/674 ms
+(baseline/candidate), with medians of 617/676 ms. Treat the warm regression as
+about **+9%**, inside the 10% margin. The quieter run's cold difference
+(−3.4%) remains noise; process peak RSS increased by 2.3%.
 
 The reviewer's independent constructive differential also passes 3,000 notes
 with seed 7 after the BOM fix, with zero metadata or coordinate mismatches.

@@ -43,6 +43,7 @@ function session(raw) {
       end = to
     }
     state.raw = text + before.slice(end)
+    state.changed?.()
     state.version++
     return inverse
   }
@@ -201,6 +202,27 @@ async function host(t, hibi) {
   const commandEditor = (view) =>
     contributions.find((c) => c.commandEditor).commandEditor({ view })
   return { app, exports, load, commandEditor }
+}
+
+/** The pane's CodeMirror view, kept in step with the session as Hibi's editor is. */
+function mount(view, state, viewId = 'left') {
+  const normalized = () => state.raw.replace(/\r\n/g, '\n')
+  const cm = {
+    state: EditorState.create({
+      doc: normalized(),
+      extensions: EditorState.allowMultipleSelections.of(true),
+    }),
+    dispatch(spec) {
+      cm.state = cm.state.update(spec).state
+    },
+  }
+  state.changed = () => {
+    cm.state = cm.state.update({
+      changes: { from: 0, to: cm.state.doc.length, insert: normalized() },
+    }).state
+  }
+  view.runtime.views.set(`${viewId}:source`, cm)
+  return cm
 }
 
 test('editor positions and edits map CRLF notes without touching other bytes', async (t) => {
@@ -514,10 +536,11 @@ test('an editor whose pane moved to another note refuses instead of retargeting'
   assert.equal(state.raw, 'first\r\n')
 })
 
-test('setSelections keeps every range for the editor api and edits them in one step', async (t) => {
+test('setSelections sets every range of the pane and edits them in one step', async (t) => {
   const { hibi, state, requests, panes } = session('ab\r\ncd\r\nef\r\n')
   const { commandEditor } = await host(t, hibi)
-  const { editor } = commandEditor(panes[0])
+  const { editor, view } = commandEditor(panes[0])
+  const cm = mount(view, state)
   editor.setSelections(
     [
       { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
@@ -529,7 +552,15 @@ test('setSelections keeps every range for the editor api and edits them in one s
     { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },
     { anchor: { line: 2, ch: 0 }, head: { line: 2, ch: 1 } },
   ])
-  // The drawn selection is the main range.
+  // The editor holds both ranges; the second is main.
+  assert.deepEqual(
+    cm.state.selection.ranges.map(({ from, to }) => [from, to]),
+    [
+      [0, 1],
+      [6, 7],
+    ],
+  )
+  assert.equal(cm.state.selection.mainIndex, 1)
   assert.equal(editor.getSelection(), 'e')
   editor.replaceSelection('X')
   assert.equal(requests.length, 1)
@@ -538,7 +569,7 @@ test('setSelections keeps every range for the editor api and edits them in one s
     { anchor: { line: 0, ch: 1 }, head: { line: 0, ch: 1 } },
     { anchor: { line: 2, ch: 1 }, head: { line: 2, ch: 1 } },
   ])
-  // Moving the drawn selection elsewhere drops the extra ranges.
+  // Setting one cursor leaves one range.
   editor.setCursor({ line: 1, ch: 0 })
   assert.equal(editor.listSelections().length, 1)
 })
@@ -559,7 +590,8 @@ test('wordAt reads whole code points, including astral letters', async (t) => {
 test('a transaction keeps its selection ranges: changes move them, never add carets', async (t) => {
   const { hibi, state, requests, panes } = session('ab\r\ncd\r\nef\r\n')
   const { commandEditor } = await host(t, hibi)
-  const { editor } = commandEditor(panes[0])
+  const { editor, view } = commandEditor(panes[0])
+  mount(view, state)
   editor.setSelections(
     [
       { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 1 } },

@@ -91,16 +91,6 @@ export class Editor {
   private readonly host: EditorHost
   readonly target: ViewTarget
 
-  /**
-   * Hibi editors draw one selection range, so further ranges a plugin sets
-   * live here while the note and the drawn range are unchanged.
-   */
-  #multi: {
-    version: number
-    ranges: { anchor: number; head: number }[]
-    main: number
-  } | null = null
-
   constructor(host: EditorHost, target: ViewTarget) {
     this.host = host
     this.target = target
@@ -201,32 +191,27 @@ export class Editor {
     this.transaction({ changes: [{ text: replacement, from, to }] })
   }
 
-  #drawn(): { anchor: number; head: number } {
+  /** The pane's ranges: every CodeMirror range, or the main one when no editor is mounted. */
+  #ranges(): { ranges: { anchor: number; head: number }[]; main: number } {
     this.#live()
     const cm = this.cm
-    if (cm) {
-      const { anchor, head } = cm.state.selection.main
-      return { anchor, head }
-    }
+    if (cm)
+      return {
+        ranges: cm.state.selection.ranges.map(({ anchor, head }) => ({
+          anchor,
+          head,
+        })),
+        main: cm.state.selection.mainIndex,
+      }
     const selection = this.host.hibi.editorViews.getSelection(this.target)
-    return selection.ok
-      ? { anchor: selection.value.anchor, head: selection.value.head }
-      : { anchor: 0, head: 0 }
-  }
-  #ranges(): { ranges: { anchor: number; head: number }[]; main: number } {
-    const drawn = this.#drawn()
-    const multi = this.#multi
-    const kept = multi?.ranges[multi.main]
-    if (
-      multi &&
-      kept &&
-      multi.version === this.#source().version &&
-      kept.anchor === drawn.anchor &&
-      kept.head === drawn.head
-    )
-      return multi
-    this.#multi = null
-    return { ranges: [drawn], main: 0 }
+    return {
+      ranges: [
+        selection.ok
+          ? { anchor: selection.value.anchor, head: selection.value.head }
+          : { anchor: 0, head: 0 },
+      ],
+      main: 0,
+    }
   }
   listSelections(): EditorSelectionRange[] {
     const text = this.#text()
@@ -270,7 +255,16 @@ export class Editor {
     const index = Math.max(0, Math.min(main, offsets.length - 1))
     const primary = offsets[index]!
     const cm = this.cm
-    if (cm) cm.dispatch({ selection: primary })
+    if (cm)
+      cm.dispatch({
+        selection: EditorSelection.create(
+          offsets.map(({ anchor, head }) =>
+            EditorSelection.range(anchor, head),
+          ),
+          index,
+        ),
+      })
+    // Without a mounted editor, only the main range can be set.
     else {
       const current = this.host.hibi.editorViews.getSelection(this.target)
       if (!current.ok) throw new Error(current.message)
@@ -280,10 +274,6 @@ export class Editor {
       })
       if (!result.ok) throw new Error(result.message)
     }
-    this.#multi =
-      offsets.length > 1
-        ? { version: this.#source().version, ranges: offsets, main: index }
-        : null
   }
   setSelection(anchor: EditorPosition, head?: EditorPosition) {
     this.setSelections([{ anchor, head: head ?? anchor }])

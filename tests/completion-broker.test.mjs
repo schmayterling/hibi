@@ -1177,3 +1177,28 @@ test('select and render callbacks must be functions', () => {
     /select or render/,
   )
 })
+
+test('a failing select or render callback is reported, not thrown into the editor', async (t) => {
+  const reported = []
+  // The renderer's uncaught-error report, which names the addon.
+  globalThis.reportError = (error) => reported.push(error.message)
+  t.after(() => delete globalThis.reportError)
+  const broker = new CompletionBroker()
+  broker.register(
+    owner('plugin'),
+    () => [{ ...item('one', 0, ''), data: 'a' }],
+    0,
+    {
+      onSelect: () => {
+        throw new Error('select failed')
+      },
+      render: () => {
+        throw new Error('render failed')
+      },
+    },
+  )
+  const { items, request: bounded } = await collect(broker, request()).final
+  broker.renderer(items[0])({})
+  broker.prepareSelection(bounded, items[0])()
+  assert.deepEqual(reported, ['render failed', 'select failed'])
+})

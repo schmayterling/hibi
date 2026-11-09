@@ -50,6 +50,15 @@ type Session = {
 const position = (value: number, length: number) =>
   Number.isSafeInteger(value) && value >= 0 && value <= length
 
+/** An addon's own select or render code fails as an uncaught error, which names the addon. */
+function guarded(run: () => void) {
+  try {
+    run()
+  } catch (error) {
+    globalThis.reportError?.(error)
+  }
+}
+
 /** Capture safe prose once, only when a consumer reads it. */
 export function lazyCompletionProse(capture: () => CompletionRequest['prose']) {
   let captured = false
@@ -331,7 +340,7 @@ export class CompletionBroker {
   /** Draws a shown item with its provider's renderer, if it has one. */
   renderer(item: CompletionItem): ((element: HTMLElement) => void) | null {
     const render = this.#owner(item)?.registration.render
-    return render ? (element) => render(item, element) : null
+    return render ? (element) => guarded(() => render(item, element)) : null
   }
 
   /** A picked item whose provider makes its own edit: runs its select callback once. */
@@ -353,7 +362,7 @@ export class CompletionBroker {
       )
         return
       session.accepted = true
-      onSelect(session.request, item)
+      guarded(() => onSelect(session.request, item))
     }
   }
 

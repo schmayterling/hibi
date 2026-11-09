@@ -2008,31 +2008,11 @@ export function useAddons(
                   throw new Error('Choose a completion provider function.')
                 const { completionBroker } = await loadCompletionBroker()
                 if (disposed) throw new Error('This addon has stopped.')
-                // The addon's own select and render code reports its failures as the addon's.
-                const guard =
-                  <A extends unknown[]>(callback: (...args: A) => void) =>
-                  (...args: A) => {
-                    if (disposed) return
-                    try {
-                      callback(...args)
-                    } catch (error) {
-                      latest.current.error(error)
-                    }
-                  }
-                const { onSelect, render } = options ?? {}
                 const remove = completionBroker.register(
                   completionOwner,
                   provider,
                   0,
-                  {
-                    ...options,
-                    ...(typeof onSelect === 'function'
-                      ? { onSelect: guard(onSelect) }
-                      : {}),
-                    ...(typeof render === 'function'
-                      ? { render: guard(render) }
-                      : {}),
-                  },
+                  options,
                 )
                 return track(remove)
               },

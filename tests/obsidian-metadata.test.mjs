@@ -17,9 +17,11 @@ import { fixtureVault } from './obsidian/harness.mjs'
 let server,
   api,
   parseWorkspaceMetadata,
-  WorkspaceReferenceIndex,
   syntax,
-  cacheRoot
+  cacheRoot,
+  noteCacheEntries,
+  RecordWriter,
+  recordTokens
 test.before(async () => {
   cacheRoot = await mkdtemp(join(tmpdir(), 'hibi-obsidian-metadata-'))
   server = await createServer({
@@ -30,11 +32,14 @@ test.before(async () => {
     appType: 'custom',
   })
   api = await server.ssrLoadModule('/src/addons/obsidian/api/metadata/index.ts')
+  ;({ noteCacheEntries } = await server.ssrLoadModule(
+    '/src/shared/note-cache-parser.ts',
+  ))
+  ;({ RecordWriter, recordTokens } = await server.ssrLoadModule(
+    '/src/shared/metadata-stream.ts',
+  ))
   ;({ parseWorkspaceMetadata } = await server.ssrLoadModule(
     '/src/main/workspace-index-metadata.ts',
-  ))
-  ;({ WorkspaceReferenceIndex } = await server.ssrLoadModule(
-    '/src/main/workspace-reference-index.ts',
   ))
   const { defaultNoteSyntax } = await server.ssrLoadModule(
     '/src/shared/note-syntax.ts',
@@ -54,7 +59,7 @@ test.after(async () => {
 function environment(t, sources = new Map([['note.md', '# One\n']])) {
   const target = { workspaceId: 'fixture', workspaceGeneration: 1 }
   const files = new Map([...sources.keys()].map((path) => [path, { path }]))
-  const calls = { native: [], queries: [], reads: [], stopped: 0 }
+  const calls = { metadata: [], queries: [], reads: [], stopped: 0 }
   let workspaceListener, documentListener, syntaxListener
   const state = {
     sequence: 1,
@@ -100,35 +105,38 @@ function environment(t, sources = new Map([['note.md', '# One\n']])) {
       workspace: {
         subscribeChanges: async (listener) => {
           workspaceListener = listener
-          return { snapshot: { target }, dispose: () => calls.stopped++ }
+          return {
+            snapshot: { target, sequence: state.sequence },
+            dispose: () => calls.stopped++,
+          }
         },
         query: async (request) => {
           calls.queries.push(request)
-          assert.equal(request.limit, 100)
-          const metadata = parseWorkspaceMetadata(
-            { path: request.path, markdown: sources.get(request.path) },
-            syntax,
-          )
-          index.apply(
-            target,
-            [...sources].map(([path, markdown]) => ({ path, markdown })),
-          )
-          const items =
-            request.kind === 'headings'
-              ? metadata.headings.items
-              : index.links(request.path, 0, sources.size).items
+          assert.equal(request.kind, 'metadata')
+          calls.metadata.push(request.path)
+          const writer = new RecordWriter()
+          const pages = []
+          for (const entry of noteCacheEntries(
+            sources.get(request.path),
+            syntax.settings,
+          ))
+            pages.push(...writer.write(recordTokens(entry)))
+          pages.push(writer.finish())
+          const offset = request.cursor ? Number(request.cursor.slice(5)) : 0
           const value = {
-            ...target,
             target,
-            kind: request.kind,
+            kind: 'metadata',
             path: request.path,
             sequence: state.sequence,
+            version: state.workerVersion,
             stale: false,
             complete: true,
-            items: items.slice(request.offset, request.offset + request.limit),
-            nextOffset: Math.min(items.length, request.offset + request.limit),
-            hasMore: items.length > request.offset + request.limit,
+            tokens: pages[offset],
+            hasMore: offset + 1 < pages.length,
+            nextCursor:
+              offset + 1 < pages.length ? 'page-' + (offset + 1) : null,
           }
+          if (state.pause) await state.pause
           return { ok: true, value: state.queryTransform?.(value) ?? value }
         },
       },
@@ -136,7 +144,7 @@ function environment(t, sources = new Map([['note.md', '# One\n']])) {
         query: async (method, request) => {
           assert.equal(method, 'obsidianMetadataFile')
           assert.equal(request.vaultId, target.workspaceId)
-          calls.native.push(request.path)
+          calls.metadata.push(request.path)
           const page = {
             path: request.path,
             version: state.workerVersion,
@@ -153,7 +161,6 @@ function environment(t, sources = new Map([['note.md', '# One\n']])) {
       },
     },
   }
-  const index = new WorkspaceReferenceIndex()
   const apiCache = new api.MetadataCache(context)
   t.after(() => apiCache.dispose())
   return {
@@ -195,7 +202,7 @@ test('handwritten fixture uses requested-file metadata without changing vault by
   const env = environment(t, new Map([['untouched.md', source]]))
   env.state.read = (file) => readFile(join(fixture.vault, file.path), 'utf8')
   await env.start()
-  assert.deepEqual(env.calls.native, [])
+  assert.deepEqual(env.calls.metadata, [])
   const captured = []
   const refs = []
   class Plugin {
@@ -218,14 +225,15 @@ test('handwritten fixture uses requested-file metadata without changing vault by
   const plugin = new module.exports()
   plugin.onload()
   const cache = await completed
-  assert.deepEqual(cache.headings, []) // Host parser currently treats BOM-prefixed heading as text.
+  assert.equal(cache.headings.length, 1)
+  assert.equal(cache.headings[0].position.start.offset, 1)
   assert.equal(captured.length, 1)
   assert.equal(captured[0].data, source)
   assert.equal(captured[0].path, 'untouched.md')
   assert.equal('frontmatter' in cache, false)
   assert.equal('frontmatterPosition' in cache, false)
-  assert.equal('links' in cache, false)
-  assert.deepEqual(env.calls.native, ['untouched.md', 'untouched.md'])
+  assert.equal(cache.links?.length ?? 0, 0)
+  assert.deepEqual(env.calls.metadata, ['untouched.md', 'untouched.md'])
   assert.deepEqual(env.calls.reads, ['untouched.md'])
   for (const ref of refs) ref.events.offref(ref)
   await fixture.assertUnchanged()
@@ -254,7 +262,7 @@ test('lazy views page headings/links, count duplicates, and use vault-relative p
     Object.keys(env.cache.resolvedLinks).sort(),
     [...sources.keys()].sort(),
   )
-  assert.deepEqual(env.calls.native, [])
+  assert.deepEqual(env.calls.metadata, [])
   assert.equal(env.cache.resolvedLinks['notes/start.md'], undefined)
   assert.equal(env.cache.getFileCache(env.files.get('notes/start.md')), null)
   const events = []
@@ -282,13 +290,9 @@ test('lazy views page headings/links, count duplicates, and use vault-relative p
     { Missing: 2 },
   )
   assert.deepEqual(events, ['changed', 'resolve', 'resolved'])
-  assert.deepEqual(
-    env.calls.queries
-      .filter(({ kind }) => kind === 'headings')
-      .map(({ offset }) => offset),
-    [0, 100, 200],
-  )
-  assert.deepEqual(new Set(env.calls.native), new Set(['notes/start.md']))
+  assert.ok(env.calls.queries.length > 2)
+  assert.ok(env.calls.queries.every(({ kind }) => kind === 'metadata'))
+  assert.deepEqual(new Set(env.calls.metadata), new Set(['notes/start.md']))
   assert.equal(
     env.cache.getFirstLinkpathDest('Next#Heading', 'notes/start.md'),
     env.files.get('Next.md'),
@@ -402,7 +406,7 @@ test('content, document and syntax changes refresh only requested notes; dispose
     await completed
     assert.equal(env.cache.getCache('note.md').headings[0].heading, 'new')
   }
-  assert.deepEqual(new Set(env.calls.native), new Set(['note.md']))
+  assert.deepEqual(new Set(env.calls.metadata), new Set(['note.md']))
   env.cache.dispose()
   assert.equal(env.calls.stopped, 3)
   assert.equal(env.cache.getCache('note.md'), null)
@@ -427,7 +431,7 @@ for (const event of ['document', 'workspace', 'unknown document']) {
     await env.start()
     const a = await ready(env.cache, 'a.md')
     const b = await ready(env.cache, 'b.md')
-    env.calls.native.length = 0
+    env.calls.metadata.length = 0
     const changed = []
     env.cache.on('changed', (file) => changed.push(file.path))
     const completed = new Promise((resolve) => {
@@ -453,7 +457,7 @@ for (const event of ['document', 'workspace', 'unknown document']) {
     assert.equal(env.cache.getCache('b.md'), b)
     assert.equal(env.cache.getCache('a.md').headings[0].heading, 'new')
     if (event !== 'unknown document')
-      assert.deepEqual(new Set(env.calls.native), new Set(['a.md']))
+      assert.deepEqual(new Set(env.calls.metadata), new Set(['a.md']))
   })
 }
 
@@ -541,7 +545,7 @@ test('targeted changes cancel the older load for the same document', async (t) =
   )
   const completed = ready(env.cache, 'note.md')
   await Promise.resolve()
-  assert.equal(env.calls.native.length, 1)
+  assert.equal(env.calls.metadata.length, 1)
   env.sources.set('note.md', '#new')
   env.documentChange({ kind: 'changed', metadata: { tabId: 'tab', target } })
   release()
@@ -581,7 +585,7 @@ test('requested metadata stays bounded to 128 notes across refreshes', async (t)
   for (let index = 1; index < 129; index++)
     assert.equal(env.cache.getCache(`${index}.md`), null)
   await completed
-  assert.equal(new Set(env.calls.native).size, 128)
+  assert.equal(new Set(env.calls.metadata).size, 128)
   const second = env.cache.getCache('2.md')
   await ready(env.cache, '128.md')
   const refreshed = new Promise((resolve) => {
@@ -665,7 +669,10 @@ test('link targets span bounded index pages and linktext honors vault settings',
   const sources = new Map([
     [
       'start.md',
-      Array.from({ length: 205 }, (_, index) => `[[dest/${index}]]`).join(' '),
+      Array.from(
+        { length: 205 },
+        (_, index) => `[[dest/${index}|${'label '.repeat(50)}]]`,
+      ).join(' '),
     ],
   ])
   for (let index = 0; index < 205; index++)
@@ -675,12 +682,8 @@ test('link targets span bounded index pages and linktext honors vault settings',
   await ready(env.cache, 'start.md')
   assert.equal(Object.keys(env.cache.resolvedLinks['start.md']).length, 205)
   assert.equal(env.cache.resolvedLinks['start.md']['dest/204.md'], 1)
-  assert.deepEqual(
-    env.calls.queries
-      .filter(({ kind }) => kind === 'links')
-      .map(({ offset }) => offset),
-    [0, 100, 200],
-  )
+  assert.ok(env.calls.queries.length > 2)
+  assert.ok(env.calls.queries.every(({ kind }) => kind === 'metadata'))
   assert.deepEqual(new Set(env.calls.reads), new Set(['start.md']))
   assert.equal(
     env.cache.getFirstLinkpathDest('../start', 'dest/0.md'),
@@ -739,13 +742,13 @@ test('disposal cancels in-flight worker publication and queued sources', async (
   env.cache.getCache('other.md')
   const completed = env.cache.tail
   await Promise.resolve()
-  assert.equal(env.calls.native.length, 1)
+  assert.equal(env.calls.metadata.length, 1)
   env.cache.dispose()
   release()
   await completed
   assert.equal(events, 0)
   assert.equal(env.calls.reads.length, 0)
-  assert.equal(env.calls.native.length, 1)
+  assert.equal(env.calls.metadata.length, 1)
 })
 
 test('metadata rejects stale publication quietly and ignores callbacks after disposal', async (t) => {
@@ -767,7 +770,7 @@ test('metadata rejects stale publication quietly and ignores callbacks after dis
     env.cache.getCache('note.md')
     const completed = env.cache.tail
     await Promise.resolve()
-    assert.equal(env.calls.native.length, 1)
+    assert.equal(env.calls.metadata.length, 1)
     if (stopped) env.cache.dispose()
     const error = new Error('Open this plugin vault again.')
     reject(error)
@@ -787,6 +790,241 @@ test('metadata rejects stale publication quietly and ignores callbacks after dis
     env.change('resync')
     env.syntaxChange()
     assert.equal(invalidate.mock.calls.length, 0)
+  }
+})
+
+test('a cold metadata request survives an unrelated filesystem change during its read', async (t) => {
+  const env = environment(
+    t,
+    new Map([
+      ['note.md', '# requested'],
+      ['other.md', '# other'],
+    ]),
+  )
+  await env.start()
+  const query = env.context.hibi.workspace.query
+  let attempts = 0
+  env.context.hibi.workspace.query = async (request) => {
+    if (++attempts === 1) {
+      env.change('content', ['other.md'])
+      return { ok: false, code: 'stale', message: 'Workspace changed.' }
+    }
+    return query(request)
+  }
+  const changed = []
+  env.cache.on('changed', (file) => changed.push(file.path))
+  env.cache.getCache('note.md')
+  await env.cache.tail
+  await env.cache.tail
+  assert.equal(env.cache.getCache('note.md')?.headings[0].heading, 'requested')
+  assert.deepEqual(changed, ['note.md'])
+  assert.equal(attempts, 3)
+})
+
+test('cold metadata retries a sequence change while reading changed-event source', async (t) => {
+  const env = environment(
+    t,
+    new Map([
+      ['note.md', '# requested'],
+      ['other.md', '# other'],
+    ]),
+  )
+  await env.start()
+  let changedSource = false
+  env.state.read = () => {
+    if (!changedSource) {
+      changedSource = true
+      env.change('content', ['other.md'])
+    }
+    return '# requested'
+  }
+  env.cache.getCache('note.md')
+  await env.cache.tail
+  await env.cache.tail
+  assert.equal(env.cache.getCache('note.md')?.headings[0].heading, 'requested')
+  assert.deepEqual(env.calls.reads, ['note.md', 'note.md'])
+})
+
+test('escaped frontmatter wikilinks retain resolution syntax and exact raw spelling', async (t) => {
+  const source = String.raw`---
+related: "\u005b\u005bNext\u005d\u005d"
+plain: "[next](../Next.md)"
+---
+body
+`
+  const env = environment(
+    t,
+    new Map([
+      ['folder/note.md', source],
+      ['Next.md', '# next'],
+    ]),
+  )
+  await env.start()
+  const cache = await ready(env.cache, 'folder/note.md')
+  assert.deepEqual(
+    { ...env.cache.resolvedLinks['folder/note.md'] },
+    { 'Next.md': 2 },
+  )
+  assert.deepEqual({ ...env.cache.unresolvedLinks['folder/note.md'] }, {})
+  assert.equal(
+    cache.frontmatterLinks[0].original,
+    String.raw`\u005b\u005bNext\u005d\u005d`,
+  )
+  assert.equal(cache.frontmatterLinks[0].syntax, 'wiki')
+  assert.equal(cache.frontmatterLinks[1].syntax, 'markdown')
+})
+
+test('positioned cache preserves nested frontmatter, raw references and block subpaths', async (t) => {
+  const source =
+    '\ufeff---\r\nobject:\r\n  values: [one, {count: 3, flags: [true, false]}]\r\n  note: "[[other#^item]]"\r\n---\r\n# H 😀\r\n\r\ntext 😀 [alias](other.md#^item) ![[other#^item|embed]] #Tag ^block\r\n'
+  const env = environment(
+    t,
+    new Map([
+      ['note.md', source],
+      ['other.md', 'item ^item\n'],
+    ]),
+  )
+  await env.start()
+  const cache = await ready(env.cache, 'note.md')
+  assert.deepEqual(cache.frontmatter, {
+    object: {
+      values: ['one', { count: 3, flags: [true, false] }],
+      note: '[[other#^item]]',
+    },
+  })
+  const loc = (offset) => {
+    let line = 0,
+      start = 0
+    for (const match of source.slice(0, offset).matchAll(/\r\n|\r|\n/g)) {
+      line++
+      start = match.index + match[0].length
+    }
+    return { line, col: offset - start, offset }
+  }
+  const range = (text) => {
+    const start = source.indexOf(text)
+    assert.ok(start >= 0)
+    return { start: loc(start), end: loc(start + text.length) }
+  }
+  assert.deepEqual(cache.headings[0], {
+    heading: 'H 😀',
+    level: 1,
+    position: range('# H 😀'),
+  })
+  assert.deepEqual(cache.links[0].position, range('[alias](other.md#^item)'))
+  assert.equal(cache.links[0].original, '[alias](other.md#^item)')
+  assert.equal(cache.links[0].link, 'other.md#^item')
+  assert.deepEqual(cache.embeds[0].position, range('![[other#^item|embed]]'))
+  assert.equal(cache.embeds[0].displayText, 'embed')
+  assert.deepEqual(cache.tags, [{ tag: '#Tag', position: range('#Tag') }])
+  assert.deepEqual(cache.frontmatterPosition.start, {
+    line: 0,
+    col: 0,
+    offset: 0,
+  })
+  assert.equal(cache.frontmatterPosition.end.offset, source.indexOf('\r\n# H'))
+  assert.equal(cache.frontmatterLinks[0].key, 'object.note')
+  assert.deepEqual(cache.frontmatterLinks[0].position, range('[[other#^item]]'))
+  const block = cache.blocks.block
+  assert.equal(block.id, 'block')
+  assert.equal(
+    source
+      .slice(block.position.start.offset, block.position.end.offset)
+      .startsWith('text 😀'),
+    true,
+  )
+  assert.equal(
+    cache.sections.some(
+      ({ type, id }) => type === 'paragraph' && id === 'block',
+    ),
+    true,
+  )
+  assert.deepEqual(api.resolveSubpath(cache, '#^block'), {
+    type: 'block',
+    block,
+    start: block.position.start,
+    end: block.position.end,
+  })
+  assert.equal(
+    api.resolveSubpath(cache, '#H%20%F0%9F%98%80').current,
+    cache.headings[0],
+  )
+  assert.equal(api.resolveSubpath(cache, '#^missing'), null)
+  assert.equal(api.resolveSubpath(cache, '#%ZZ'), null)
+  assert.deepEqual({ ...env.cache.resolvedLinks['note.md'] }, { 'other.md': 3 })
+})
+
+test('subpath results expose canonical start/end locations for headings and blocks', () => {
+  const position = (line) => ({
+    start: { line, col: 0, offset: line * 10 },
+    end: { line, col: 8, offset: line * 10 + 8 },
+  })
+  const headings = [
+    { heading: 'A', level: 1, position: position(0) },
+    { heading: 'B', level: 2, position: position(1) },
+    { heading: 'C', level: 1, position: position(3) },
+  ]
+  const block = { id: 'MixedCase', position: position(4) }
+  const list = { id: block.id, position: block.position, parent: -4 }
+  const cache = { headings, blocks: { [block.id]: block }, listItems: [list] }
+  assert.deepEqual(api.resolveSubpath(cache, '#A'), {
+    type: 'heading',
+    current: headings[0],
+    next: headings[2],
+    start: headings[0].position.start,
+    end: headings[2].position.start,
+  })
+  assert.deepEqual(api.resolveSubpath(cache, '#C'), {
+    type: 'heading',
+    current: headings[2],
+    next: null,
+    start: headings[2].position.start,
+    end: null,
+  })
+  assert.deepEqual(api.resolveSubpath(cache, '#^MixedCase'), {
+    type: 'block',
+    block,
+    list,
+    start: block.position.start,
+    end: block.position.end,
+  })
+  assert.equal(api.resolveSubpath(cache, '#^mixedcase'), null)
+})
+
+test('heading chains resolve each segment inside its preceding heading', () => {
+  const headings = [
+    ['Café 😀', 1],
+    ['Nested', 3],
+    ['B', 4],
+    ['Side', 2],
+    ['B', 3],
+    ['Outside', 1],
+    ['Nested', 2],
+    ['B', 3],
+  ].map(([heading, level], line) => ({
+    heading,
+    level,
+    position: {
+      start: { line, col: 0, offset: line * 10 },
+      end: { line, col: 5, offset: line * 10 + 5 },
+    },
+  }))
+  const cache = { headings }
+  for (const [subpath, index] of [
+    ['#Cafe%CC%81%20%F0%9F%98%80#nested#B', 2],
+    ['#café 😀#side#B', 4],
+    ['#Outside#Nested#B', 7],
+    ['#Café 😀#B', 2],
+    ['#café#nested#b', 2],
+    ['#café-#nested#b', 2],
+    ['#café-😀#Nested', -1],
+    ['#Café 😀#Outside', -1],
+    ['#Café 😀#Missing', -1],
+    ['#Café 😀##B', -1],
+  ]) {
+    const result = api.resolveSubpath(cache, subpath)
+    assert.equal(result?.current ?? null, headings[index] ?? null, subpath)
+    if (result) assert.deepEqual(result.start, headings[index].position.start)
   }
 })
 

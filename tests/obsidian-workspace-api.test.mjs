@@ -162,6 +162,85 @@ async function environment(t) {
   }
 }
 
+test('openLinkText reveals positioned block and heading subpaths in the captured leaf', async (t) => {
+  const env = await environment(t)
+  const target = { workspaceId: 'fixture', workspaceGeneration: 1 }
+  env.context.app.vault.target = target
+  env.context.app.metadataCache.getFirstLinkpathDest = () => env.other
+  const cursor = []
+  const scrolled = []
+  env.workspace.setMarkdownViewFactory(() => ({
+    editor: {
+      setCursor: (value) => cursor.push(value),
+      scrollIntoView: (value) => scrolled.push(value),
+    },
+  }))
+  const selection = {
+    view: env.first,
+    editor: 'source',
+    editorGeneration: 1,
+    contentVersion: 4,
+    anchor: 0,
+    head: 0,
+  }
+  env.context.hibi.editorViews.getSelection = () => ({
+    ok: true,
+    value: { ...selection },
+  })
+  const requests = []
+  env.context.hibi.workspace.query = async (request) => {
+    requests.push(request)
+    return {
+      ok: true,
+      value: {
+        kind: 'resolve-subpath',
+        target,
+        path: env.other.path,
+        version: 'draft:one:4',
+        stale: false,
+        resolved: {
+          type: 'block',
+          id: 'id',
+          position: {
+            start: { line: 3, col: 5, offset: 40 },
+            end: { line: 3, col: 8, offset: 43 },
+          },
+        },
+      },
+    }
+  }
+  await env.workspace.openLinkText('other#^id', 'untouched.md')
+  assert.deepEqual(cursor, [{ line: 3, ch: 5 }])
+  assert.equal(scrolled.length, 1)
+  assert.equal(requests[0].subpath, '#^id')
+  env.context.hibi.workspace.query = async (request) => {
+    selection.contentVersion++
+    return {
+      ok: true,
+      value: {
+        kind: 'resolve-subpath',
+        target,
+        path: env.other.path,
+        version: 'draft:one:4',
+        stale: false,
+        resolved: {
+          type: 'heading',
+          id: 'heading',
+          position: {
+            start: { line: 1, col: 0, offset: 4 },
+            end: { line: 1, col: 8, offset: 12 },
+          },
+        },
+      },
+    }
+  }
+  await assert.rejects(
+    env.workspace.openLinkText('other#heading', 'untouched.md'),
+    /editor view changed/,
+  )
+  assert.equal(cursor.length, 1)
+})
+
 test('internal workspace refreshes cancel quietly on disposal and still report live failures', async (t) => {
   const errors = []
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'reportError')

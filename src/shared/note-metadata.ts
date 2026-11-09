@@ -1,11 +1,16 @@
 import type { Token } from 'marked'
 import { isMap, parseDocument } from 'yaml'
 import { readFrontmatter, yamlLines } from './frontmatter.ts'
+import type { NotePosition } from './note-cache.ts'
 import { defaultNoteSyntax, type NoteSyntax, noteLexer } from './note-syntax.ts'
 
 export type PropertyScalar = string | number | boolean | null
 export type PropertyValue = PropertyScalar | readonly PropertyScalar[]
-export type NoteHeading = { readonly depth: number; readonly text: string }
+export type NoteHeading = {
+  readonly depth: number
+  readonly text: string
+  readonly position?: NotePosition
+}
 
 function propertyScalar(value: unknown): PropertyScalar | undefined {
   if (value === null || typeof value === 'boolean' || typeof value === 'string')
@@ -14,7 +19,7 @@ function propertyScalar(value: unknown): PropertyScalar | undefined {
   return undefined
 }
 
-function propertyValue(value: unknown): PropertyValue | undefined {
+export function propertyValue(value: unknown): PropertyValue | undefined {
   if (Array.isArray(value)) {
     const values = value.map(propertyScalar)
     if (values.every((item) => item !== undefined))

@@ -439,8 +439,21 @@ export function createWorkspaceSession(
     if ((await current().settle()) === false)
       throw new Error('Could not synchronize document focus.')
   }
+  let rememberFrame = 0
+  const observe = (event: Event) => {
+    // CodeMirror can trigger focusout while updating DOM attributes; layout reads must wait.
+    if (event.type !== 'focusout') {
+      remember()
+      return
+    }
+    if (!rememberFrame)
+      rememberFrame = requestAnimationFrame(() => {
+        rememberFrame = 0
+        remember()
+      })
+  }
   const events = ['scroll', 'pointerdown', 'keydown', 'focusout'] as const
-  for (const event of events) document.addEventListener(event, remember, true)
+  for (const event of events) document.addEventListener(event, observe, true)
   const removeCapture = bridge.onCapture(async () => {
     if (suspended) throw new Error('A workspace switch is already running.')
     let captureGeneration = generation
@@ -557,8 +570,9 @@ export function createWorkspaceSession(
       removeViews()
       removeEditors()
       cancelAnimationFrame(placementFrame)
+      cancelAnimationFrame(rememberFrame)
       for (const event of events)
-        document.removeEventListener(event, remember, true)
+        document.removeEventListener(event, observe, true)
       resume()
     },
   }

@@ -3,7 +3,12 @@ import type {
   DocumentTarget,
   WorkspaceTarget,
 } from '../../../../shared/foundation-contracts'
-import { readFrontmatter } from '../../../../shared/frontmatter'
+import type {
+  NoteCacheEntry,
+  NoteCacheValues,
+  NotePosition,
+} from '../../../../shared/note-cache'
+import { iterateNoteMetadata } from '../../../../shared/note-cache-query'
 import {
   localTargetPath,
   noteBasenames,
@@ -11,7 +16,6 @@ import {
   resolveWikiTarget,
   wikiTargetName,
 } from '../../../../shared/note-links'
-import { noteProperties } from '../../../../shared/note-metadata'
 import { shortestObsidianPath } from '../../../../shared/obsidian-links'
 import { Events, reportError } from '../core/events'
 import { registerObsidianApi } from '../registry'
@@ -19,15 +23,66 @@ import type { ApiContext } from '../types'
 import type { TFile } from '../vault/index'
 import * as helpers from './helpers'
 import { validMetadataPath } from './path'
-import type { MetadataFilePage } from './types'
 
+export type { Loc, Pos } from '../../../../shared/note-cache'
 export * from './helpers'
 
-/** Hibi has no source positions for indexed metadata. These fields omit them. */
 export interface CachedMetadata {
-  headings?: { heading: string; level: number }[]
-  tags?: { tag: string }[]
+  headings?: { heading: string; level: number; position: NotePosition }[]
+  links?: NoteCacheValues['link'][]
+  embeds?: NoteCacheValues['embed'][]
+  tags?: NoteCacheValues['tag'][]
   frontmatter?: Record<string, unknown>
+  frontmatterPosition?: NotePosition
+  frontmatterLinks?: NoteCacheValues['frontmatterLink'][]
+  sections?: NoteCacheValues['section'][]
+  listItems?: NoteCacheValues['listItem'][]
+  blocks?: Record<string, NoteCacheValues['block']>
+}
+
+function cacheEntry(cache: CachedMetadata, entry: NoteCacheEntry) {
+  switch (entry.kind) {
+    case 'heading': {
+      const { text, depth, position } = entry.value
+      cache.headings ??= []
+      cache.headings.push({ heading: text, level: depth, position })
+      break
+    }
+    case 'frontmatter':
+      cache.frontmatter = entry.value.values
+      cache.frontmatterPosition = entry.value.position
+      break
+    case 'block':
+      cache.blocks ??= Object.create(null) as NonNullable<
+        CachedMetadata['blocks']
+      >
+      cache.blocks[entry.value.id] = entry.value
+      break
+    case 'link':
+      cache.links ??= []
+      cache.links.push(entry.value)
+      break
+    case 'embed':
+      cache.embeds ??= []
+      cache.embeds.push(entry.value)
+      break
+    case 'tag':
+      cache.tags ??= []
+      cache.tags.push(entry.value)
+      break
+    case 'listItem':
+      cache.listItems ??= []
+      cache.listItems.push(entry.value)
+      break
+    case 'section':
+      cache.sections ??= []
+      cache.sections.push(entry.value)
+      break
+    case 'frontmatterLink':
+      cache.frontmatterLinks ??= []
+      cache.frontmatterLinks.push(entry.value)
+      break
+  }
 }
 
 type LinkCounts = Record<string, Record<string, number>>
@@ -51,6 +106,7 @@ export class MetadataCache extends Events {
   private pending = new Map<string, Promise<void>>()
   private tail: Promise<void> = Promise.resolve()
   private target: WorkspaceTarget | null = null
+  private sequence: number | undefined
   private revision = 0
   private stops: (() => void)[] = []
   private disposed = false
@@ -66,6 +122,7 @@ export class MetadataCache extends Events {
     const stream = await this.context.hibi.workspace.subscribeChanges(
       (event) => {
         if (this.disposed) return
+        this.sequence = event.sequence
         const previous = this.target
         const same =
           previous?.workspaceId === event.workspaceId &&
@@ -83,6 +140,7 @@ export class MetadataCache extends Events {
     }
     this.stops.push(() => stream.dispose())
     this.target ??= stream.snapshot.target
+    this.sequence ??= stream.snapshot.sequence
     this.stops.push(
       this.context.hibi.documents.subscribe((event) => {
         if (this.disposed) return
@@ -268,6 +326,8 @@ export class MetadataCache extends Events {
       return
     const revision = this.revision
     const target = this.target
+    const sequence = this.sequence
+    let retry = false
     // The pending job is a per-path epoch; unrelated edits cannot cancel it.
     const current = (): boolean =>
       !this.disposed &&
@@ -275,10 +335,15 @@ export class MetadataCache extends Events {
       this.pending.get(path) === job
     let wasCurrent = false
     const job: Promise<void> = this.tail
-      .then(() => (current() ? this.load(path, target, current) : undefined))
+      .then(async () => {
+        if (current())
+          retry = (await this.load(path, target, current)) === 'stale'
+      })
       .finally(() => {
         wasCurrent = current()
         if (this.pending.get(path) === job) this.pending.delete(path)
+        if (wasCurrent && retry && this.sequence !== sequence)
+          this.request(path)
       })
     this.pending.set(path, job)
     this.tail = job.then(
@@ -305,55 +370,43 @@ export class MetadataCache extends Events {
     current: () => boolean,
   ) {
     const { hibi } = this.context
-    const input = { target, path, vaultId: target.workspaceId }
-    const page = await hibi.native.query<MetadataFilePage | null>(
-      'obsidianMetadataFile',
-      input,
-    )
-    if (!current() || !page || page.path !== path) return
-    const cache: CachedMetadata = {
-      tags: page.metadata.tags.map((tag) => ({ tag: `#${tag}` })),
+    const expectedSequence = this.sequence
+    const captured: { page: { version: string; sequence: number } | null } = {
+      page: null,
     }
-    const destinations = new Set<string>()
-    const sequence = page.sequence
-    // Each query is bounded; publish only when every page belongs to one sequence.
-    for (const kind of ['headings', 'links'] as const) {
-      let offset = 0
-      cache.headings ??= []
-      while (current()) {
-        const result = await hibi.workspace.query({
-          target,
-          path,
-          kind,
-          offset,
-          limit: 100,
-        })
-        if (!current() || !result.ok) return
-        const value = result.value
-        if (
-          value.kind !== kind ||
-          value.stale ||
-          value.target.workspaceId !== target.workspaceId ||
-          value.target.workspaceGeneration !== target.workspaceGeneration ||
-          sequence !== value.sequence
-        )
-          return
-        if (value.kind === 'headings')
-          cache.headings.push(
-            ...value.items.map(({ text, depth }) => ({
-              heading: text,
-              level: depth,
-            })),
-          )
-        else if (value.kind === 'links')
-          for (const destination of value.items)
-            if (validMetadataPath(destination)) destinations.add(destination)
-        if (!value.hasMore) break
-        if (value.nextOffset <= offset) return
-        offset = value.nextOffset
+    const cache: CachedMetadata = { headings: [], tags: [] }
+    try {
+      for await (const entry of iterateNoteMetadata(
+        async (request) => {
+          const result = await hibi.workspace.query(request)
+          if (result.ok && result.value.kind === 'metadata') {
+            if (
+              expectedSequence !== undefined &&
+              result.value.sequence !== expectedSequence
+            )
+              return {
+                ok: false as const,
+                code: 'stale' as const,
+                message: 'This note metadata changed. Start again.',
+              }
+            captured.page ??= result.value
+          }
+          return result
+        },
+        { target, path },
+      )) {
+        if (!current()) return
+        cacheEntry(cache, entry)
       }
+    } catch (error) {
+      if (!current()) return
+      if ((error as { code?: string })?.code === 'stale')
+        return 'stale' as const
+      throw error
     }
-    if (!current()) return
+    const page = captured.page
+    if (!current() || !page) return
+    const sequence = page.sequence
     const versions = () =>
       JSON.stringify(
         hibi.documents
@@ -371,18 +424,24 @@ export class MetadataCache extends Events {
     if (!sourceFile) return
     const data = await this.context.app.vault.read(sourceFile)
     if (!current() || before !== versions()) return
-    const after = await hibi.native.query<MetadataFilePage | null>(
-      'obsidianMetadataFile',
-      input,
-    )
+    const checked = await hibi.workspace.query({
+      kind: 'metadata',
+      target,
+      path,
+    })
+    const after =
+      checked.ok && checked.value.kind === 'metadata' ? checked.value : null
+    if (!current()) return
     if (
-      !current() ||
       !after ||
+      after.stale ||
       after.version !== page.version ||
       after.sequence !== sequence ||
+      after.target.workspaceId !== target.workspaceId ||
+      after.target.workspaceGeneration !== target.workspaceGeneration ||
       before !== versions()
     )
-      return
+      return 'stale' as const
     if (
       page.version.startsWith('draft:') &&
       !hibi.documents
@@ -393,25 +452,36 @@ export class MetadataCache extends Events {
         )
     )
       return
-    const properties = noteProperties(data, page.syntax.settings)
-    if (page.syntax.settings.frontmatter && readFrontmatter(data, true))
-      cache.frontmatter = { ...properties.values }
     const paths = this.paths()
     const basenames = noteBasenames(paths)
     const resolved: Record<string, number> = Object.create(null)
     const unresolved: Record<string, number> = Object.create(null)
-    const count = (href: string, destination: string | null) => {
-      const known =
-        destination && (destination === path || destinations.has(destination))
-      if (destination && !known) return
-      const row = known ? resolved : unresolved
-      const key = known ? destination : href
+    for (const link of [
+      ...(cache.links ?? []),
+      ...(cache.embeds ?? []),
+      ...(cache.frontmatterLinks ?? []),
+    ]) {
+      const wiki =
+        'syntax' in link
+          ? link.syntax === 'wiki'
+          : /^!?\[\[/.test(link.original)
+      if (!wiki && /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(link.link)) continue
+      const href = wiki
+        ? wikiTargetName(link.link)
+        : link.link.startsWith('#')
+          ? ''
+          : localTargetPath(path, link.link)
+      if (href === null) continue
+      const destination =
+        href === ''
+          ? path
+          : wiki
+            ? resolveWikiTarget(path, href, paths, basenames)
+            : resolveLocalTarget(href, paths)
+      const row = destination ? resolved : unresolved
+      const key = destination ?? href
       if (key) row[key] = (row[key] ?? 0) + 1
     }
-    for (const href of page.metadata.references.links)
-      count(href, resolveLocalTarget(href, paths))
-    for (const href of page.metadata.references.wikilinks)
-      count(href, resolveWikiTarget(path, href, paths, basenames))
     const file = this.file(path)
     if (!current() || !file) return
     const previous = this.entries.get(path)

@@ -54,7 +54,9 @@ const bundle = await build({
       name: 'metadata-host',
       setup(build) {
         build.onResolve({ filter: /^\.\/workspace$/ }, (args) =>
-          /[/\\]workspace-metadata-query\.ts$/.test(args.importer)
+          /[/\\]workspace-(?:metadata|note-cache)-query\.ts$/.test(
+            args.importer,
+          )
             ? { path: args.path, namespace: 'metadata-host' }
             : null,
         )
@@ -70,6 +72,8 @@ const bundle = await build({
             stale: host().stale, complete: true, capReached: false,
           })
           export const workspaceIndexRevision = () => host().revision
+          export const workspaceMetadataDetails = async () => null
+          export const workspaceRoot = () => '/notes'
           export const listenWorkspaceChanges = (listener) => {
             host().listener = listener
             return () => { host().listener = null }

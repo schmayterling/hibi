@@ -1,5 +1,7 @@
 import type { CommandExecutionContext } from '../../../../shared/foundation-contracts'
 import type { AddonContext } from '../../../api'
+import { registerObsidianProtocol } from '../protocol'
+import type { ObsidianProtocolHandler } from '../protocol/parse'
 import type { ApiContribution, App, PluginManifest } from '../types'
 import { Component } from './component'
 import { ownElement } from './dom'
@@ -203,9 +205,11 @@ export class Plugin extends Component {
   }
 
   registerObsidianProtocolHandler(
-    _action: string,
-    _handler: (params: Record<string, string>) => unknown,
-  ): never {
-    throw new Error('Obsidian protocol handlers are not supported by Hibi.')
+    action: string,
+    handler: ObsidianProtocolHandler,
+  ): void {
+    if (this.isUnloaded || !this.host.isCurrent())
+      throw new Error('This plugin has unloaded.')
+    this.register(registerObsidianProtocol(this.app, action, handler))
   }
 }

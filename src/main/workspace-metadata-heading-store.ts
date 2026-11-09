@@ -13,6 +13,7 @@ import {
 import { type FileHandle, lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sameFileIdentity } from '../shared/file-identity.ts'
+import { validNotePosition } from '../shared/metadata-stream.ts'
 import type { NoteHeading } from '../shared/note-metadata.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 
@@ -30,7 +31,7 @@ export type HeadingPage = {
 export const headingStorePattern = /^([a-f0-9]{64})-[a-f0-9-]{36}\.(hidx|hdat)$/
 const keyPattern = /^[a-f0-9]{64}-[a-f0-9-]{36}$/
 const headerBytes = 88
-const entryBytes = 24
+const entryBytes = 80
 export const headingStoreBufferBytes = 64 * 1024
 export const headingPageBytes = 32 * 1024
 export const headingPageLimit = 1000
@@ -60,7 +61,7 @@ export async function headingDirectoryAvailable(
   }
 }
 
-function writeAll(
+export function writeAll(
   fd: number,
   buffer: Buffer,
   length: number,
@@ -162,6 +163,20 @@ export class HeadingStoreWriter {
     )
     this.index.writeDoubleLE(heading.text.length, this.indexLength + 8)
     this.index.writeDoubleLE(heading.depth, this.indexLength + 16)
+    const position = heading.position
+    if (position !== undefined && !validNotePosition(position))
+      throw new TypeError('Invalid metadata heading position')
+    this.index.writeDoubleLE(position ? 1 : 0, this.indexLength + 72)
+    if (position) {
+      for (const [point, offset] of [
+        [position.start, 24],
+        [position.end, 48],
+      ] as const) {
+        this.index.writeDoubleLE(point.line, this.indexLength + offset)
+        this.index.writeDoubleLE(point.col, this.indexLength + offset + 8)
+        this.index.writeDoubleLE(point.offset, this.indexLength + offset + 16)
+      }
+    }
     this.indexLength += entryBytes
     this.record.count++
     for (let start = 0; start < heading.text.length; ) {
@@ -184,7 +199,7 @@ export class HeadingStoreWriter {
       this.flushIndex()
       this.flushData()
       const header = Buffer.alloc(headerBytes)
-      header.write('HIBIHD01', 0, 'ascii')
+      header.write('HIBIHD02', 0, 'ascii')
       header.write(this.record.identity, 8, 'ascii')
       header.writeDoubleLE(this.record.count, 72)
       header.writeDoubleLE(this.dataPosition, 80)
@@ -223,7 +238,7 @@ export class HeadingStoreWriter {
   }
 }
 
-async function openChecked(path: string) {
+export async function openChecked(path: string) {
   const before = await lstat(path, { bigint: true })
   if (!before.isFile() || before.isSymbolicLink()) return null
   const file = await open(
@@ -242,7 +257,7 @@ async function openChecked(path: string) {
   }
 }
 
-async function readAll(
+export async function readAll(
   file: FileHandle,
   buffer: Buffer,
   position: number,
@@ -290,7 +305,7 @@ export async function readHeadingStore(
     const header = Buffer.alloc(headerBytes)
     if (
       !(await readAll(index.file, header, 0)) ||
-      header.toString('ascii', 0, 8) !== 'HIBIHD01' ||
+      header.toString('ascii', 0, 8) !== 'HIBIHD02' ||
       header.toString('ascii', 8, 72) !== record.identity ||
       header.readDoubleLE(72) !== record.count ||
       index.info.size !==
@@ -317,6 +332,20 @@ export async function readHeadingStore(
       const position = entries.readDoubleLE(index * entryBytes)
       const length = entries.readDoubleLE(index * entryBytes + 8)
       const depth = entries.readDoubleLE(index * entryBytes + 16)
+      const positioned = entries.readDoubleLE(index * entryBytes + 72)
+      const point = (offset: number) => ({
+        line: entries.readDoubleLE(index * entryBytes + offset),
+        col: entries.readDoubleLE(index * entryBytes + offset + 8),
+        offset: entries.readDoubleLE(index * entryBytes + offset + 16),
+      })
+      const sourcePosition = positioned
+        ? { start: point(24), end: point(48) }
+        : undefined
+      if (
+        (positioned !== 0 && positioned !== 1) ||
+        (sourcePosition !== undefined && !validNotePosition(sourcePosition))
+      )
+        return null
       if (
         !Number.isSafeInteger(position) ||
         position < headerBytes ||
@@ -337,14 +366,18 @@ export async function readHeadingStore(
       const buffer = Buffer.alloc(length * 2)
       if (!(await readAll(data.file, buffer, position))) return null
       const text = buffer.toString('utf16le')
-      const size = Buffer.byteLength(text)
+      const size = Buffer.byteLength(text) + (sourcePosition ? 192 : 0)
       if (size > headingPageBytes) {
         complete = false
         nextOffset++
         continue
       }
       if (bytes + size > headingPageBytes) break
-      items.push({ depth, text })
+      items.push({
+        depth,
+        text,
+        ...(sourcePosition ? { position: sourcePosition } : {}),
+      })
       nextOffset++
       bytes += size
     }

@@ -8,6 +8,10 @@ import {
   type WebContents,
 } from 'electron'
 import { OBSIDIAN_DESKTOP } from '../../shared/obsidian-desktop'
+import {
+  mintPluginRequestCapability,
+  revokeStalePluginRequestCapabilities,
+} from './api/network/capabilities'
 import { obsidianGlobalStore } from './native'
 import type { InstalledPlugin } from './package'
 
@@ -58,6 +62,7 @@ export function desktopAccessChanged(id?: string, fullAccess = false) {
 
 type WindowHooks = {
   enabled(): boolean
+  generation(): number | null
   current(): BrowserWindow | null
   trusted(event: IpcMainEvent | IpcMainInvokeEvent): void
   prepare(window: BrowserWindow): Promise<void>
@@ -146,6 +151,7 @@ export class DesktopWorkspace {
           hooks.trusted(event)
           const grant = typeof id === 'string' ? this.grants.get(id) : undefined
           if (
+            typeof id !== 'string' ||
             !this.actualTrusted ||
             !hooks.enabled() ||
             event.sender !== hooks.current()?.webContents ||
@@ -156,7 +162,21 @@ export class DesktopWorkspace {
             throw new Error(
               'This enabled plugin has no full computer access grant for this package.',
             )
-          event.returnValue = { source: grant.source, filename: grant.filename }
+          const generation = hooks.generation()
+          const capability = mintPluginRequestCapability(id, grant.hash, {
+            senderId: event.sender.id,
+            isCurrent: () =>
+              this.actualTrusted &&
+              hooks.enabled() &&
+              hooks.generation() === generation &&
+              event.sender === hooks.current()?.webContents &&
+              this.grants.get(id)?.hash === grant.hash,
+          })
+          event.returnValue = {
+            source: grant.source,
+            filename: grant.filename,
+            capability,
+          }
         } catch (error) {
           event.returnValue = {
             error:
@@ -278,6 +298,7 @@ export class DesktopWorkspace {
       this.force = true
     if (id) this.grants.delete(id)
     else this.grants.clear()
+    revokeStalePluginRequestCapabilities()
     this.request()
   }
 

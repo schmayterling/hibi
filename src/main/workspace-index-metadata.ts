@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isMarkdownDocument } from '../shared/document-types.ts'
+import type { WorkspaceMetadataDetailSource } from '../shared/metadata-stream.ts'
 import {
   localTargetPath,
   noteReferences,
@@ -28,6 +29,7 @@ export type WorkspaceMetadataPage = {
   version: string
   syntax: PageSyntax
   metadata: WorkspacePageMetadata
+  details?: WorkspaceMetadataDetailSource
 }
 
 export const sourceIndexVersion = (source: string) =>

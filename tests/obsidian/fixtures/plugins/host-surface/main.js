@@ -262,11 +262,12 @@ module.exports = class HostSurface extends Plugin {
     fixture.notice = new Notice('Fixture notice', 0)
     try {
       this.registerObsidianProtocolHandler('fixture', () => {})
+      fixture.protocolRefused = false
     } catch {
       fixture.protocolRefused = true
     }
     try {
-      await requestUrl({ url: 'https://example.test', method: 'DELETE' })
+      await requestUrl({ url: 'file:///refused', method: 'DELETE' })
     } catch {
       fixture.networkRefused = true
     }

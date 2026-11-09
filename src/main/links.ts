@@ -1,5 +1,6 @@
 import { basename } from 'node:path'
 import { type BrowserWindow, shell } from 'electron'
+import { getAddonActivationGeneration } from './addons'
 import {
   getDocument,
   getDocumentPath,
@@ -64,6 +65,20 @@ export async function openDocumentLink(
     revision !== getDocument().revision
   )
     return null
+  if (/^(?:obsidian:|hibi:\/\/obsidian\/)/i.test(href)) {
+    const receivedAt = Date.now()
+    const generation = getAddonActivationGeneration('obsidian')
+    if (generation === null) return null
+    const { queueObsidianProtocol } = await import(
+      '../addons/obsidian/api/protocol/native'
+    )
+    queueObsidianProtocol(
+      href,
+      () => getAddonActivationGeneration('obsidian') === generation,
+      receivedAt,
+    )
+    return null
+  }
   if (/^(?:https?:|mailto:)/i.test(href)) {
     await openExternalDocumentLink(href)
     return null

@@ -34,6 +34,10 @@ import {
   recordTokens,
 } from '../src/main/workspace-metadata-record.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
+import {
+  fixturePosition,
+  metadataWorkerFixture,
+} from './workspace-metadata-detail-fixtures.mjs'
 
 const entry = new URL(
   '../src/main/workspace-metadata-worker.ts',
@@ -210,15 +214,43 @@ async function writeRecord(path, record) {
   await appendFile(path, `${JSON.stringify(writer.finish())}\n`)
 }
 
+function retargetRecord(template, request) {
+  const details = template.page.details
+  return {
+    ...template,
+    page: {
+      ...template.page,
+      id: request.id,
+      path: request.path,
+      version: request.version,
+      details: {
+        ...details,
+        key: `${request.id}-${randomUUID()}`,
+        identity: createHash('sha256')
+          .update(
+            JSON.stringify([
+              template.buildIdentity,
+              request.id,
+              request.path,
+              request.version,
+              request.fingerprint,
+            ]),
+          )
+          .digest('hex'),
+      },
+    },
+  }
+}
+
 async function seed(parser, directory, paths) {
   await parser.request(parseNote('note.md'), current)
   const template = await readRecord(join(directory, `${id}.json`))
   for (const path of paths) {
     const request = descriptor(path)
-    await writeRecord(join(directory, `${request.id}.json`), {
-      ...template,
-      page: { ...template.page, id: request.id, path },
-    })
+    await writeRecord(
+      join(directory, `${request.id}.json`),
+      retargetRecord(template, request),
+    )
   }
   return template
 }
@@ -513,8 +545,9 @@ await import(${JSON.stringify(entry.href)})
   await untouched('sidecar')
   assert.equal(sidecar?.metadata.headings.count, 80)
   assert.deepEqual(
-    (await parser.readHeadings(descriptor('sidecar.md'), 0, 1000, current))
-      .items,
+    (
+      await parser.readHeadings(descriptor('sidecar.md'), 0, 1000, current)
+    ).items.map(({ position, ...heading }) => heading),
     headings.map((text) => ({ depth: 1, text: text.slice(2) })),
   )
 
@@ -733,9 +766,9 @@ test('cache batches stream every large record and oversized string without size 
   for (const path of paths.slice(0, 3)) {
     const request = descriptor(path)
     await writeRecord(join(directory, `${request.id}.json`), {
-      ...template,
+      ...retargetRecord(template, request),
       page: {
-        ...template.page,
+        ...retargetRecord(template, request).page,
         ...request,
         metadata: {
           ...template.page.metadata,
@@ -753,9 +786,9 @@ test('cache batches stream every large record and oversized string without size 
   const large = descriptor('large.md')
   const text = `x${'\u0000é😀'.repeat(6 * 1024 * 1024)}`
   await writeRecord(join(directory, `${large.id}.json`), {
-    ...template,
+    ...retargetRecord(template, large),
     page: {
-      ...template.page,
+      ...retargetRecord(template, large).page,
       ...large,
       metadata: {
         ...template.page.metadata,
@@ -976,10 +1009,10 @@ test('main parser canonicalizes repeated property hashes and clears its pool on 
   assert.equal(Object.keys(hashes).length, 1)
   for (const path of paths) {
     const request = descriptor(path)
-    await writeRecord(join(directory, `${request.id}.json`), {
-      ...record,
-      page: { ...record.page, id: request.id, path },
-    })
+    await writeRecord(
+      join(directory, `${request.id}.json`),
+      retargetRecord(record, request),
+    )
   }
   const original = parser.propertyHashes.get.bind(parser.propertyHashes)
   let lookups = 0
@@ -1480,10 +1513,12 @@ test('double resource failure leaves draft incomplete headings transient', async
   const note = { ...input(), version: 'draft:1' }
   await parser.beginBuild(current)
   failBothParsers(t, parser, 'ERR_WORKER_OUT_OF_MEMORY')
-  assert.deepEqual(
-    await parser.parseSource(note, snapshot('private draft'), current),
-    incompleteMetadataPage(note),
+  const page = await parser.parseSource(
+    note,
+    snapshot('private draft'),
+    current,
   )
+  assert.deepEqual(page, incompleteMetadataPage(note))
   assert.deepEqual(
     await parser.readHeadings(
       { ...descriptor(), version: note.version },
@@ -1770,16 +1805,12 @@ test('heading-dense results keep cold and warm metadata bounded while paging sid
   // old 32 MiB cache boundary while keeping the fixture's object heap small.
   await writeFile(
     bundle,
-    `
-import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
-const walk = Marked.prototype.walkTokens
-Marked.prototype.walkTokens = function (tokens, callback) {
-  if (!tokens[0]?.raw?.startsWith('stream-headings-fixture')) return walk.call(this, tokens, callback)
-  for (let i = 0; i < ${count}; i++) callback({ type: 'heading', depth: i % 6 + 1, tokens: [{ type: 'text', text: 'h'.repeat(512) }] })
-  return []
+    metadataWorkerFixture(`
+export function* noteCacheEntries(source, syntax, parsed) {
+  if (!source.startsWith('stream-headings-fixture')) return yield* actualNoteCacheEntries(source, syntax, parsed)
+  for (let i = 0; i < ${count}; i++) yield { kind: 'heading', value: { depth: i % 6 + 1, text: 'h'.repeat(512), position: fixturePosition } }
 }
-await import(${JSON.stringify(entry.href)})
-`,
+`),
   )
   let parser = create({ entry: bundle })
   await parser.request(parse('# warm'), current)
@@ -1803,7 +1834,13 @@ await import(${JSON.stringify(entry.href)})
   assert.deepEqual(cached.metadata.headings.items, [])
   const tail = await parser.readHeadings(descriptor(), count - 1, 1, current)
   assert.deepEqual(tail, {
-    items: [{ depth: ((count - 1) % 6) + 1, text: 'h'.repeat(512) }],
+    items: [
+      {
+        depth: ((count - 1) % 6) + 1,
+        text: 'h'.repeat(512),
+        position: fixturePosition,
+      },
+    ],
     nextOffset: count,
     hasMore: false,
     complete: true,
@@ -1880,15 +1917,12 @@ test('parse-only watchdog retransfers into fallback, persists derived data and k
   const bundle = join(directory, 'watchdog.mjs')
   await writeFile(
     bundle,
-    `
-import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
-const lex = Marked.prototype.lexer
-Marked.prototype.lexer = function (source, ...args) {
+    metadataWorkerFixture(`
+export function* noteCacheEntries(source, syntax, parsed) {
   if (source.startsWith('watchdog-fixture')) { while (true) {} }
-  return lex.call(this, source, ...args)
+  yield* actualNoteCacheEntries(source, syntax, parsed)
 }
-await import(${JSON.stringify(entry.href)})
-`,
+`),
   )
   let parser = create({ entry: bundle, watchdogMs: 1000 })
   await seed(parser, directory, ['removed.md'])

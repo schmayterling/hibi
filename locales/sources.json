@@ -874,6 +874,9 @@
   "45d0812782b3": [
     "src/renderer/src/History.tsx"
   ],
+  "19647ed55bae": [
+    "src/addons/obsidian/api/protocol/index.ts"
+  ],
   "7aa5420c9afa": [
     "src/main/workspace-actions.ts"
   ],
@@ -999,6 +1002,9 @@
   ],
   "cf344c7a8b0f": [
     "src/addons/quick-note/native.ts"
+  ],
+  "7775068aa508": [
+    "src/addons/obsidian/api/network/transport.ts"
   ],
   "e26089a8c67d": [
     "src/addons/obsidian-themes/native.ts"
@@ -3068,9 +3074,6 @@
   "991db5668713": [
     "src/renderer/src/Introduction.tsx"
   ],
-  "28a97d0505a1": [
-    "src/addons/obsidian/api/core/network.ts"
-  ],
   "fa97e270c693": [
     "src/addons/obsidian-themes/Appearance.tsx"
   ],
@@ -3447,6 +3450,18 @@
     "src/renderer/src/HibiSettings.tsx",
     "src/renderer/src/Introduction.tsx"
   ],
+  "f4b387b0c099": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "b9268eec84e1": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "7102676394fb": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "86c5ea271f11": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
   "bd3aaa300e50": [
     "src/shared/dependencies.ts"
   ],
@@ -3622,6 +3637,9 @@
   "5d11a76afe7b": [
     "src/main/workspace-metadata-worker.ts"
   ],
+  "a60754679999": [
+    "src/shared/note-cache-query.ts"
+  ],
   "55fd4183e9eb": [
     "src/shared/document-worker-service.ts"
   ],
@@ -3636,6 +3654,15 @@
   ],
   "b116bc23cea8": [
     "src/addons/obsidian/store.ts"
+  ],
+  "edc33aaf4659": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "3e041e1c3669": [
+    "src/addons/obsidian/api/network/native.ts"
+  ],
+  "bec2ff2e1dae": [
+    "src/addons/obsidian/api/protocol/native.ts"
   ],
   "99630a13ddb8": [
     "src/main/recovery-journal.ts"
@@ -4483,9 +4510,6 @@
   "f35944c23de5": [
     "src/addons/obsidian/hibi-addon.json"
   ],
-  "c3b8aa97bc00": [
-    "src/addons/obsidian/api/core/plugin.tsx"
-  ],
   "44bc77c840cf": [
     "src/addons/obsidian/CommunityBrowser.tsx"
   ],
@@ -4723,6 +4747,9 @@
   "a1663ac65e65": [
     "src/addons/obsidian-themes/native.ts"
   ],
+  "5e338e133b92": [
+    "src/addons/obsidian/api/protocol/index.ts"
+  ],
   "80cb8a06e27d": [
     "src/addons/git/native.ts"
   ],
@@ -4958,6 +4985,9 @@
   "41b5cde2dc38": [
     "src/addons/obsidian/package.ts"
   ],
+  "dae1f870b2e9": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
   "708790bc4454": [
     "src/addons/obsidian/api/vault/paths.ts"
   ],
@@ -4985,14 +5015,29 @@
   "b9bba9014f06": [
     "src/addons/obsidian/api/core/icons.ts"
   ],
-  "7a5527b8d223": [
-    "src/addons/obsidian/api/core/network.ts"
-  ],
   "19b3250004f7": [
     "src/addons/obsidian/store.ts"
   ],
-  "7cf49100e5c1": [
-    "src/addons/obsidian/api/core/network.ts"
+  "3fd83c012015": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "58600d734c9a": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "72d90a871b08": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "e95bcbbf55e1": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "605b03fdaa65": [
+    "src/addons/obsidian/api/network/index.ts"
+  ],
+  "9d60b77ed39b": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
+  "eba71848ccd4": [
+    "src/addons/obsidian/api/network/transport.ts"
   ],
   "1ef7faee108d": [
     "src/addons/obsidian/store.ts"
@@ -6904,6 +6949,9 @@
   "511ec6df64c2": [
     "src/main/addon-repository.ts"
   ],
+  "0f7f6004c520": [
+    "src/addons/obsidian/api/network/transport.ts"
+  ],
   "8c78f72115db": [
     "src/main/addon-inventory.ts"
   ],
@@ -7129,6 +7177,9 @@
   ],
   "b3010da17d9f": [
     "src/main/workspace-layout.ts"
+  ],
+  "7d598151a4b3": [
+    "src/addons/obsidian/api/protocol/index.ts"
   ],
   "31430920dff7": [
     "src/addons/_shared/FormatPdf.tsx"
@@ -7368,6 +7419,9 @@
   "3812b8afab3d": [
     "src/addons/obsidian/api/editor/editor.ts"
   ],
+  "dc7b850d3921": [
+    "src/addons/obsidian/api/workspace/index.ts"
+  ],
   "dd81768f0d54": [
     "src/renderer/src/document-runtime.ts"
   ],
@@ -7507,6 +7561,10 @@
   "2baa271ed84a": [
     "src/renderer/src/History.tsx"
   ],
+  "2b454314fa89": [
+    "src/addons/obsidian/api/metadata/index.ts",
+    "src/shared/note-cache-query.ts"
+  ],
   "f25351b3d4a1": [
     "src/renderer/src/recovery-offer.tsx"
   ],
@@ -7552,10 +7610,17 @@
   ],
   "d175608a5346": [
     "src/addons/obsidian/api/core/plugin.tsx",
-    "src/addons/obsidian/api/core/ui.tsx"
+    "src/addons/obsidian/api/core/ui.tsx",
+    "src/addons/obsidian/api/network/index.ts"
+  ],
+  "8ef744b1291c": [
+    "src/addons/obsidian/api/network/capabilities.ts"
   ],
   "c6adbcf38611": [
     "src/addons/obsidian/runtime.ts"
+  ],
+  "3acaf2d87f4b": [
+    "src/addons/obsidian/native.ts"
   ],
   "493632e79fce": [
     "src/addons/obsidian/store.ts"
@@ -7568,6 +7633,12 @@
   ],
   "6499048cecec": [
     "src/addons/obsidian/runtime.ts"
+  ],
+  "e0bc6fe1e61f": [
+    "src/addons/obsidian/api/network/capabilities.ts"
+  ],
+  "436d187cf65a": [
+    "src/addons/obsidian/api/network/index.ts"
   ],
   "abc6443022f2": [
     "src/addons/obsidian/runtime.ts"
@@ -7713,6 +7784,9 @@
   "59a6bbc4ccfb": [
     "src/addons/obsidian/api/workspace/index.ts"
   ],
+  "549a1d2be8f6": [
+    "src/addons/obsidian/api/workspace/index.ts"
+  ],
   "78c4a3ab448e": [
     "src/addons/documentation/native.ts",
     "src/main/workspace.ts"
@@ -7756,6 +7830,12 @@
   ],
   "d2d734eb1b44": [
     "src/shared/hotkeys.ts"
+  ],
+  "a544107127ac": [
+    "src/addons/obsidian/api/network/native.ts"
+  ],
+  "5f6ea93870c9": [
+    "src/addons/obsidian/api/network/native.ts"
   ],
   "f8889763cb31": [
     "src/main/analysis.ts"

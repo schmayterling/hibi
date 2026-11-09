@@ -1,4 +1,4 @@
-const { Plugin } = require('obsidian')
+const { Plugin, requestUrl } = require('obsidian')
 const fs = require('fs')
 const fsp = require('fs/promises')
 const path = require('path')
@@ -42,6 +42,16 @@ module.exports = class DesktopFixture extends Plugin {
     ).trim()
     if (!data.skipExternal)
       await electron.shell.openExternal('https://example.test/desktop-fixture')
+    const network = data.network
+      ? (
+          await requestUrl({
+            url: data.network,
+            method: 'POST',
+            headers: { 'X-Fixture': 'desktop' },
+            body: 'desktop body',
+          })
+        ).json
+      : null
     const asynchronous = await promisify((value, done) => done(null, value))(11)
     const item = this.addStatusBarItem()
     item.setText('Desktop fixture ready')
@@ -55,6 +65,8 @@ module.exports = class DesktopFixture extends Plugin {
     window.__hibiDesktopFixture = {
       event,
       output,
+      network,
+      request: (url) => requestUrl(url),
       asynchronous,
       buffer: Buffer.isBuffer(bytes) && bytes.readUInt8(0) === 100,
       stream: stream instanceof Readable,

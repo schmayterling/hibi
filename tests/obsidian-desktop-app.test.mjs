@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { createServer as createHttpServer } from 'node:http'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createServer } from 'vite'
@@ -36,6 +37,36 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
 }, async (t) => {
   const fixture = await fixtureVault(t, 'host-desktop', { cleanup: false })
   const outside = join(fixture.root, 'outside')
+  let beginHang, endHang
+  const hung = new Promise((resolve) => {
+    beginHang = resolve
+  })
+  const ended = new Promise((resolve) => {
+    endHang = resolve
+  })
+  const network = createHttpServer(async (request, response) => {
+    if (request.url === '/hang') {
+      beginHang()
+      response.on('close', endHang)
+      return
+    }
+    const parts = []
+    for await (const part of request) parts.push(part)
+    response.setHeader('Content-Type', 'application/json')
+    response.end(
+      JSON.stringify({
+        method: request.method,
+        header: request.headers['x-fixture'],
+        body: Buffer.concat(parts).toString(),
+      }),
+    )
+  })
+  await new Promise((resolve) => network.listen(0, '127.0.0.1', resolve))
+  const networkBase = 'http://127.0.0.1:' + network.address().port
+  t.after(() => {
+    network.closeAllConnections()
+    network.close()
+  })
   await mkdir(outside)
   const a = join(fixture.root, 'a.md'),
     b = join(fixture.root, 'b.md')
@@ -146,12 +177,15 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
       .isChecked(),
     false,
   )
-  await page.evaluate(async (outside) => {
-    await window.hibi.invokeAddon('obsidian', 'saveData', {
-      id: 'host-desktop',
-      value: { outside },
-    })
-  }, outside)
+  await page.evaluate(
+    async ({ outside, network }) => {
+      await window.hibi.invokeAddon('obsidian', 'saveData', {
+        id: 'host-desktop',
+        value: { outside, network },
+      })
+    },
+    { outside, network: networkBase + '/echo' },
+  )
   await row
     .getByRole('checkbox', { name: 'Enable Desktop fixture', exact: true })
     .click()
@@ -261,6 +295,11 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
     desktop: 'object',
   })
   const checks = await page.evaluate(() => window.__hibiDesktopFixture)
+  assert.deepEqual(checks.network, {
+    method: 'POST',
+    header: 'desktop',
+    body: 'desktop body',
+  })
   assert.equal(checks.event, 7)
   assert.equal(checks.output, 'fixture')
   assert.equal(checks.asynchronous, 11)
@@ -424,6 +463,10 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.getByText('Trusted workspace mode', { exact: true }).waitFor()
+  await page.evaluate((url) => {
+    void window.__hibiDesktopFixture.request(url).catch(() => {})
+  }, networkBase + '/hang')
+  await hung
   const sandboxPage = app.waitForEvent('window')
   await page
     .getByRole('button', {
@@ -432,6 +475,7 @@ test('desktop consent switches a real Node workspace, preserves unsaved split ta
     })
     .click()
   page = await sandboxPage
+  await ended
   page.setDefaultTimeout(8000)
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })

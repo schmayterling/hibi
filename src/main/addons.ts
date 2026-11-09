@@ -704,6 +704,7 @@ export async function invokeAddon(
   if (!handler)
     throw new Error('This addon does not support the requested action.')
   return handler(input, {
+    senderId: window.webContents.id,
     isCurrent: () => isAddonActivationCurrent(id, generation),
     dependencies: {
       resolve: async (dependency) =>

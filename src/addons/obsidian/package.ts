@@ -133,9 +133,14 @@ export function validatePluginCss(css: string): void {
 }
 
 /** Served as a static script, preserving Hibi's no-eval CSP. The runtime consumes this once. */
-export function wrapObsidianPlugin(source: string, identity: string): string {
+export function wrapObsidianPlugin(
+  source: string,
+  identity: string,
+  capability?: string,
+): string {
   return `(() => {
 const bridge = globalThis.__hibiObsidianHost.take(${JSON.stringify(identity)});
+${capability ? `bridge.activate(${JSON.stringify(capability)});` : ''}
 const module = { exports: {} };
 try {
 (function (module, exports, require) {

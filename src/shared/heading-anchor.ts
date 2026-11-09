@@ -1,3 +1,35 @@
+/** Resolve each heading segment only inside the preceding heading's section. */
+export function resolveHeadingSubpath(
+  headings: readonly { text: string; depth: number }[],
+  subpath: string,
+): { index: number; anchor: string } | null {
+  const anchors = headingAnchors(headings.map(({ text }) => text))
+  let from = 0,
+    to = headings.length,
+    index = -1
+  for (const segment of subpath.split('#')) {
+    if (!segment) return null
+    const folded = segment.normalize('NFC').toLowerCase()
+    index = headings.findIndex(
+      ({ text }, at) =>
+        at >= from &&
+        at < to &&
+        (text.normalize('NFC').toLowerCase() === folded ||
+          anchors[at]?.anchor === segment ||
+          anchors[at]?.legacy === segment),
+    )
+    if (index < 0) return null
+    const level = headings[index]!.depth
+    from = index + 1
+    for (let at = from; at < to; at++)
+      if (headings[at]!.depth <= level) {
+        to = at
+        break
+      }
+  }
+  return index < 0 ? null : { index, anchor: anchors[index]!.anchor }
+}
+
 export function headingAnchor(text: string, occurrence = 0): string {
   const slug = text
     .trim()

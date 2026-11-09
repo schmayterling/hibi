@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
 
-const host = { profile: '', reads: [] }
+const host = { profile: '', reads: [], open: null }
 globalThis.__metadataPublicationHost = host
 const parserStub = [
   "import { readFile } from 'node:fs/promises'",
@@ -64,6 +64,11 @@ const bundle = await build({
             ? { path: 'watch', namespace: 'metadata-publication-host' }
             : null,
         )
+        build.onResolve({ filter: /^\.\/document$/ }, ({ importer }) =>
+          /[/\\]workspace\.ts$/.test(importer)
+            ? { path: 'documents', namespace: 'metadata-publication-host' }
+            : null,
+        )
         build.onResolve({ filter: /^\.\/workspace-metadata-parser$/ }, () => ({
           path: 'parser',
           namespace: 'metadata-publication-host',
@@ -76,7 +81,16 @@ const bundle = await build({
                 ? 'export const app = { getPath: () => globalThis.__metadataPublicationHost.profile }; export const dialog = {}; export const shell = {}'
                 : path === 'watch'
                   ? "import { EventEmitter } from 'node:events'; export const watch = () => Object.assign(new EventEmitter(), { close() {} })"
-                  : parserStub,
+                  : path === 'documents'
+                    ? `export * from ${JSON.stringify(resolve('src/main/document.ts'))}
+                       import * as real from ${JSON.stringify(resolve('src/main/document.ts'))}
+                       import { SourceStore } from ${JSON.stringify(resolve('src/shared/source-buffer.ts'))}
+                       const host=globalThis.__metadataPublicationHost
+                       export const getDocumentTabs=()=>host.open ? [{id:'session',dirty:host.open.dirty}] : real.getDocumentTabs()
+                       export const getOpenDocumentVersions=()=>host.open ? [{file:host.open.file,tabId:'session',contentVersion:0}] : real.getOpenDocumentVersions()
+                       export const getDocumentSourceFor=id=>host.open && id==='session' ?
+                         {snapshot:()=>new SourceStore(host.open.source,{tabId:'session',revision:0}).snapshot()} : real.getDocumentSourceFor(id)`
+                    : parserStub,
             loader: 'js',
             resolveDir: resolve('.'),
           }),
@@ -138,6 +152,7 @@ async function fixture(t) {
   await mkdir(notes)
   host.profile = root
   host.reads = []
+  host.open = null
   t.after(() => rm(root, { recursive: true, force: true }))
   await writeFile(join(notes, 'x.md'), '#before')
   await loadWorkspace(notes)
@@ -161,6 +176,32 @@ const links = Array.from(
   { length: 256 },
   (_, i) => `[link](missing-${i}.md)`,
 ).join('\n')
+
+test('requested metadata follows the canonical open session even when clean or hidden by UI filters', async (t) => {
+  const { notes } = await fixture(t)
+  await writeFile(join(notes, 'x.md'), '# External disk text\r\n')
+  await mkdir(join(notes, '.hibi'), { recursive: true })
+  await writeFile(join(notes, '.hibi', 'ignore'), 'x.md\n')
+  const refreshed = await refreshWorkspace()
+  assert.equal(
+    refreshed.entries.some((entry) => entry.path === 'x.md'),
+    false,
+  )
+  for (const dirty of [false, true]) {
+    host.open = {
+      file: join(notes, 'x.md'),
+      dirty,
+      source: '# Canonical 😀\r\n\r\n#session',
+    }
+    host.reads = []
+    const page = await workspaceMetadataFile('x.md', syntax, () => true)
+    assert.equal(page.version, 'draft:session:0')
+    assert.deepEqual(page.metadata.tags, ['session'])
+    assert.equal(page.metadata.headings.items[0]?.text, 'Canonical 😀')
+    assert.deepEqual(host.reads, [])
+  }
+  host.open = null
+})
 
 test('one requested worker metadata file reuses its cache without scanning other notes', async (t) => {
   const { notes } = await fixture(t)

@@ -117,6 +117,7 @@ async function setup(t, installed = []) {
   const order = []
   const hooks = {
     enabled: () => true,
+    generation: () => 1,
     current: () => current,
     trusted: (wire) => {
       if (
@@ -166,6 +167,9 @@ async function setup(t, installed = []) {
     state,
     listeners,
     module,
+    capabilities: await server.ssrLoadModule(
+      '/src/addons/obsidian/api/network/capabilities.ts',
+    ),
     workspace,
     event,
     hooks,
@@ -219,6 +223,59 @@ test('only enabled/hash-granted packages reach Node; revocation invalidates requ
   assert.equal(ctx.workspace.trusted, false)
   assert.deepEqual(ctx.order, ['prepare', 'checkpoint', 'create', 'settled'])
   assert.deepEqual(ctx.state.remote, ['initialize', 1])
+})
+
+test('desktop networking authority is minted per load, bound to sender and activation, and aborted on revoke', async (t) => {
+  const ctx = await setup(t, [plugin()])
+  await ctx.workspace.initialize()
+  await ctx.workspace.attach(ctx.current(), true)
+  const { requirePluginRequestCapability } = ctx.capabilities
+  const wire = ctx.event()
+  ctx.listeners.get(channels.acquire)(wire, 'desktop', hash)
+  const token = wire.returnValue.capability
+  const grant = requirePluginRequestCapability(
+    'desktop',
+    token,
+    ctx.current().webContents.id,
+  )
+  assert.equal(grant.hash, hash)
+  assert.throws(
+    () =>
+      requirePluginRequestCapability(
+        'other',
+        token,
+        ctx.current().webContents.id,
+      ),
+    /missing or expired/,
+  )
+  assert.throws(
+    () => requirePluginRequestCapability('desktop', token, 42),
+    /missing or expired/,
+  )
+  ctx.hooks.generation = () => 2
+  assert.throws(
+    () =>
+      requirePluginRequestCapability(
+        'desktop',
+        token,
+        ctx.current().webContents.id,
+      ),
+    /missing or expired/,
+  )
+  assert.equal(grant.controller.signal.aborted, true)
+  const reload = ctx.event()
+  ctx.listeners.get(channels.acquire)(reload, 'desktop', hash)
+  const current = requirePluginRequestCapability(
+    'desktop',
+    reload.returnValue.capability,
+    ctx.current().webContents.id,
+  )
+  assert.notEqual(reload.returnValue.capability, token)
+  ctx.state.installed = []
+  const done = ctx.settled()
+  ctx.workspace.changed('desktop')
+  assert.equal(current.controller.signal.aborted, true)
+  await done
 })
 
 test('first grant flushes before replacement and enables remote only on new trusted webContents', async (t) => {

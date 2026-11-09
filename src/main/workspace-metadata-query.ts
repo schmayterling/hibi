@@ -119,6 +119,10 @@ export async function queryWorkspaceReferences(
   if (!isCurrentWorkspaceTarget(target))
     return failure('stale', 'This workspace is no longer open.')
   const kind = request.kind
+  if (kind === 'metadata' || kind === 'resolve-subpath')
+    return import('./workspace-note-cache-query').then((module) =>
+      module.queryWorkspaceNoteMetadata(input, getOpenDocumentVersions, owner),
+    )
   if (kind === 'search-text')
     return import('./workspace-text-search').then((module) =>
       module.queryWorkspaceText(input, getOpenDocumentVersions, owner),
@@ -338,20 +342,50 @@ export async function queryWorkspaceReferences(
     incompletePaths: references.incompletePaths(),
     capReached: after.capReached,
   }
-  if (kind === 'resolve')
+  if (kind === 'resolve') {
+    const href = request.href as string
+    const resolved = references.resolve(
+      path as string,
+      href,
+      request.syntax as 'markdown' | 'wiki',
+    )
+    let subpath:
+      | import('../shared/workspace-query').WorkspaceNoteSubpath
+      | null
+      | undefined
+    const fragment = href.indexOf('#')
+    if (resolved && fragment >= 0) {
+      const { queryWorkspaceNoteMetadata } = await import(
+        './workspace-note-cache-query'
+      )
+      const result = await queryWorkspaceNoteMetadata(
+        {
+          target,
+          syntaxSnapshot: request.syntaxSnapshot,
+          kind: 'resolve-subpath',
+          path: resolved,
+          subpath: href.slice(fragment),
+        },
+        getOpenDocumentVersions,
+        owner,
+      )
+      if (!cacheCurrent())
+        return failure('stale', 'This workspace changed. Try again.')
+      if (!result.ok) return result
+      subpath =
+        result.value.kind === 'resolve-subpath' ? result.value.resolved : null
+    }
     return {
       ok: true,
       value: {
         ...base,
         kind,
         from: path as string,
-        resolved: references.resolve(
-          path as string,
-          request.href as string,
-          request.syntax as 'markdown' | 'wiki',
-        ),
+        resolved,
+        ...(subpath !== undefined ? { subpath } : {}),
       },
     }
+  }
   if (kind === 'tag') {
     const result = await references.taggedCooperatively(
       (request.tag as string).normalize('NFC').toLowerCase(),

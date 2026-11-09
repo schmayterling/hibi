@@ -1,4 +1,6 @@
 import type { WorkspaceTarget } from './foundation-contracts'
+import type { RecordToken } from './metadata-stream.ts'
+import type { NotePosition } from './note-cache.ts'
 import type { NoteHeading, PropertyScalar } from './note-metadata.ts'
 
 // Per-message trust bound; note size, workspace size and result count are unrestricted.
@@ -57,6 +59,16 @@ export type WorkspaceSyntaxSnapshot = {
 }
 
 export type WorkspaceReferenceQueryRequest =
+  | (QueryTarget & {
+      readonly kind: 'metadata'
+      readonly path: string
+      readonly cursor?: string
+    })
+  | (QueryTarget & {
+      readonly kind: 'resolve-subpath'
+      readonly path: string
+      readonly subpath: string
+    })
   | (QueryTarget &
       QueryPage & {
         readonly kind: 'links' | 'backlinks' | 'headings'
@@ -121,8 +133,29 @@ export interface WorkspaceTagSummary {
   readonly count: number
 }
 
+export type WorkspaceNoteSubpath = {
+  readonly type: 'heading' | 'block'
+  readonly position: NotePosition
+  readonly id: string
+}
+
 export type WorkspaceReferenceQueryResult = WorkspaceReferenceQueryBase &
   (
+    | {
+        /** Bounded record slices; workspace.metadata() yields typed entries. */
+        readonly kind: 'metadata'
+        readonly path: string
+        readonly version: string
+        readonly tokens: readonly RecordToken[]
+        readonly nextCursor: string | null
+        readonly hasMore: boolean
+      }
+    | {
+        readonly kind: 'resolve-subpath'
+        readonly path: string
+        readonly version: string
+        readonly resolved: WorkspaceNoteSubpath | null
+      }
     | {
         readonly kind: 'links' | 'backlinks'
         readonly path: string
@@ -160,6 +193,8 @@ export type WorkspaceReferenceQueryResult = WorkspaceReferenceQueryBase &
         readonly kind: 'resolve'
         readonly from: string
         readonly resolved: string | null
+        /** Present for a heading or block fragment in the requested href. */
+        readonly subpath?: WorkspaceNoteSubpath | null
       }
     | {
         readonly kind: 'search-text'

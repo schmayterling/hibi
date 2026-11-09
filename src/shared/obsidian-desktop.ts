@@ -28,6 +28,7 @@ export interface ObsidianDesktopBridge {
     hash: string,
     api: Record<string, unknown>,
     hostModule: (name: string) => unknown,
+    activate: (capability: string) => void,
   ): { exports: unknown; dispose(): void }
 }
 

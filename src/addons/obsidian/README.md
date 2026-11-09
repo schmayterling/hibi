@@ -78,10 +78,46 @@ Disable the plugin or use **Revoke full access** to stop it and replace its
 workspace realm. Revocation cannot undo file changes or programs it already
 launched. Hibi's own plugin storage never writes back to the vault; full-access
 plugin code can write anywhere you allow it to run.
-`requestUrl` supports HTTPS GET without custom headers or a body, through
-Hibi's main-process network policy. Protocol handlers are refused. Moment is
-not a dependency and is not exported; date-format controls preview basic
-numeric date/time tokens.
+`requestUrl` and `request` use Electron networking in the main process, without
+CORS restrictions. HTTP and HTTPS, custom methods and headers, string and
+ArrayBuffer bodies, and `contentType` are supported. Responses expose status,
+headers, exact bytes, text, and lazily parsed JSON. Promise shortcuts
+(`requestUrl(url).text`, `.json`, `.arrayBuffer`) share the same request.
+Following Obsidian's public declaration, HTTP statuses of 400 or greater throw
+unless `throw: false` is supplied. Redirect responses below 400 do not throw.
+
+Requests allow 64 MiB bodies, 128 MiB responses, twenty redirects, five minutes,
+thirty-two concurrent requests per plugin, and 128 across all plugins. Unloading a plugin cancels its requests.
+Only enabled, trusted plugins can use this native transport. Main issues a
+capability for each plugin load, bound to its package and renderer; unload
+revokes it. Direct renderer calls without this capability are refused.
+Localhost and LAN destinations are allowed, like Obsidian; TLS verification
+remains enabled for HTTPS. `window.fetch`
+remains the renderer's fetch, subject to CORS and Hibi's
+`connect-src 'self' app://hibi` policy. Use `requestUrl` for arbitrary origins.
+
+The exported `moment` is the same real Moment function as `window.moment`.
+Moment and its locales load with the first enabled plugin, outside startup.
+The browser's user locale is selected before plugin execution; plugins can
+switch any shipped locale synchronously with `moment.locale()`. The last
+plugin unload restores the previous global property.
+
+`registerObsidianProtocolHandler(action, handler)` handles decoded
+`obsidian://action?key=value` links inside Hibi, including rendered Markdown
+and plugin UI. Bare query flags become the string `true`; explicit empty values stay empty, and `params.action`
+always contains the actual action. Registrations disappear on plugin unload.
+Hibi's existing OS scheme also accepts
+`hibi://obsidian/action?key=value`, including links received at launch.
+Queued links expire after 60 seconds and are delivered only to the Obsidian
+addon activation that was enabled when they arrived.
+Hibi does not register as the OS handler for `obsidian://`.
+
+The built-in `open` action opens `file` in the current vault, or activates the
+current vault when no file is specified. The `new` action
+creates and opens a Markdown note from `file` or `name` and optional `content`.
+A `vault` parameter must name the currently open vault. Hibi has no vault-wide
+search interface equivalent to Obsidian's `search` action, so that action
+reports the limitation instead of opening a different application.
 
 DOM helpers exist only while plugins are loaded; the last unload restores the
 original prototype descriptors. Registered commands, settings, listeners,

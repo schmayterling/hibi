@@ -1,4 +1,4 @@
-import type { SyntaxNode } from '@lezer/common'
+import { type SyntaxNode, Tree } from '@lezer/common'
 import type { Element, MarkdownConfig } from '@lezer/markdown'
 import { isMap, isScalar, isSeq, type Node, parseDocument } from 'yaml'
 import { boundarySyntax } from './markdown-boundary-syntax.ts'
@@ -374,6 +374,7 @@ export function noteCacheParse(
     start: loc(snapshot.editorToRaw(from)!),
     end: loc(snapshot.editorToRaw(to, -1)!),
   })
+  const start = source.startsWith('\uFEFF') ? 1 : 0
   const propertyKeys = new Map<number, string>()
   let parser = cacheParser(syntax)
   if (fm.value) {
@@ -387,7 +388,7 @@ export function noteCacheParse(
           name: 'NoteFrontmatter',
           before: 'HorizontalRule',
           parse(cx) {
-            if (cx.lineStart !== 0) return false
+            if (cx.lineStart !== start) return false
             const children: Element[] = []
             if (block.document && block.values)
               for (const scalar of projection?.properties ?? []) {
@@ -413,17 +414,20 @@ export function noteCacheParse(
     parser = parser.configure(config)
   }
   plainRuns.allow(parser)
-  // Replacing the BOM with one space keeps every source coordinate unchanged.
-  const tree = parser.parse({
-    length: input.length,
-    lineChunks: input.lineChunks,
-    read: (from, to) =>
-      from === 0 ? read(from, to).replace(/^\uFEFF/, ' ') : read(from, to),
-    chunk: (from) =>
-      from === 0
-        ? input.chunk(from).replace(/^\uFEFF/, ' ')
-        : input.chunk(from),
-  })
+  const parsed = parser.parse(
+    input,
+    [],
+    start < input.length ? [{ from: start, to: input.length }] : [],
+  )
+  // Range parsing excludes the BOM from indentation; restore tree coordinates.
+  const tree = start
+    ? new Tree(
+        parsed.type,
+        parsed.children,
+        parsed.positions.map((pos) => pos + start),
+        input.length,
+      )
+    : parsed
   return {
     tree,
     snapshot,

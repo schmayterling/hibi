@@ -28,7 +28,11 @@ fallback remain in place.
 transport pages with completeness flags. At most 32 continuations bind caller,
 folder generation, sequence, syntax, source version and worker record.
 `resolve-subpath` returns a heading or explicit block position; the existing
-`resolve` query also returns a subpath result for a fragmented href.
+`resolve` query also returns a subpath result for a fragmented href. Heading
+chains resolve inside each preceding heading's section; matching preserves
+Unicode-normalized names and canonical/legacy slugs. Obsidian helper results
+also expose `start` and `end` locations. Block IDs use exact, case-sensitive
+matching; public API documentation does not establish a different case rule.
 
 The Obsidian cache maps these entries to positioned headings, links, embeds,
 repeated tags, sections, list items, blocks and nested frontmatter, including
@@ -63,8 +67,8 @@ Cold timing includes worker reads, parsing, cache writes and reference-index
 publication. Warm timing reopens every record in batches of 64; all 2,110 must
 hit. Main heap is sampled after GC; RSS is sampled every 10 ms.
 
-Local comparison against `88e08d002`, Node 24.22.1, three fresh caches per
-revision, measured serially:
+Initial comparison against `88e08d002`, Node 24.22.1, three fresh caches per
+revision, measured serially before the review fixes:
 
 | Measure | Baseline | This change | Difference |
 | --- | ---: | ---: | ---: |
@@ -83,6 +87,35 @@ before and 21.84–28.10 MB after. Maximum whole-process RSS across runs was
 212.84 to 213.60 MB (+0.4%). Raw samples remain diagnostic because GC and
 wall-clock timing vary with machine load. These are local comparisons, not
 cross-platform performance promises.
+
+After the BOM and subpath review fixes, a second check alternated three serial
+baseline → candidate pairs, each in a fresh process with one fresh cache:
+
+```sh
+for round in 1 2 3; do
+  node --expose-gc scripts/benchmark-workspace-metadata.mjs --root=/path/to/baseline --runs=1
+  node --expose-gc scripts/benchmark-workspace-metadata.mjs --root=/path/to/candidate --runs=1
+done
+```
+
+| Review rerun median | Baseline | This change | Difference |
+| --- | ---: | ---: | ---: |
+| Cold index | 8,600 ms | 7,862 ms | −8.6% |
+| Warm cache | 1,910 ms | 1,981 ms | +3.7% |
+| Retained main heap | 16.65 MB | 16.72 MB | +0.4% |
+| Process peak RSS | 178.95 MB | 182.34 MB | +1.9% |
+| Transient worker heap | 23.60 MB | 24.33 MB | +3.1% |
+
+Every warm read hit all 2,110 records. The laptop was loaded: baseline cold
+runs ranged from 7,909–12,107 ms and candidate runs from 6,322–10,285 ms.
+Warm ranges were 1,420–3,891 ms and 1,780–2,385 ms respectively. These noisy
+times are not evidence of a cold speedup; the reported single-run warm
+increase did not persist in the requested three-run medians.
+
+The reviewer's independent constructive differential also passes 3,000 notes
+with seed 7 after the BOM fix, with zero metadata or coordinate mismatches.
+The BOM is excluded from Markdown grammar input rather than counted as an
+indentation space, and tree offsets map back to the original source.
 
 Independent grammar comparison covers 5,476 delimiter combinations. Raw-location
 goldens and bounded parser-work tests protect coordinate accuracy and the

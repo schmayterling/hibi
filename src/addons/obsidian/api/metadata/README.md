@@ -44,11 +44,21 @@ Frontmatter link keys use dot-separated property paths. Alias expansion is
 bounded; malformed or unsupported YAML is marked incomplete by the worker.
 
 `blocks` maps explicit block IDs to their owning source blocks. Duplicate IDs
-use their first definition. `resolveSubpath(cache, '#^id')` returns that block;
-heading subpaths return the current and next heading at the same or higher
-level. Sections describe top-level blocks, with nested list items listed
-separately. Code, math and literal HTML content do not produce Markdown links,
-tags or explicit block IDs from their interior.
+use their first definition. `resolveSubpath(cache, '#^id')` returns that block
+with its `start` and `end` locations. Heading results include the current and
+next heading at the same or higher level; `start` is the current heading's
+start and `end` is the next heading's start, or `null` at the end of the note.
+Heading chains such as `#A#B` resolve each segment inside its preceding section,
+using Unicode-normalized names or existing heading slugs.
+
+Block identifiers match exactly, including case, in both this helper and
+`workspace.query({kind: 'resolve-subpath', ...})`. The [public Obsidian reference](https://docs.obsidian.md/Reference/TypeScript+API/resolveSubpath)
+does not specify block-ID case folding; this is an explicit Hibi choice rather
+than a verified claim about Obsidian's runtime.
+
+Sections describe top-level blocks, with nested list items listed separately.
+Code, math and literal HTML content do not produce Markdown links, tags or
+explicit block IDs from their interior.
 
 `resolvedLinks` and `unresolvedLinks` are lazy read-only views over loaded Vault
 descriptors. A cold row queues its source and returns `undefined`. Local links,

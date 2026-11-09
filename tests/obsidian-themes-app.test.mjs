@@ -225,6 +225,8 @@ test('an installed theme is a Hibi colorscheme, follows appearance, and turning 
         style.textContent.includes('@layer obsidian-compat'),
       ),
   )
+  // Hibi's own colorscheme comes back after the theme's styles go.
+  await background(page, original.background)
   assert.deepEqual(await colors(page), original)
   // Hibi's choices are global and live in its data; the vault is untouched.
   const after = await page.evaluate(() =>

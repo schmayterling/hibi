@@ -171,6 +171,7 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
     assert.equal(readAppIcon(accepted).format, 'svg')
 
   const outside = /content Hibi doesn't accept/
+  const style = /styles use @ rules or CSS functions Hibi doesn't accept/
   for (const [bytes, error] of [
     [svg('<image href="https://example.com/a.png"/>'), outside],
     [svg('<image href="data:image/svg+xml,&lt;svg/&gt;"/>'), outside],
@@ -179,9 +180,9 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
     [svg('<rect style="fill: url(&#104;ttps://example.com/g)"/>'), outside],
     [svg('<rect style="fill: \\75rl(https://example.com/g)"/>'), outside],
     [svg('<rect fill="url(\'icon.svg#g\')"/>'), outside],
-    [svg('<rect style="fill: image-set(&quot;a.png&quot; 1x)"/>'), outside],
-    [svg('<style>@import "https://example.com/a.css";</style>'), outside],
-    [svg('<style>@\\69mport "a.css";</style>'), outside],
+    [svg('<rect style="fill: image-set(&quot;a.png&quot; 1x)"/>'), style],
+    [svg('<style>@import "https://example.com/a.css";</style>'), style],
+    [svg('<style>@\\69mport "a.css";</style>'), style],
     [svg('<style>.a{fill:url(https://example.com/x)}</style>'), outside],
     [svg('<script>fetch("https://example.com")</script>'), outside],
     [
@@ -204,20 +205,26 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
       svg(
         '<style>a{x:"/*"} @font-face{src:url(http://h/f.woff)} b{y:"*/"}</style>',
       ),
-      outside,
+      style,
     ],
     [svg('<rect style="x:\\/*;fill:url(http://h/z#a);*/"/>'), outside],
     [
       svg(
         "<rect style=\"x:'/*';fill:image-set('http://h/q.png' 1x);y:'*/'\"/>",
       ),
-      outside,
+      style,
     ],
-    [svg('<style><![CDATA[@import "a.css";]]></style>'), outside],
+    [svg('<style><![CDATA[@import "a.css";]]></style>'), style],
+    // Refused for what the style uses, even in a comment or a harmless shape.
+    [svg('<style>/* me@example.com */</style>'), style],
+    [svg('<rect style="clip-path: circle(30px)"/>'), style],
     [svg('<image href="data:image/svg+xml;base64,PHN2Zy8+"/>'), outside],
     [svg('<rect xml:base="https://example.com/"/>'), outside],
     [svg('<rect foo:href="#a"/>'), outside],
     [svg('<text>&#xD800;</text>'), /not valid XML/],
+    [svg('<text>&#xDC00;</text>'), /not valid XML/],
+    // A declaration stays on its element: a later sibling can't use the prefix.
+    [svg('<g xmlns:x="http://www.w3.org/2000/svg"/><x:rect/>'), outside],
     [
       svg(
         '<g/>',
@@ -229,7 +236,7 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
     ],
     [
       Buffer.concat([svg('<!--'), Buffer.alloc(MAX_SVG_BYTES)]),
-      /SVG smaller than 1 MB/,
+      /SVG smaller than 256 KB/,
     ],
     [svg('<rect style="fill: url\\28 https://example.com/g)"/>'), outside],
     [svg('<rect fill="url&#40;https://example.com/g)"/>'), outside],
@@ -318,9 +325,23 @@ test('SVG checks stay linear in the input', { timeout: 20000 }, () => {
     globalThis.Map = RealMap
   }
   assert.ok(copied <= 32, `${copied} namespace entries copied`)
-  // A megabyte of unclosed comment openers took minutes with a comment strip.
-  const style = '/* '.repeat((MAX_SVG_BYTES - 200) / 3)
-  assert.equal(readAppIcon(svg(`<style>${style}</style>`)).format, 'svg')
+  // Inputs at the size cap that a rescanning pattern takes minutes over (a
+  // quadratic check of 128k letters took 22 s); linear checks take
+  // milliseconds. Sync code can't be cut short, so the bound is asserted after.
+  const fill = (unit) => unit.repeat((MAX_SVG_BYTES - 200) / unit.length)
+  for (const [name, bytes] of [
+    ['comment openers', svg(`<style>${fill('/* ')}</style>`)],
+    ['letter run', svg(`<rect fill="${fill('a')}"/>`)],
+    ['dash run', svg(`<rect fill="${fill('-')}"/>`)],
+    ['escape run', svg(`<style>${fill('\\61')}</style>`)],
+    ['entity run', svg(`<rect fill="${fill('&#97;')}"/>`)],
+    ['CDATA sections', svg(`<style>${fill('<![CDATA[a]]>')}</style>`)],
+  ]) {
+    const start = performance.now()
+    assert.equal(readAppIcon(bytes).format, 'svg', name)
+    const elapsed = performance.now() - start
+    assert.ok(elapsed < 2000, `${name} took ${Math.round(elapsed)} ms`)
+  }
 })
 
 test('each platform offers only the formats and modes it can honour', () => {

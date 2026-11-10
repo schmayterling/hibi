@@ -4,12 +4,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
@@ -816,4 +817,70 @@ syncBuiltinESMExports()
       `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: killed by SIGTERM; 1 test files$`,
     ),
   )
+})
+
+test('the report counts tests by the file that ran them, on every supported node', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-report-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const files = {
+    // Tests a helper declares belong to the file that imports it.
+    'helper.mjs':
+      "import test from 'node:test'\nexport const register = (name) => test(name, () => {})\n",
+    'one.test.mjs':
+      "import { register } from './helper.mjs'\nregister('one')\n",
+    'two.test.mjs':
+      "import { register } from './helper.mjs'\nregister('two')\n",
+    'skipped.test.mjs':
+      "import test from 'node:test'\ntest.skip('skipped', () => {})\n",
+    'empty.test.mjs': "import 'node:test'\n",
+    'crash.test.mjs': 'process.exit(3)\n',
+  }
+  for (const [file, source] of Object.entries(files))
+    writeFileSync(join(root, file), source)
+  const report = (node, tests) => {
+    const destination = join(root, 'report.jsonl')
+    rmSync(destination, { force: true })
+    const { NODE_TEST_CONTEXT: _, ...env } = process.env
+    spawnSync(
+      node,
+      [
+        '--test',
+        `--test-reporter=${new URL('../scripts/ci-failures.mjs', import.meta.url).href}`,
+        `--test-reporter-destination=${destination}`,
+        ...tests,
+      ],
+      { cwd: root, env },
+    )
+    return JSON.parse(
+      readFileSync(destination, 'utf8').trim().split('\n').at(-1),
+    )
+  }
+  // package.json allows node 22.18 and later; each one installed here gets a run.
+  const installed = join(homedir(), '.nvm/versions/node')
+  const nodes = new Map([[process.version, process.execPath]])
+  for (const version of existsSync(installed) ? readdirSync(installed) : []) {
+    const [major, minor] = version.slice(1).split('.').map(Number)
+    if (major > 22 || (major === 22 && minor >= 18))
+      nodes.set(version, join(installed, version, 'bin/node'))
+  }
+  for (const major of [22, 24])
+    if (![...nodes.keys()].some((version) => version.startsWith(`v${major}.`)))
+      t.diagnostic(`no node ${major} installed: its run is skipped`)
+  for (const [version, node] of nodes) {
+    assert.deepEqual(
+      report(node, ['one.test.mjs', 'two.test.mjs']),
+      { done: true, failures: 0, ran: 2, files: 2 },
+      version,
+    )
+    assert.deepEqual(
+      report(node, ['skipped.test.mjs', 'empty.test.mjs']),
+      { done: true, failures: 0, ran: 0, files: 2 },
+      version,
+    )
+    assert.deepEqual(
+      report(node, ['crash.test.mjs', 'one.test.mjs']),
+      { done: true, failures: 1, ran: 1, files: 2 },
+      version,
+    )
+  }
 })

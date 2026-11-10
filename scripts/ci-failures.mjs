@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+
 // A node:test reporter for scripts/ci.mjs: one JSON line per failing test, so a
 // run can list every red at its end. Suites and tests that failed only because a
 // subtest did are left out: the subtest's own line names it. Todo tests don't
@@ -9,17 +11,16 @@ export default async function* failures(source) {
   let ran = 0
   const files = new Set()
   for await (const { type, data } of source) {
+    // Each file that registered tests sums them up under its own path, however
+    // they were declared; skipped and todo tests aren't passed or failed.
+    if (type === 'test:summary' && data.file) {
+      files.add(data.file)
+      ran += data.counts.passed + data.counts.failed
+    }
     if (type !== 'test:pass' && type !== 'test:fail') continue
-    if (data.file) files.add(data.file)
-    // The runner stands a test in for a file that registers none; only tests the
-    // file registered carry entryFile.
-    if (
-      data.entryFile &&
-      !data.skip &&
-      !data.todo &&
-      data.details?.type === 'test'
-    )
-      ran++
+    // The runner names the test it stands in for a file that registered none, or
+    // crashed, by that file's path: heard from, but nothing ran.
+    if (data.file === resolve(data.name)) files.add(data.file)
     const error = data.details?.error
     if (
       type !== 'test:fail' ||

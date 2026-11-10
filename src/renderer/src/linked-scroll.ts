@@ -12,6 +12,9 @@ export function linkScroll(
   let leader = initial
   let frame = 0
   let refinements = 0
+  // With scrolling unlinked, a caret alignment still follows the layout
+  // settling under it, until the reader scrolls a pane.
+  let aligning = false
   const paneState = (pane: HTMLElement) => {
     const content = pane.querySelector('.cm-content')
     const view = content && sourceView(content)
@@ -112,6 +115,7 @@ export function linkScroll(
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
     if (!syncScrolling) {
+      aligning = false
       cancelAnimationFrame(frame)
       frame = 0
     }
@@ -138,6 +142,7 @@ export function linkScroll(
     const deliberate =
       event instanceof Event && ['pointerup', 'focusin'].includes(event.type)
     if (!changed && !deliberate) return
+    aligning = true
     schedule()
   }
   // CodeMirror panes report caret and text changes, and focus leaving, as
@@ -165,7 +170,7 @@ export function linkScroll(
       selection(event)
   }
   const settled = () => {
-    if (syncScrolling) schedule()
+    if (syncScrolling || aligning) schedule()
   }
   const observer = new ResizeObserver(settled)
   // Virtualized table rows can arrive without changing the content's height.

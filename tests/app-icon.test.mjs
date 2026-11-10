@@ -3,6 +3,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { readAppIcon } from '../src/shared/app-icon.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
@@ -87,10 +88,14 @@ test('the app icon persists, shows before the first window, imports a custom ima
       return { png: image.toPNG().toString('base64'), size: image.getSize() }
     })
   const lastIcon = async () => (await calls()).at(-1)?.icon
+  // A save marks the select busy within the event that starts it.
   const idle = (page) =>
     page.waitForFunction(
-      () => document.querySelector('#app-icon')?.disabled === false,
+      () =>
+        document.querySelector('#app-icon')?.getAttribute('aria-busy') ===
+        'false',
     )
+  const focused = () => page.evaluate(() => document.activeElement?.id)
   const pick = (file) =>
     app.evaluate((_, file) => {
       globalThis.nextIcon = file
@@ -128,9 +133,12 @@ test('the app icon persists, shows before the first window, imports a custom ima
     ? ['light', 'dark']
     : ['dark', 'light']
   const kept = modes[1]
+  // The select stays usable while a choice saves, so keyboard focus stays on it.
+  await select.focus()
   for (const mode of modes) {
     await select.selectOption(mode)
     await idle(page)
+    assert.equal(await focused(), 'app-icon', mode)
     assert.equal(await lastIcon(), await bundled(mode === 'dark'))
     assert.deepEqual(await preference(), { mode })
   }
@@ -139,7 +147,16 @@ test('the app icon persists, shows before the first window, imports a custom ima
   await select.selectOption('custom')
   await idle(page)
   assert.equal(await select.inputValue(), kept)
+  assert.equal(await focused(), 'app-icon')
   assert.deepEqual(await calls(), [])
+  if (process.platform === 'linux') {
+    // Linux reports only the appearance Hibi sets, so Follow system is not offered.
+    assert.equal(await select.locator('option[value="system"]').count(), 0)
+    await assert.rejects(
+      page.evaluate(() => window.hibi.setAppIcon('system')),
+      /Invalid app icon setting/,
+    )
+  }
 
   const header = Buffer.alloc(33)
   Buffer.from('\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR', 'latin1').copy(header)
@@ -152,7 +169,14 @@ test('the app icon persists, shows before the first window, imports a custom ima
     [
       'remote.svg',
       '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.com/a.png"/></svg>',
-      /loads other files/,
+      /content Hibi doesn't accept/,
+    ],
+    // Quick Look would draw a stock document icon for these; Hibi reads them itself.
+    ['empty.icns', Buffer.from('icns\0\0\0\x08', 'latin1'), /ICNS has no PNG/],
+    [
+      'empty.ico',
+      Buffer.from([0, 0, 1, 0, 1, 0, ...Array(16).fill(0)]),
+      /ICO has no PNG/,
     ],
     ...(mac
       ? []
@@ -181,11 +205,13 @@ test('the app icon persists, shows before the first window, imports a custom ima
 
   const choices = mac
     ? [
-        // macOS draws ICNS, ICO and SVG through Quick Look.
+        // macOS draws a checked SVG through Quick Look.
         ['icon.svg', await readFile('build/tray-tile.svg')],
+        ['icon.icns', await readFile('build/icon.icns')],
         ['icon.png', await readFile('build/icon-mac-dark.png')],
       ]
     : [
+        ['icon.icns', await readFile('build/icon.icns')],
         [
           'icon.png',
           await readFile(
@@ -206,9 +232,30 @@ test('the app icon persists, shows before the first window, imports a custom ima
     await page
       .getByRole('img', { name: 'Custom app icon preview', exact: true })
       .waitFor()
+    if (index === 0) assert.equal(await focused(), 'app-icon', name)
+    else
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.textContent),
+        'Choose image…',
+        name,
+      )
     assert.equal(await select.inputValue(), 'custom')
     assert.deepEqual(await preference(), { mode: 'custom' })
     const { png, size } = await stored()
+    if (name === 'icon.icns')
+      // Drawn from the widest PNG inside the file, not a thumbnail of it.
+      assert.equal(
+        png,
+        await app.evaluate(
+          ({ nativeImage }, embedded) =>
+            nativeImage
+              .createFromBuffer(Buffer.from(embedded, 'base64'))
+              .resize({ width: 512, quality: 'best' })
+              .toPNG()
+              .toString('base64'),
+          Buffer.from(readAppIcon(content).png).toString('base64'),
+        ),
+      )
     assert.ok(Math.max(size.width, size.height) <= 512, name)
     assert.ok(Math.min(size.width, size.height) >= 16, name)
     const icons = await calls()

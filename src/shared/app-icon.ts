@@ -45,6 +45,7 @@ export function darkAppIcon(
 }
 
 export const MAX_APP_ICON_BYTES = 8 * 1024 * 1024
+export const MAX_SVG_BYTES = 1024 * 1024
 export const MAX_APP_ICON_SIDE = 4096
 export const MIN_APP_ICON_SIDE = 16
 export type AppIconFormat = 'png' | 'icns' | 'ico' | 'svg'
@@ -139,6 +140,9 @@ export function readAppIcon(bytes: Uint8Array): {
   }
   const text = new TextDecoder().decode(bytes.subarray(0, 1024))
   if (/^\s*</.test(text) || bytes[0] === 0xfe || bytes[0] === 0xff) {
+    // Checking runs on the main process; an icon's drawing never needs more.
+    if (bytes.length > MAX_SVG_BYTES)
+      throw new Error('Choose an SVG smaller than 1 MB.')
     checkSvgIcon(bytes)
     return { format: 'svg', png: null }
   }

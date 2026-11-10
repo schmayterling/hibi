@@ -33,29 +33,36 @@ const refused = () =>
 function entities(value: string) {
   return value.replace(
     /&(?:#x([\da-f]+)|#(\d+)|(amp|lt|gt|quot|apos));|&/gi,
-    (match, hex, decimal, named) => {
+    (_, hex, decimal, named) => {
       if (named)
         return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[
           named.toLowerCase() as 'amp'
         ] as string
       const code = hex ? Number.parseInt(hex, 16) : Number(decimal)
-      if (match === '&' || !code || code > 0x10ffff) throw malformed()
+      // A bare '&' has no code either.
+      if (!code || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff))
+        throw malformed()
       return String.fromCodePoint(code)
     },
   )
 }
 
-/** Refuses CSS that could load something: at-rules and unknown functions. */
+/**
+ * Refuses CSS that could load something: at-rules and unknown functions.
+ * Comments are checked like the rest: stripping them would need a string-aware
+ * tokenizer, and a comment with '@' or 'name(' in it is only a false refusal.
+ */
 function checkCss(value: string, stylesheet: boolean) {
-  const css = value
-    .replace(/\\([\da-f]{1,6})\s?|\\([\s\S])/gi, (_, hex, char) => {
+  const css = value.replace(
+    /\\([\da-f]{1,6})\s?|\\([\s\S])/gi,
+    (_, hex, char) => {
       if (!hex) return char
       const code = Number.parseInt(hex, 16)
       return code > 0 && code <= 0x10ffff
         ? String.fromCodePoint(code)
         : '\ufffd'
-    })
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+    },
+  )
   if (stylesheet && css.includes('@')) throw refused()
   for (const [, call] of css.matchAll(/([a-z_-][\w-]*)\(/gi))
     if (!functions.has(call?.toLowerCase() ?? '')) throw refused()
@@ -82,6 +89,8 @@ export function checkSvgIcon(bytes: Uint8Array) {
   const stack: { tag: string; namespaces: Map<string, string>; css: string }[] =
     []
   let root = false
+  // Each declaration copies the scope; a cap keeps that copying linear.
+  let declarations = 0
   const read = (pattern: RegExp) => {
     pattern.lastIndex = at
     const match = pattern.exec(text)
@@ -134,10 +143,16 @@ export function checkSvgIcon(bytes: Uint8Array) {
         attributes.set(key, entities(raw))
         at = end + 1
       }
-      const namespaces = new Map(top?.namespaces)
-      for (const [key, value] of attributes)
-        if (key === 'xmlns') namespaces.set('', value)
-        else if (key.startsWith('xmlns:')) namespaces.set(key.slice(6), value)
+      const declared = [...attributes].filter(
+        ([key]) => key === 'xmlns' || key.startsWith('xmlns:'),
+      )
+      declarations += declared.length
+      if (declarations > 32) throw refused()
+      const namespaces = declared.length
+        ? new Map(top?.namespaces)
+        : (top?.namespaces ?? new Map<string, string>())
+      for (const [key, value] of declared)
+        namespaces.set(key === 'xmlns' ? '' : key.slice(6), value)
       const [prefix, local] = tag.includes(':') ? tag.split(':') : ['', tag]
       if (!root && local !== 'svg')
         throw new Error('This file is not an SVG image.')
@@ -148,11 +163,19 @@ export function checkSvgIcon(bytes: Uint8Array) {
         throw refused()
       for (const [key, value] of attributes) {
         if (key === 'xmlns' || key.startsWith('xmlns:')) continue
-        const [owner, attribute] = key.includes(':')
-          ? [namespaces.get(key.split(':')[0] as string), key.split(':')[1]]
-          : [undefined, key]
-        if (owner !== undefined && owner !== XLINK && owner !== XML)
-          throw refused()
+        const [space, attribute] = key.includes(':')
+          ? key.split(':')
+          : [null, key]
+        // Prefixed attributes: xlink ones, and only xml:space and xml:lang.
+        if (space != null) {
+          const owner = space === 'xml' ? XML : namespaces.get(space)
+          if (
+            owner === XML
+              ? attribute !== 'space' && attribute !== 'lang'
+              : owner !== XLINK
+          )
+            throw refused()
+        }
         if (/^on/i.test(attribute as string) || attribute === 'src')
           throw refused()
         if (attribute === 'href') {

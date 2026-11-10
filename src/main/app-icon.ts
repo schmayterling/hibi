@@ -189,15 +189,24 @@ async function readImage(path: string) {
 async function drawSvg(bytes: Buffer) {
   const folder = await mkdtemp(join(app.getPath('temp'), 'hibi-app-icon-'))
   try {
-    const path = join(folder, 'icon.svg')
-    await writeText(path, bytes)
-    const image = await nativeImage.createThumbnailFromPath(path, {
-      width: 512,
-      height: 512,
-    })
-    // One representation: with a Retina one kept too, the size checks below
-    // would see 512 pixels and save the 1024-pixel drawing.
-    return nativeImage.createFromBuffer(image.toPNG())
+    const draw = async (name: string, content: Buffer | string) => {
+      const path = join(folder, name)
+      await writeText(path, content)
+      const image = await nativeImage.createThumbnailFromPath(path, {
+        width: 512,
+        height: 512,
+      })
+      // One representation: with a Retina one kept too, the size checks below
+      // would see 512 pixels and save the 1024-pixel drawing.
+      return nativeImage.createFromBuffer(image.toPNG())
+    }
+    // Quick Look shows a stock document icon for an SVG it can't draw; drawing
+    // one it surely can't, at the same size, tells the two apart.
+    const [image, control] = await Promise.all([
+      draw('icon.svg', bytes),
+      draw('control.svg', '<'),
+    ])
+    return { image, drawn: !image.toBitmap().equals(control.toBitmap()) }
   } finally {
     await rm(folder, { recursive: true, force: true })
   }
@@ -227,11 +236,13 @@ export async function chooseAppIcon(window: BrowserWindow) {
       `${format.toUpperCase()} images can't be the app icon on this system. Choose a PNG.`,
     )
   // ICNS and ICO arrive here as the PNG embedded in them.
-  const image = png
-    ? nativeImage.createFromBuffer(Buffer.from(png))
+  const { image, drawn } = png
+    ? { image: nativeImage.createFromBuffer(Buffer.from(png)), drawn: true }
     : await drawSvg(bytes).catch((cause) => {
         throw unreadable(cause)
       })
+  if (!drawn)
+    throw new Error("macOS couldn't draw this SVG. Choose another image.")
   if (image.isEmpty()) throw unreadable(null)
   const { width, height } = image.getSize()
   if (Math.min(width, height) < MIN_APP_ICON_SIDE)

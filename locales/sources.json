@@ -938,6 +938,9 @@
   "cf344c7a8b0f": [
     "src/addons/quick-note/native.ts"
   ],
+  "503688919128": [
+    "src/shared/app-icon.ts"
+  ],
   "3aa9d06341aa": [
     "src/main/sideload.ts"
   ],
@@ -7880,6 +7883,9 @@
   "55ea09e5715d": [
     "src/main/addon-windows.ts",
     "src/preload/analysis.ts"
+  ],
+  "96b34a417288": [
+    "src/main/app-icon.ts"
   ],
   "a6375ee99716": [
     "src/addons/vim/Settings.tsx"

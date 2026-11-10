@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -386,4 +386,137 @@ test('recent workspace submenu filters, returns, and opens a workspace', {
     undefined,
     { timeout: 30000 },
   )
+})
+
+test('the palette takes keys while its module loads and retries a failed load', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-palette-load-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({
+        response: 1,
+        checkboxChecked: false,
+      })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const paletteChunk = chunks.find((chunk) =>
+    chunk.modules.includes('src/renderer/src/CommandPalette.tsx'),
+  ).file
+  // Every request for the palette's chunk waits for release(), then fails or
+  // loads as the gate says.
+  await app.evaluate(({ net }, file) => {
+    const fetch = net.fetch.bind(net)
+    globalThis.paletteGate = { fail: false, held: [] }
+    net.fetch = async (url, ...rest) => {
+      if (String(url).endsWith(file)) {
+        const gate = globalThis.paletteGate
+        await new Promise((release) => gate.held.push(release))
+        if (gate.fail) throw new Error('palette chunk unavailable')
+      }
+      return fetch(url, ...rest)
+    }
+  }, paletteChunk)
+  const session = await page.context().newCDPSession(page)
+  // A reload must fetch the chunk again, not take it from the cache.
+  await session.send('Network.enable')
+  await session.send('Network.setCacheDisabled', { cacheDisabled: true })
+  const held = () =>
+    waitForAsync(app, () => globalThis.paletteGate.held.length > 0, undefined, {
+      label: 'palette chunk requested',
+    })
+  const release = (fail = false) =>
+    app.evaluate((_electron, fail) => {
+      const gate = globalThis.paletteGate
+      gate.fail = fail
+      for (const resume of gate.held.splice(0)) resume()
+    }, fail)
+  const shortcut = process.platform === 'darwin' ? 'Meta+k' : 'Control+k'
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  const search = palette.getByRole('combobox', { name: 'Search commands' })
+  const results = palette.getByRole('listbox')
+  const markdown = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  const cold = async () => {
+    await page.reload()
+    await waitForFormattedEditor(app, page)
+    await page.getByRole('textbox', { name: 'Document editor' }).focus()
+    await held()
+  }
+
+  // Keys typed before the module arrives land in the palette, in order.
+  await cold()
+  const before = await markdown()
+  await pressShortcut(app, shortcut)
+  await search.waitFor()
+  await page.keyboard.type('abc')
+  assert.equal(await search.inputValue(), 'abc')
+  await release()
+  await results.waitFor()
+  await page.keyboard.type('123')
+  assert.equal(await search.inputValue(), 'abc123')
+  assert.equal(await markdown(), before)
+  await page.keyboard.press('Escape')
+  await palette.waitFor({ state: 'hidden' })
+
+  // Enter waits for the module, then runs the first match.
+  await cold()
+  await pressShortcut(app, shortcut)
+  await search.waitFor()
+  await page.keyboard.type('edit keyboard shortcuts')
+  await page.keyboard.press('Enter')
+  await release()
+  await palette
+    .getByRole('button', { name: 'Leave Edit keyboard shortcuts' })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await palette.waitFor({ state: 'hidden' })
+
+  // Escape before it arrives closes it for good and gives the editor focus back.
+  await cold()
+  await pressShortcut(app, shortcut)
+  await search.waitFor()
+  await page.keyboard.press('Escape')
+  await palette.waitFor({ state: 'hidden' })
+  await release()
+  // Settle after the app's own handler for the module, then the render it asks for.
+  await page.evaluate(async (file) => {
+    await import(`/${file}`)
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    )
+  }, paletteChunk)
+  assert.equal(await palette.count(), 0)
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'Document editor' })
+      .evaluate((element) => element === document.activeElement),
+    true,
+  )
+  assert.equal(await markdown(), before)
+
+  // A failed load says so, closes, and the next open loads it again.
+  await cold()
+  await pressShortcut(app, shortcut)
+  await search.waitFor()
+  await release(true)
+  await page
+    .getByText('The command palette could not load. Try again.')
+    .waitFor()
+  await palette.waitFor({ state: 'hidden' })
+  await pressShortcut(app, shortcut)
+  await held()
+  await release()
+  await results.waitFor()
 })

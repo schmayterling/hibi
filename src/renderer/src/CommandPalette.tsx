@@ -131,6 +131,8 @@ export function CommandPalette({
   captureContext,
   onQueryChange,
   pending,
+  initialQuery = '',
+  initialEnter = false,
 }: {
   commands: PaletteCommand[]
   onClose: () => void
@@ -139,15 +141,20 @@ export function CommandPalette({
   captureContext?: () => CommandExecutionContext
   onQueryChange?: (query: string) => void
   pending?: (query: string) => boolean
+  /** Typed before the palette loaded; Enter runs the first match once it can. */
+  initialQuery?: string
+  initialEnter?: boolean
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const closing = useRef(false)
-  const queuedEnter = useRef<string | null>(null)
+  const queuedEnter = useRef<string | null>(
+    initialEnter ? foldSearchText(initialQuery).trim() : null,
+  )
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   useEffect(() => {
     onQueryChange?.(query)
   }, [query, onQueryChange])

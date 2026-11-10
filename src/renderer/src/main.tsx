@@ -55,9 +55,11 @@ import {
   type WorkspaceEntry,
   type WorkspaceState,
 } from '../../shared/workspace'
-import { Button, IconButton } from '../../ui/Controls'
+import { Button, IconButton, TextInput } from '../../ui/Controls'
 import { publishActivePalette } from '../../ui/colorschemes'
+import { composing } from '../../ui/composing'
 import { DocumentNotice } from '../../ui/DocumentNotice'
+import { Modal } from '../../ui/Modal'
 import { settingsIndex } from '../../ui/settings-index'
 import {
   SIDEBAR_OVERLAY_WIDTH,
@@ -715,21 +717,41 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [CommandPalette, setCommandPalette] =
     useState<typeof import('./CommandPalette').CommandPalette>()
+  // What was typed into the palette before its module arrived.
+  const paletteDraft = useRef({ query: '', enter: false })
+  useLayoutEffect(() => {
+    if (!paletteOpen) paletteDraft.current = { query: '', enter: false }
+  }, [paletteOpen])
   useEffect(() => {
     if (CommandPalette) return
     let active = true
-    const load = () =>
-      void loadPalette().then((module) => {
-        if (active) setCommandPalette(() => module.CommandPalette)
-      })
-    // Off the startup path, but loaded once the window is idle so keys typed
-    // right after the shortcut reach the palette's search field.
-    const idle = paletteOpen ? load() : requestIdleCallback(load)
+    const load = () => {
+      const module = loadPalette()
+      module.then(
+        ({ CommandPalette }) => {
+          if (active) setCommandPalette(() => CommandPalette)
+        },
+        () => {
+          // Not cached, so the next open tries again.
+          if (paletteModule === module) paletteModule = undefined
+          if (!active || !paletteOpen) return
+          setPaletteOpen(false)
+          toasts.show({
+            message: 'The command palette could not load. Try again.',
+            variant: 'error',
+          })
+        },
+      )
+    }
+    // Off the startup path, but loaded once the window is idle.
+    let idle = 0
+    if (paletteOpen) load()
+    else idle = requestIdleCallback(load)
     return () => {
       active = false
       if (idle) cancelIdleCallback(idle)
     }
-  }, [paletteOpen, CommandPalette])
+  }, [paletteOpen, CommandPalette, toasts])
   const [introductionOpen, setIntroductionOpen] = useState<
     'automatic' | 'manual' | null
   >(null)
@@ -3299,14 +3321,49 @@ function App() {
         availableViews={availableViews}
         onMode={(view) => addonHost.app.runAction(view)}
       />
-      {paletteOpen && CommandPalette && (
-        <CommandPalette
-          platform={info?.platform ?? 'darwin'}
-          commands={paletteCommands}
-          captureContext={() => captureAddonCommandContext('palette')}
-          onClose={() => setPaletteOpen(false)}
-        />
-      )}
+      {paletteOpen &&
+        (CommandPalette ? (
+          <CommandPalette
+            platform={info?.platform ?? 'darwin'}
+            commands={paletteCommands}
+            captureContext={() => captureAddonCommandContext('palette')}
+            onClose={() => setPaletteOpen(false)}
+            initialQuery={paletteDraft.current.query}
+            initialEnter={paletteDraft.current.enter}
+          />
+        ) : (
+          // Holds focus and the typed query until the palette loads, so no
+          // key reaches the editor; Escape closes it as it closes the palette.
+          <Modal
+            className="command-palette"
+            aria-label="Command palette"
+            onDismiss={() => setPaletteOpen(false)}
+          >
+            <div className="command-search">
+              <TextInput
+                variant="inline"
+                role="combobox"
+                aria-label="Search commands"
+                aria-expanded="false"
+                aria-busy="true"
+                placeholder="Search commands…"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => {
+                  paletteDraft.current = {
+                    query: event.target.value,
+                    enter: false,
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' || composing(event)) return
+                  event.preventDefault()
+                  paletteDraft.current.enter = true
+                }}
+              />
+            </div>
+          </Modal>
+        ))}
       {introductionOpen && (
         <Suspense fallback={null}>
           <Introduction

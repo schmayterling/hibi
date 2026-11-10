@@ -1191,6 +1191,7 @@
   "0347f794d69c": [
     "src/main/index.ts",
     "src/renderer/src/CommandPalette.tsx",
+    "src/renderer/src/main.tsx",
     "src/shared/hotkeys.ts"
   ],
   "ecf83f59ca6c": [
@@ -5315,10 +5316,12 @@
     "src/addons/documentation/ExportDialog.tsx"
   ],
   "00ff7398c308": [
-    "src/renderer/src/CommandPalette.tsx"
+    "src/renderer/src/CommandPalette.tsx",
+    "src/renderer/src/main.tsx"
   ],
   "baad3d0583e1": [
-    "src/renderer/src/CommandPalette.tsx"
+    "src/renderer/src/CommandPalette.tsx",
+    "src/renderer/src/main.tsx"
   ],
   "ea582e69cce7": [
     "src/site/main.tsx"
@@ -6086,6 +6089,9 @@
   ],
   "8a4ff1954358": [
     "src/main/addon-trust.ts"
+  ],
+  "dd78e6f543df": [
+    "src/renderer/src/main.tsx"
   ],
   "2ea18168d79b": [
     "src/renderer/src/addons.ts"

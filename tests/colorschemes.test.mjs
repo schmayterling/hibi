@@ -344,3 +344,56 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   )
   await harness.close()
 })
+
+// Without a desktop portal answer, Electron reads the GTK theme only when
+// themeSource changes, so "system" started light under a dark GTK theme (#741).
+test('system appearance follows a dark GTK theme from launch', {
+  skip: process.platform !== 'linux' && 'GTK themes are Linux only',
+  timeout: 30000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-gtk-dark-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    // Playwright emulates a light system unless told not to.
+    colorScheme: null,
+    env: { ...process.env, GTK_THEME: 'Adwaita:dark' },
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
+  const dark = bundledColorschemes.find(
+    (scheme) => scheme.id === DEFAULT_THEME.dark,
+  ).colors.background
+  assert.deepEqual(
+    {
+      mode: JSON.parse(
+        (await page.evaluate(() => localStorage.getItem('hibi-colorscheme'))) ??
+          '{"mode":"system"}',
+      ).mode,
+      native: await app.evaluate(
+        ({ nativeTheme }) => nativeTheme.shouldUseDarkColors,
+      ),
+      media: await page.evaluate(
+        () => matchMedia('(prefers-color-scheme: dark)').matches,
+      ),
+      appearance: await page.evaluate(
+        () => document.documentElement.dataset.appearance,
+      ),
+      background: (
+        await app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0].getBackgroundColor(),
+        )
+      ).toLowerCase(),
+    },
+    {
+      mode: 'system',
+      native: true,
+      media: true,
+      appearance: 'dark',
+      background: dark.toLowerCase(),
+    },
+  )
+})

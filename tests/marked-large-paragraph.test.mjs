@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
+import { isDeepStrictEqual } from 'node:util'
 import { GFM, parser } from '@lezer/markdown'
 import { build } from 'esbuild'
 import { Lexer, Marked, Tokenizer } from 'marked'
@@ -666,7 +667,7 @@ test('tokens, references, headings, metadata and full export match unpatched mar
   }
 })
 
-test('setext text and interruption grammar matches unpatched marked across line combinations', () => {
+test('setext interruptions keep native tokens except CommonMark lazy list text', () => {
   const lines = [
     'text',
     '',
@@ -699,11 +700,56 @@ test('setext text and interruption grammar matches unpatched marked across line 
       for (const second of lines)
         for (const last of ['---', '===', 'text']) {
           const source = `${first}\n${second}\n${last}\n`
-          assert.deepEqual(
-            patched.lexer(source),
-            original.lexer(source),
-            source,
-          )
+          const tokens = patched.lexer(source)
+          const native = original.lexer(source)
+          // No generated source line indents an underline. #4126's four
+          // inserted spaces are not content (CommonMark §5.2).
+          original.walkTokens(native, (token) => {
+            for (const field of ['raw', 'text'])
+              if (typeof token[field] === 'string')
+                token[field] = token[field].replace(
+                  /\n {4}(?=(?:=+|-+)[ \t]*(?:\n|$))/g,
+                  '\n',
+                )
+          })
+          if (isDeepStrictEqual(tokens, native))
+            assert.deepEqual(tokens, native, source)
+          else {
+            // Native also inserts blank text lines or makes a heading from
+            // short lazy lines. Check those list contents independently.
+            const list = (token) => token.type === 'list'
+            assert.deepEqual(
+              tokens.filter((token) => !list(token)),
+              native.filter((token) => !list(token)),
+              source,
+            )
+            const compact = (html) =>
+              html
+                .trim()
+                .split(/(<pre>[\s\S]*?<\/pre>)/)
+                .map((part, index) =>
+                  index % 2
+                    ? part
+                    : part
+                        .replace(/[ \t]*\n[ \t]*/g, '\n')
+                        .replace(/>\n(?=<)/g, '>'),
+                )
+                .join('')
+            const html = micromark(
+              source,
+              gfm
+                ? { extensions: [gfmSyntax()], htmlExtensions: [gfmHtml()] }
+                : {},
+            )
+            assert.equal(
+              compact(patched.parser(tokens.filter(list))),
+              compact(
+                html.match(/<(?:ul|ol)\b[\s\S]*<\/(?:ul|ol)>/)?.[0] ?? '',
+              ),
+              source,
+            )
+          }
+          assert.equal(tokens.map((token) => token.raw).join(''), source)
         }
   }
 })

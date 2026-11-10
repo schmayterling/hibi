@@ -1,7 +1,7 @@
-import { parse } from '@babel/parser'
 import assert from 'node:assert/strict'
 import { readdir, readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { parse } from '@babel/parser'
 
 // A page with no charset reads its scripts as windows-1252, and bundled data
 // with non-ASCII text decodes to something else (#1022).

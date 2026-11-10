@@ -22,6 +22,7 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
   await writeFile(a, 'a')
   await writeFile(b, 'b')
   const app = await electron.launch({
+    autosave: true,
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
@@ -120,6 +121,7 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   const file = join(profile, 'note.md')
   await writeFile(file, 'original')
   const app = await electron.launch({
+    autosave: true,
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
@@ -285,6 +287,7 @@ test('autosave waits while an input method composes, then saves the committed te
   const file = join(profile, 'note.md')
   await writeFile(file, 'x')
   const app = await electron.launch({
+    autosave: true,
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
@@ -417,6 +420,7 @@ async function openNote(t, text = 'original') {
   const file = join(profile, 'note.md')
   await writeFile(file, text)
   const app = await electron.launch({
+    autosave: true,
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
@@ -666,6 +670,24 @@ test('a resting note gets its turn while another note is typed in', {
   await waitForDocumentEditor(app, page)
   await page.getByRole('tab', { name: 'note.md' }).click()
   await waitForDocumentEditor(app, page)
+  // A rest is ten times the attempt on the page's clock: time the test runs
+  // while a quick note's attempt is under way would make it rest instead.
+  await page.evaluate(() => {
+    const save = window.hibi.autosaveDocument
+    globalThis.autosaving = 0
+    window.hibi.autosaveDocument = async (...args) => {
+      globalThis.autosaving++
+      try {
+        return await save(...args)
+      } finally {
+        globalThis.autosaving--
+      }
+    }
+  })
+  const runBetweenAttempts = async (ms) => {
+    await page.clock.runFor(ms)
+    await waitForAsync(page, () => globalThis.autosaving === 0)
+  }
   await page.clock.install()
   await page.clock.pauseAt(Date.now() + 60000)
   await replaceRichText(page, rich, 'slow one')
@@ -695,9 +717,8 @@ test('a resting note gets its turn while another note is typed in', {
       async (text) => (await window.hibi.getDocument()).markdown === text,
       `quick ${turn}`,
     )
-    await page.clock.runFor(2500)
-    await delay(100)
-    await page.clock.runFor(2500)
+    await runBetweenAttempts(2500)
+    await runBetweenAttempts(2500)
     assert.equal(await saved(quick, `quick ${turn}`), true)
     if ((await readFile(file, 'utf8')) === 'slow two') return
   }

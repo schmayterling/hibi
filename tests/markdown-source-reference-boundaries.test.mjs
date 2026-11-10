@@ -128,8 +128,9 @@ const controls = [
   ],
   ['ordinary HTML blank-line boundary', '<div>\n\n[ref]: /visible', '/visible'],
   [
-    // CommonMark §§4.6, 5.2: only paragraphs continue lazily; </script>
-    // starts a new HTML block outside the list, hiding the declaration.
+    // CommonMark §§4.6, 5.2: only paragraph text continues lazily. Type 7
+    // accepts any complete closing tag; its script exclusion is for open tags.
+    // The declaration stays raw HTML until the blank line.
     'definitions inside a closing HTML block after a list',
     '- <script>\n</script>\n[ref]: /visible\n\n[ref]',
     null,

@@ -213,6 +213,65 @@ type SetextFrame = {
   candidates: Map<RegExp, RegExpExecArray | null>
   invalid?: number
 }
+// Only Marked's immediate merge sees this view; addons see actual tokens.
+// Inspecting a growing raw rope's last character would flatten its prefix.
+function rawMergeView(token: Token, newline: boolean) {
+  const prefix = newline ? '\n' : ''
+  return new Proxy(token, {
+    get(target, key) {
+      return key === 'raw' ? prefix : Reflect.get(target, key)
+    },
+    set(target, key, value) {
+      if (key !== 'raw') return Reflect.set(target, key, value)
+      target.raw += String(value).slice(prefix.length)
+      return true
+    },
+  })
+}
+
+function withTextMerges<T>(
+  tokenizer: Tokenizer,
+  source: string,
+  tokens: Token[],
+  read: () => T,
+): T {
+  const text = tokenizer.text,
+    at = tokens.at,
+    descriptor = Object.getOwnPropertyDescriptor(tokens, 'at'),
+    native = new WeakSet<Token>()
+  let merge = false,
+    newline = false
+  tokenizer.text = function (input) {
+    const token = text.call(this, input)
+    if (setextFrames.get(this)?.source !== source) return token
+    merge = !!token && token.raw === input.slice(0, token.raw.length)
+    newline = source.charCodeAt(source.length - input.length - 1) === 10
+    if (merge) native.add(token!)
+    return token
+  }
+  Object.defineProperty(tokens, 'at', {
+    configurable: true,
+    value: (index: number) => {
+      const token = at.call(tokens, index),
+        pending = merge
+      merge = false
+      return pending &&
+        index === -1 &&
+        token?.type === 'text' &&
+        native.has(token)
+        ? rawMergeView(token, newline)
+        : token
+    },
+  })
+  try {
+    return read()
+  } finally {
+    tokenizer.text = text
+    if (descriptor) Object.defineProperty(tokens, 'at', descriptor)
+    else Reflect.deleteProperty(tokens, 'at')
+  }
+}
+
 const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
 const scanningQuotes = new WeakSet<Tokenizer>()
 // Tokenizers whose quotes keep Marked's own tab handling.
@@ -610,20 +669,7 @@ function readQuote(
                 ? paragraphTail.newline
                 : undefined
           if (newline === undefined) return token
-          // Only Marked's immediate merge sees this view. Addons see the actual
-          // tokens. Appending to raw must not flatten its growing prefix to test
-          // its last character; all other fields and inline work stay native.
-          const prefix = newline ? '\n' : ''
-          return new Proxy(token, {
-            get(target, key) {
-              return key === 'raw' ? prefix : Reflect.get(target, key)
-            },
-            set(target, key, value) {
-              if (key !== 'raw') return Reflect.set(target, key, value)
-              target.raw += String(value).slice(prefix.length)
-              return true
-            },
-          })
+          return rawMergeView(token, newline)
         },
       })
       const before = { length: tokens.length, last: tokens.at(-1) }
@@ -1483,7 +1529,12 @@ export class BlockTokenizer extends Tokenizer {
       if (ends.size) lazyUnderlines.set(this, { text, ends })
       else lazyUnderlines.delete(this)
       try {
-        return Reflect.apply(blockTokens, lexer, args)
+        const read = () => Reflect.apply(blockTokens, lexer, args)
+        if (ends.size) {
+          args[1] ??= []
+          return withTextMerges(this, text, args[1], read)
+        }
+        return read()
       } finally {
         if (previous) lazyUnderlines.set(this, previous)
         else lazyUnderlines.delete(this)
@@ -1795,7 +1846,7 @@ export class BlockTokenizer extends Tokenizer {
       const scanned = frame?.source ?? source,
         lazy = lazyUnderlines.get(this)
       candidate = rule.candidate.exec(scanned)
-      if (lazy && (lazy.text === scanned || lazy.text.endsWith(scanned)))
+      if (lazy?.text === scanned)
         while (
           candidate?.[1] &&
           lazy.ends.has(scanned.length - candidate.index - 1)

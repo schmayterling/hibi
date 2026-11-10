@@ -472,28 +472,113 @@ test('lazy list underlines stay paragraph text while indented underlines stay he
   )
 })
 
+test('lazy list merges leave original tokens visible to addons', () => {
+  const seen = []
+  const inspect = {
+    extensions: [
+      {
+        name: 'inspectListMerge',
+        level: 'block',
+        tokenizer(source, tokens) {
+          if (source.startsWith('b\n') || source === '===') {
+            const last = tokens.at(-1)
+            seen.push([source, last?.raw, last?.text])
+          }
+        },
+      },
+    ],
+  }
+  const [list] = new Marked(blockMarkdown, inspect).lexer('- a\nb\n===\n')
+  assert.deepEqual(seen, [
+    ['b\n===', 'a\n', 'a'],
+    ['===', 'a\nb\n', 'a\nb'],
+  ])
+  assert.equal(list.items[0].tokens[0].raw, list.items[0].text)
+})
+
+test('nested addon probes do not arm outer list text merges', () => {
+  const [list] = new Marked(blockMarkdown, {
+    extensions: [
+      {
+        name: 'nestedListProbe',
+        level: 'block',
+        tokenizer(source) {
+          if (!source.startsWith('[ref]:')) return
+          const top = this.lexer.state.top
+          try {
+            this.lexer.blockTokens('probe')
+          } finally {
+            this.lexer.state.top = top
+          }
+        },
+      },
+    ],
+  }).lexer('- a\n[ref]: /x\n===\n')
+  assert.equal(list.items[0].tokens[0].raw, list.items[0].text)
+  assert.equal(list.items[0].tokens[0].text, list.items[0].text)
+})
+
+test('rewritten text raw keeps native list merge behavior', () => {
+  const [list] = new Marked(blockMarkdown, {
+    tokenizer: {
+      text(source) {
+        if (!source.startsWith('a\n')) return false
+        return {
+          type: 'text',
+          raw: '@a',
+          text: 'a',
+          tokens: this.lexer.inline('a'),
+        }
+      },
+    },
+  }).lexer('- a\nb\n===\n')
+  assert.equal(list.items[0].tokens[0].raw, '@a\nb\n===')
+  assert.equal(list.items[0].tokens[0].text, 'a\nb\n===')
+})
+
+test('plain addons leave headings outside list context to the native reader', () => {
+  const source = 'para\n$$x\nfoo\n===\n'
+  const tokens = new Marked(mathTokens).lexer(source)
+  assert.equal(tokens[0].type, 'heading')
+  assert.equal(tokens[0].text, 'para\n$$x\nfoo')
+  assert.equal(tokens[0].raw, source)
+  // The full Markdown grammar deliberately stops setext text at addon starts.
+  const full = new Marked(blockMarkdown, mathTokens).lexer(source)
+  assert.deepEqual(
+    full.map((token) => token.type),
+    ['paragraph', 'blockMath'],
+  )
+})
+
 test('failed list reads restore lazy heading context and parser hooks', () => {
   const sentinel = new Error('list probe')
+  let itemTokens
   const parser = new Marked(blockMarkdown, {
     extensions: [
       {
         name: 'explode',
         level: 'block',
-        tokenizer(source) {
-          if (source.startsWith('explode')) throw sentinel
+        tokenizer(source, tokens) {
+          if (source.startsWith('explode')) {
+            itemTokens = tokens
+            throw sentinel
+          }
         },
       },
     ],
   })
   const lexer = new Lexer(parser.defaults)
   const rules = lexer.tokenizer.rules,
-    read = lexer.blockTokens
+    read = lexer.blockTokens,
+    text = lexer.tokenizer.text
   assert.throws(
     () => lexer.lex('- explode\n==='),
     (error) => error === sentinel,
   )
   assert.equal(lexer.tokenizer.rules, rules)
   assert.equal(lexer.blockTokens, read)
+  assert.equal(lexer.tokenizer.text, text)
+  assert.equal(Object.hasOwn(itemTokens, 'at'), false)
   assert.equal(lexer.tokenizer.lheading('explode\n===').type, 'heading')
 })
 

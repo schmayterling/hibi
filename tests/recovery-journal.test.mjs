@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import {
@@ -12,8 +13,10 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import {
   autosaveOff,
   electron,
@@ -26,6 +29,41 @@ import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const day = 24 * 60 * 60 * 1000
+
+/**
+ * Windows processes of a launch: the tree under `root`, and any process
+ * naming the profile, each as `pid name parent command line`.
+ */
+async function windowsProcesses(root, profile, among = []) {
+  const script = `
+$all = Get-CimInstance Win32_Process
+$keep = @{}
+$keep[${root}] = $true
+${among.length ? `foreach ($id in @(${among.join(',')})) { $keep[$id] = $true }` : ''}
+do {
+  $more = $false
+  foreach ($p in $all) {
+    if ($keep[[int]$p.ParentProcessId] -and -not $keep[[int]$p.ProcessId]) {
+      $keep[[int]$p.ProcessId] = $true
+      $more = $true
+    }
+  }
+} while ($more)
+foreach ($p in $all) {
+  if ($p.ProcessId -ne $PID -and ($keep[[int]$p.ProcessId] -or ($p.CommandLine -and $p.CommandLine.Contains('${basename(profile)}')))) {
+    "$($p.ProcessId) $($p.Name) $($p.ParentProcessId) $($p.CommandLine)"
+  }
+}`
+  const { stdout } = await promisify(execFile)(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    { windowsHide: true },
+  )
+  return stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => ({ pid: Number(line.split(' ')[0]), line }))
+}
 
 async function copyHolds(file, text) {
   try {
@@ -147,9 +185,29 @@ async function note(t, text = 'original') {
       async kill() {
         const child = app.process()
         running.delete(app)
+        const tree =
+          process.platform === 'win32'
+            ? await windowsProcesses(child.pid, profile)
+            : []
         const gone = once(child, 'exit')
         stopElectronTree(child)
         await gone
+        if (process.platform !== 'win32') return
+        // The next launch over this profile needs every process of this one
+        // gone: one left holds the profile, and the launch quits.
+        const pids = tree.map(({ pid }) => pid)
+        const deadline = performance.now() + 15000
+        let left
+        for (;;) {
+          left = await windowsProcesses(child.pid, profile, pids)
+          if (!left.length || performance.now() > deadline) break
+          await delay(100)
+        }
+        assert.deepEqual(
+          left.map(({ line }) => line),
+          [],
+          `killed launch left processes (tree before kill: ${tree.map(({ line }) => line.slice(0, 160)).join(' | ')})`,
+        )
       },
       async quit() {
         running.delete(app)

@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   type BrowserWindowConstructorOptions,
 } from 'electron'
+import { appIcon } from './app-icon'
 
 let constructing = 0
 let quitPending = false
@@ -23,7 +24,10 @@ app.on('before-quit', (event) => {
 export function createBrowserWindow(options: BrowserWindowConstructorOptions) {
   constructing++
   try {
-    return new BrowserWindow(options)
+    // Windows and Linux show each window's icon in the taskbar and switcher.
+    return new BrowserWindow(
+      process.platform === 'darwin' ? options : { icon: appIcon(), ...options },
+    )
   } finally {
     constructing--
   }

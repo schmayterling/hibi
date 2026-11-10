@@ -12,6 +12,7 @@ import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { admittedOperations } from '../shared/admitted-operations'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
+import { APP_ICON_CHANNELS } from '../shared/app-icon'
 import { BACKGROUND_CHANNELS } from '../shared/background'
 import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -533,6 +534,10 @@ if (process.isMainFrame) {
       ),
     setAppearance: (appearance) =>
       ipcRenderer.invoke(APPEARANCE_CHANNEL, appearance),
+    getAppIcon: () => ipcRenderer.invoke(APP_ICON_CHANNELS.get),
+    setAppIcon: (mode) => ipcRenderer.invoke(APP_ICON_CHANNELS.set, mode),
+    chooseAppIcon: () => ipcRenderer.invoke(APP_ICON_CHANNELS.choose),
+    resetAppIcon: () => ipcRenderer.invoke(APP_ICON_CHANNELS.reset),
     getHideWindowControls: () =>
       ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.get),
     setHideWindowControls: (hidden) =>

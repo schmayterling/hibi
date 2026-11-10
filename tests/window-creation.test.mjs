@@ -10,7 +10,7 @@ const source = stripTypeScriptTypes(
     'utf8',
   ),
 )
-  .replace(/^import[\s\S]*?from 'electron'\n/, '')
+  .replace(/^import[\s\S]*?from '[^']+'\n/gm, '')
   .replace('export function', 'function')
 
 function fixture(platform = 'darwin') {
@@ -20,8 +20,10 @@ function fixture(platform = 'darwin') {
   app.quit = () => {
     quits++
   }
+  const icon = { name: 'shown app icon' }
   class BrowserWindow {
     constructor(options) {
+      this.options = options
       options.construct?.()
     }
   }
@@ -30,9 +32,16 @@ function fixture(platform = 'darwin') {
     'BrowserWindow',
     'process',
     'setImmediate',
+    'appIcon',
     `${source}; return createBrowserWindow`,
-  )(app, BrowserWindow, { platform }, (callback) => pending.push(callback))
-  return { app, create, pending, quits: () => quits }
+  )(
+    app,
+    BrowserWindow,
+    { platform },
+    (callback) => pending.push(callback),
+    () => icon,
+  )
+  return { app, create, icon, pending, quits: () => quits }
 }
 
 const requestQuit = (app) => {
@@ -90,4 +99,15 @@ test('other platforms keep their existing quit behavior during construction', ()
     })
     assert.equal(pending.length, 0)
   }
+})
+
+test('new windows show the chosen app icon on Windows and Linux', () => {
+  for (const platform of ['linux', 'win32']) {
+    const { create, icon } = fixture(platform)
+    assert.equal(create({ title: 'Hibi' }).options.icon, icon, platform)
+    assert.equal(create({ title: 'Hibi' }).options.title, 'Hibi', platform)
+  }
+  // macOS shows the Dock icon; windows there have none of their own.
+  const { create } = fixture('darwin')
+  assert.equal('icon' in create({ title: 'Hibi' }).options, false)
 })

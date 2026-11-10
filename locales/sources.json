@@ -5312,6 +5312,9 @@
   "1a0ec19679a9": [
     "src/renderer/src/HotkeyRow.tsx"
   ],
+  "8da8acc5ba77": [
+    "src/shared/svg-icon.ts"
+  ],
   "dbb4cb54de95": [
     "src/renderer/src/document-target-edits.ts"
   ],
@@ -5586,6 +5589,9 @@
     "src/renderer/src/AppIconSettings.tsx"
   ],
   "1d669246db8c": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
+  "cfed8fce1cce": [
     "src/renderer/src/AppIconSettings.tsx"
   ],
   "efca80330d7b": [
@@ -6626,8 +6632,11 @@
   "829dec5a5772": [
     "src/addons/_shared/FormatPdf.tsx"
   ],
-  "dba1427122ae": [
-    "src/shared/app-icon.ts"
+  "ab256f4fab86": [
+    "src/shared/svg-icon.ts"
+  ],
+  "c4f9175519e3": [
+    "src/shared/svg-icon.ts"
   ],
   "b29376d8e035": [
     "src/main/links.ts"
@@ -6886,6 +6895,9 @@
   "926ea461092b": [
     "src/addons/git/native.ts"
   ],
+  "4cfdc951ca91": [
+    "src/shared/svg-icon.ts"
+  ],
   "783dfd9ea6ae": [
     "src/main/document.ts"
   ],
@@ -7091,6 +7103,9 @@
   ],
   "1c59a85f5059": [
     "src/addons/quick-note/native.ts"
+  ],
+  "0f20ddcc3111": [
+    "src/shared/app-icon.ts"
   ],
   "2b065c7c9ce4": [
     "src/renderer/src/Introduction.tsx"

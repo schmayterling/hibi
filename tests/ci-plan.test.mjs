@@ -484,7 +484,7 @@ test('test workers follow the machine and tests that share a machine resource ru
   ])
 })
 
-test('a red past the unit files leaves the others to run, and fails the check', (t) => {
+test('a red in any group leaves the others to run, fails the check, and names every red', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-red-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const repo = join(root, 'repo')
@@ -492,7 +492,7 @@ test('a red past the unit files leaves the others to run, and fails the check', 
   const stub = join(root, 'npm.cjs')
   writeFileSync(stub, '')
   const testFile = (name, first = '') =>
-    `${first}\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('${name}', () => {\n  appendFileSync(process.env.RAN, '${name} ')\n  if (process.env.RED === '${name}') throw new Error('red')\n})\n`
+    `${first}\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('${name}', async (t) => {\n  appendFileSync(process.env.RAN, '${name} ')\n  await t.test('${name}', () => {\n    if (process.env.RED === '${name}') throw new Error('red')\n  })\n})\n`
   const files = {
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
@@ -519,10 +519,12 @@ test('a red past the unit files leaves the others to run, and fails the check', 
   git('commit', '-qm', 'first')
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const record = join(repo, '.cache/ci/success.json')
-  const check = (red) => {
+  const summary = join(root, 'summary.md')
+  const check = (red, actions = false) => {
     writeFileSync(ran, '')
+    writeFileSync(summary, '')
     rmSync(record, { force: true })
-    const { status } = spawnSync(
+    const { status, stdout } = spawnSync(
       process.execPath,
       [resolve('scripts/ci.mjs')],
       {
@@ -537,24 +539,46 @@ test('a red past the unit files leaves the others to run, and fails the check', 
           CI_FULL: 'true',
           CI_SHARD: '0/1',
           CI_WORKERS: '1',
+          GITHUB_ACTIONS: actions ? 'true' : '',
+          GITHUB_OUTPUT: '',
+          GITHUB_STEP_SUMMARY: actions ? summary : '',
           npm_execpath: stub,
         },
+        encoding: 'utf8',
       },
     )
     return {
       status,
       ran: readFileSync(ran, 'utf8').trim().split(' ').sort(),
       recorded: existsSync(record),
+      stdout,
     }
   }
   const all = ['alone', 'app', 'other', 'unit']
-  assert.deepEqual(check(''), { status: 0, ran: all, recorded: true })
-  for (const red of ['other', 'app', 'alone'])
-    assert.deepEqual(check(red), { status: 1, ran: all, recorded: false }, red)
-  // Unit files still stop the run before anything slow starts.
-  assert.deepEqual(check('unit'), {
-    status: 1,
-    ran: ['unit'],
-    recorded: false,
-  })
+  const { stdout: greenOutput, ...green } = check('')
+  assert.deepEqual(green, { status: 0, ran: all, recorded: true })
+  assert.doesNotMatch(greenOutput, /failing tests/)
+  const batch = { unit: 'unit', other: 'node', app: 'app', alone: 'alone' }
+  for (const red of ['unit', 'other', 'app', 'alone']) {
+    const { stdout, ...result } = check(red)
+    assert.deepEqual(result, { status: 1, ran: all, recorded: false }, red)
+    // One line per red at the end, after every group's own output.
+    assert.match(
+      stdout,
+      new RegExp(
+        `\\nci: 1 failing tests\\n  ${batch[red]}  tests/${red}\\.test\\.mjs:\\d+  ${red}: red\\n$`,
+      ),
+      red,
+    )
+  }
+  // A hosted run puts each red on the run page and in the step summary.
+  const hosted = check('app', true)
+  assert.match(
+    hosted.stdout,
+    /^::error file=tests\/app\.test\.mjs,line=\d+,title=app%3A app::red$/m,
+  )
+  assert.match(
+    readFileSync(summary, 'utf8'),
+    /### 1 failing tests\n\n- app `tests\/app\.test\.mjs:\d+` app: red\n/,
+  )
 })

@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
-import { join, posix, resolve } from 'node:path'
+import { join, posix, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const git = (root, ...args) =>
@@ -362,23 +362,53 @@ export function runCI({ dev = false } = {}) {
   }
   if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
     npm('run', 'build:app')
+  const failuresFile = join(directory, 'failures.jsonl')
   // TAP prints each failure's details immediately; spec defers them to the end.
-  const runTests = (tests, concurrency) => {
-    if (tests.length)
-      run([
+  const runTests = (batch, tests, concurrency) => {
+    if (!tests.length) return []
+    rmSync(failuresFile, { force: true })
+    const result = spawnSync(
+      process.execPath,
+      [
         '--import',
         './tests/file-limit.mjs',
         '--test',
         '--test-reporter=tap',
+        '--test-reporter-destination=stdout',
+        `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
+        `--test-reporter-destination=${failuresFile}`,
         `--test-concurrency=${concurrency}`,
         ...tests,
-      ])
+      ],
+      { stdio: 'inherit', env: process.env },
+    )
+    if (result.error) throw result.error
+    if (result.status === 0) return []
+    const failed = existsSync(failuresFile)
+      ? readFileSync(failuresFile, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : []
+    if (!failed.length)
+      return [
+        {
+          batch,
+          name: `exited ${result.status ?? result.signal} with no failing test reported`,
+          error: `${tests.length} test files`,
+        },
+      ]
+    return failed.map(({ file, ...failure }) => ({
+      batch,
+      ...failure,
+      file: file && relative(root, file).replaceAll('\\', '/'),
+    }))
   }
-  runTests(unitTests, availableParallelism())
-  // A red here must not hide the reds of the groups after it.
-  const failures = []
-  for (const [tests, concurrency] of [
+  // A red in one group must not hide the reds of the groups after it.
+  const failures = [
+    ['unit', unitTests, availableParallelism()],
     [
+      'node',
       selected.filter(
         (test) =>
           !unitTests.includes(test) &&
@@ -387,16 +417,49 @@ export function runCI({ dev = false } = {}) {
       ),
       workers.node,
     ],
-    [appTests, workers.apps],
-    [aloneTests, 1],
-  ]) {
-    try {
-      runTests(tests, concurrency)
-    } catch (error) {
-      failures.push(error)
+    ['app', appTests, workers.apps],
+    ['alone', aloneTests, 1],
+  ].flatMap(([batch, tests, concurrency]) =>
+    runTests(batch, tests, concurrency),
+  )
+  const where = ({ file, line }) =>
+    file ? `${file}${line ? `:${line}` : ''}` : ''
+  if (failures.length) {
+    console.log(`\nci: ${failures.length} failing tests`)
+    for (const failure of failures)
+      console.log(
+        `  ${failure.batch}  ${where(failure)}  ${failure.name}: ${failure.error}`,
+      )
+    // Annotations put each red on the run page; the log alone buries them.
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const encode = (text, property) => {
+        const data = String(text)
+          .replaceAll('%', '%25')
+          .replaceAll('\r', '%0D')
+          .replaceAll('\n', '%0A')
+        return property
+          ? data.replaceAll(':', '%3A').replaceAll(',', '%2C')
+          : data
+      }
+      for (const { batch, file, line, name, error } of failures)
+        console.log(
+          `::error ${file ? `file=${encode(file, true)},${line ? `line=${line},` : ''}` : ''}title=${encode(`${batch}: ${name}`, true)}::${encode(error)}`,
+        )
     }
   }
-  if (failures.length) throw failures[0]
+  if (process.env.GITHUB_STEP_SUMMARY)
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `## checks\n\n- mode: ${plan.full ? 'full' : 'incremental'}\n- base: ${baseline ?? 'cold cache'}\n- rebuilt app: ${plan.build}\n- test files: ${selected.length}/${plan.allTests.length}\n- shard: ${shard}\n${
+        failures.length
+          ? `\n### ${failures.length} failing tests\n\n${failures.map((failure) => `- ${failure.batch} \`${where(failure)}\` ${failure.name}: ${failure.error}\n`).join('')}`
+          : ''
+      }`,
+    )
+  if (failures.length)
+    throw new Error(
+      `check failed: ${failures.length} failing tests in ${[...new Set(failures.map(({ batch }) => batch))].join(', ')}`,
+    )
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (
@@ -409,11 +472,6 @@ export function runCI({ dev = false } = {}) {
     )
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, `build=${plan.build}\n`)
-  if (process.env.GITHUB_STEP_SUMMARY)
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `## checks\n\n- mode: ${plan.full ? 'full' : 'incremental'}\n- base: ${baseline ?? 'cold cache'}\n- rebuilt app: ${plan.build}\n- test files: ${selected.length}/${plan.allTests.length}\n- shard: ${shard}\n`,
-    )
 }
 
 if (

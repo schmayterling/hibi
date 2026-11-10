@@ -119,6 +119,13 @@ export type AppInfo = {
 }
 
 export type DesktopApi = {
+  getAppIcon: () => Promise<import('./app-icon').AppIconState>
+  setAppIcon: (
+    mode: import('./app-icon').AppIconMode,
+  ) => Promise<import('./app-icon').AppIconState>
+  /** Null when the file dialog is canceled. */
+  chooseAppIcon: () => Promise<import('./app-icon').AppIconState | null>
+  resetAppIcon: () => Promise<import('./app-icon').AppIconState>
   getHideWindowControls: () => Promise<boolean>
   setHideWindowControls: (hidden: boolean) => Promise<void>
   restartForWindowControls: () => Promise<void>

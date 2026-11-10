@@ -1,6 +1,7 @@
 import { Marked, type MarkedExtension } from 'marked'
+import { inlineStart } from '../../shared/marked-inline-start.ts'
 import { blockStart } from '../_shared/block-start.ts'
-import type { MarkdownFlavor } from '../api'
+import { mathDetection } from './flavor-info.ts'
 import {
   type Closers,
   formulaLimit,
@@ -112,8 +113,7 @@ export const mathTokens: MarkedExtension = {
     {
       name: 'inlineMath',
       level: 'inline',
-      start: (source) => source.indexOf('$'),
-      tokenizer: inlineMathOrText,
+      ...inlineStart('$', inlineMathOrText),
     },
     {
       // A display block over the formula limit, which blockMath keeps as text.
@@ -125,17 +125,13 @@ export const mathTokens: MarkedExtension = {
   ],
 }
 export const detector = new Marked(mathTokens)
-export const mathFlavor: MarkdownFlavor = {
-  id: 'latex',
-  name: 'Math',
-  kind: 'syntax',
-  description: 'LaTeX math: $…$ within a line or $$…$$ in a separate block.',
-  detect(source) {
-    if (!source.includes('$')) return false
-    let found = false
-    detector.walkTokens(detector.lexer(source), (token) => {
-      found ||= token.type === 'inlineMath' || token.type === 'blockMath'
-    })
-    return found
-  },
+export { mathFlavor } from './flavor-info.ts'
+
+mathDetection.read = (source) => {
+  if (!source.includes('$')) return false
+  let found = false
+  detector.walkTokens(detector.lexer(source), (token) => {
+    found ||= token.type === 'inlineMath' || token.type === 'blockMath'
+  })
+  return found
 }

@@ -72,7 +72,7 @@ test('recovery preview preserves the live draft; real render failures offer reco
   const html = join(bundle, 'index.html')
   await writeFile(
     html,
-    '<!doctype html><html><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
   )
   const next = app.waitForEvent('window')
   await app.evaluate(({ BrowserWindow }, html) => {

@@ -81,8 +81,11 @@ async function pretending(app, path, share = 'Read') {
     },
     { path, share },
   )
+  // Once, as a holder ends once: the test's own release can quit the app,
+  // closing its last window, before its hooks release what it held.
+  let released
   return () =>
-    app.evaluate((_electron, path) => {
+    (released ??= app.evaluate((_electron, path) => {
       const fsp = process.getBuiltinModule('node:fs/promises')
       const state = globalThis.heldNotes
       state.held.delete(path)
@@ -94,7 +97,7 @@ async function pretending(app, path, share = 'Read') {
         value: state.platform,
         configurable: true,
       })
-    }, path)
+    }, path))
 }
 
 async function open(t, { autosave = false, notes = ['note.md'] } = {}) {

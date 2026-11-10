@@ -186,6 +186,45 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   })
   await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
 
+  // The source keeping its own place as lines above it grow is a correction
+  // too: the alignment holds through it and still follows layout after.
+  const sourceBefore = await page
+    .locator('.source-pane .cm-scroller')
+    .evaluate((pane) => pane.scrollTop)
+  await restyle('.source-pane .cm-line { padding-top: 6px }')
+  // Its lines' new heights reach the view at its next measure.
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(
+    (before) =>
+      document.querySelector('.source-pane .cm-scroller').scrollTop - before >
+      1,
+    sourceBefore,
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  // Its lines above the caret shrink, moving the caret up the screen, where
+  // the preview can follow even at its top.
+  const caretBefore = await page
+    .locator('.source-pane .editor-cursor')
+    .evaluate((caret) => caret.getBoundingClientRect().top)
+  await restyle('.source-pane .cm-content { font-size: 85% }')
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(
+    (before) =>
+      Math.abs(
+        document
+          .querySelector('.source-pane .editor-cursor')
+          .getBoundingClientRect().top - before,
+      ) > 2,
+    caretBefore,
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+
   // A pane scrolled apart from the caret, by a script or a reveal, stays
   // apart, even while the layout under the alignment can still settle.
   await source.press('ArrowUp')

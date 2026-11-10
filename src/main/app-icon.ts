@@ -10,16 +10,16 @@ import {
   systemPreferences,
 } from 'electron'
 import {
-  type AppIconFormat,
   type AppIconMode,
   type AppIconState,
-  appIconFormat,
   appIconFormats,
+  appIconModes,
   appIconPreference,
   darkAppIcon,
   isAppIconMode,
   MAX_APP_ICON_BYTES,
   MIN_APP_ICON_SIDE,
+  readAppIcon,
 } from '../shared/app-icon'
 import { runFileDialog } from './file-operation-dialog'
 import { writeText } from './files'
@@ -65,6 +65,7 @@ export async function loadAppIcon() {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
       console.error('Could not load the app icon preference:', error)
   }
+  if (!appIconModes(process.platform).includes(mode)) mode = 'app'
   if (mode !== 'custom') return
   await readCustom()
   if (!custom) mode = 'app'
@@ -79,17 +80,11 @@ export async function appIconState(): Promise<AppIconState> {
 }
 
 /** The appearance macOS and Windows use, even while Hibi sets its own. */
-function systemDark() {
-  if (process.platform === 'darwin')
-    return (
-      systemPreferences.getUserDefault('AppleInterfaceStyle', 'string') ===
+const systemDark = () =>
+  process.platform === 'darwin'
+    ? systemPreferences.getUserDefault('AppleInterfaceStyle', 'string') ===
       'Dark'
-    )
-  // Linux reports only the appearance Hibi sets.
-  return process.platform === 'win32'
-    ? nativeTheme.shouldUseDarkColorsForSystemIntegratedUI
-    : nativeTheme.shouldUseDarkColors
-}
+    : nativeTheme.shouldUseDarkColorsForSystemIntegratedUI
 
 function shownIcon() {
   if (mode === 'custom' && custom)
@@ -169,7 +164,8 @@ function save(next: AppIconMode | 'kept', image?: NativeImage | null) {
 }
 
 export function saveAppIconMode(value: unknown) {
-  if (!isAppIconMode(value)) throw new Error('Invalid app icon setting.')
+  if (!isAppIconMode(value) || !appIconModes(process.platform).includes(value))
+    throw new Error('Invalid app icon setting.')
   return save(value)
 }
 
@@ -189,21 +185,16 @@ async function readImage(path: string) {
   }
 }
 
-/** Decodes the exact bytes that passed validation, from a private copy. */
-async function decode(bytes: Buffer, format: AppIconFormat) {
-  if (format === 'png') return nativeImage.createFromBuffer(bytes)
+/** Draws a checked SVG with Quick Look (macOS), from a private copy. */
+async function drawSvg(bytes: Buffer) {
   const folder = await mkdtemp(join(app.getPath('temp'), 'hibi-app-icon-'))
   try {
-    const path = join(folder, `icon.${format}`)
+    const path = join(folder, 'icon.svg')
     await writeText(path, bytes)
-    // Windows reads ICO directly; macOS draws ICNS, ICO and SVG at a fixed size.
-    const image =
-      process.platform === 'win32'
-        ? nativeImage.createFromPath(path)
-        : await nativeImage.createThumbnailFromPath(path, {
-            width: 512,
-            height: 512,
-          })
+    const image = await nativeImage.createThumbnailFromPath(path, {
+      width: 512,
+      height: 512,
+    })
     // One representation: with a Retina one kept too, the size checks below
     // would see 512 pixels and save the 1024-pixel drawing.
     return nativeImage.createFromBuffer(image.toPNG())
@@ -230,16 +221,20 @@ export async function chooseAppIcon(window: BrowserWindow) {
   const bytes = await readImage(path).catch((cause) => {
     throw unreadable(cause)
   })
-  const format = appIconFormat(bytes)
+  const { format, png } = readAppIcon(bytes)
   if (!appIconFormats(process.platform).includes(format))
     throw new Error(
       `${format.toUpperCase()} images can't be the app icon on this system. Choose a PNG.`,
     )
-  const image = await decode(bytes, format).catch((cause) => {
-    throw unreadable(cause)
-  })
+  // ICNS and ICO arrive here as the PNG embedded in them.
+  const image = png
+    ? nativeImage.createFromBuffer(Buffer.from(png))
+    : await drawSvg(bytes).catch((cause) => {
+        throw unreadable(cause)
+      })
+  if (image.isEmpty()) throw unreadable(null)
   const { width, height } = image.getSize()
-  if (image.isEmpty() || Math.min(width, height) < MIN_APP_ICON_SIDE)
+  if (Math.min(width, height) < MIN_APP_ICON_SIDE)
     throw new Error(
       `Choose an image at least ${MIN_APP_ICON_SIDE} by ${MIN_APP_ICON_SIDE} pixels.`,
     )

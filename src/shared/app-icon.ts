@@ -1,3 +1,5 @@
+import { checkSvgIcon } from './svg-icon.ts'
+
 export const APP_ICON_CHANNELS = {
   get: 'app-icon:get',
   set: 'app-icon:set',
@@ -53,64 +55,109 @@ const tooLarge = () =>
   )
 const unreadable = () =>
   new Error('Choose a PNG, ICNS, ICO or SVG image for the app icon.')
-// Only fragment links and embedded raster images; no files, no network.
-const local = String.raw`(?!["']?\s*(?:#|data:image\/(?:png|jpeg|gif|webp)[;,]))`
-const outside = new RegExp(
-  String.raw`<script|<foreignObject|@import|\b(?:href|src)\s*=\s*${local}|url\(\s*${local}`,
-  'i',
-)
+const noPng = (format: string) =>
+  new Error(
+    `This ${format} has no PNG image inside that Hibi can read. Choose a PNG.`,
+  )
+const ascii = (bytes: Uint8Array, start: number, end: number) =>
+  String.fromCharCode(...bytes.subarray(start, end))
+
+/** A PNG's width, read from its header, or null if `bytes` is not a PNG. */
+function pngWidth(bytes: Uint8Array) {
+  if (
+    bytes.length < 33 ||
+    ascii(bytes, 0, 8) !== '\x89PNG\r\n\x1a\n' ||
+    ascii(bytes, 12, 16) !== 'IHDR'
+  )
+    return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const width = view.getUint32(16)
+  const height = view.getUint32(20)
+  if (!width || !height) throw unreadable()
+  if (width > MAX_APP_ICON_SIDE || height > MAX_APP_ICON_SIDE) throw tooLarge()
+  return width
+}
+
+/** The widest PNG among an icon file's images. */
+function widest(images: Uint8Array[], format: string) {
+  let best: Uint8Array | null = null
+  let bestWidth = 0
+  for (const image of images) {
+    const width = pngWidth(image)
+    if (width && width > bestWidth) [best, bestWidth] = [image, width]
+  }
+  if (!best) throw noPng(format)
+  return best
+}
 
 /**
- * The image format, from the file's bytes rather than its name. PNG sizes are
- * read from the header so a huge image is refused before it is decoded.
+ * The image format, from the file's bytes rather than its name, and the PNG
+ * to decode for it. ICNS and ICO files are read here, so only an embedded PNG
+ * reaches the decoder; an SVG must pass `checkSvgIcon`. PNG sizes come from
+ * the header so a huge image is refused before it is decoded.
  */
-export function appIconFormat(bytes: Uint8Array): AppIconFormat {
+export function readAppIcon(bytes: Uint8Array): {
+  format: AppIconFormat
+  png: Uint8Array | null
+} {
   if (!bytes.length) throw unreadable()
   if (bytes.length > MAX_APP_ICON_BYTES)
     throw new Error('Choose an image smaller than 8 MB.')
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const ascii = (start: number, end: number) =>
-    String.fromCharCode(...bytes.subarray(start, end))
-  if (
-    bytes.length >= 24 &&
-    ascii(0, 8) === '\x89PNG\r\n\x1a\n' &&
-    ascii(12, 16) === 'IHDR'
-  ) {
-    const width = view.getUint32(16)
-    const height = view.getUint32(20)
-    if (!width || !height) throw unreadable()
-    if (width > MAX_APP_ICON_SIDE || height > MAX_APP_ICON_SIDE)
-      throw tooLarge()
-    return 'png'
-  }
+  if (pngWidth(bytes)) return { format: 'png', png: bytes }
   if (
     bytes.length >= 8 &&
-    ascii(0, 4) === 'icns' &&
+    ascii(bytes, 0, 4) === 'icns' &&
     view.getUint32(4) === bytes.length
-  )
-    return 'icns'
+  ) {
+    const images = []
+    for (let at = 8; at < bytes.length; ) {
+      const length = at + 8 <= bytes.length ? view.getUint32(at + 4) : 0
+      if (length < 8 || at + length > bytes.length) throw noPng('ICNS')
+      images.push(bytes.subarray(at + 8, at + length))
+      at += length
+    }
+    return { format: 'icns', png: widest(images, 'ICNS') }
+  }
   if (
-    bytes.length >= 22 &&
+    bytes.length >= 6 &&
     view.getUint16(0, true) === 0 &&
     view.getUint16(2, true) === 1 &&
     view.getUint16(4, true) > 0
-  )
-    return 'ico'
-  // The decoder drops a leading byte order mark.
-  const text = new TextDecoder().decode(bytes)
-  if (/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(text)) {
-    if (outside.test(text))
-      throw new Error(
-        'This SVG loads other files or runs scripts. Choose a self-contained image.',
-      )
-    return 'svg'
+  ) {
+    const count = view.getUint16(4, true)
+    if (6 + count * 16 > bytes.length) throw noPng('ICO')
+    const images = []
+    for (let entry = 6; entry < 6 + count * 16; entry += 16) {
+      const size = view.getUint32(entry + 8, true)
+      const offset = view.getUint32(entry + 12, true)
+      if (offset + size > bytes.length) throw noPng('ICO')
+      // ponytail: bitmap entries are skipped; old bitmap-only ICOs need a BMP reader.
+      images.push(bytes.subarray(offset, offset + size))
+    }
+    return { format: 'ico', png: widest(images, 'ICO') }
+  }
+  const text = new TextDecoder().decode(bytes.subarray(0, 1024))
+  if (/^\s*</.test(text) || bytes[0] === 0xfe || bytes[0] === 0xff) {
+    checkSvgIcon(bytes)
+    return { format: 'svg', png: null }
   }
   throw unreadable()
 }
 
-/** Formats each platform's image decoders read. */
+/** Formats each platform reads: SVG needs macOS's Quick Look to draw it. */
 export function appIconFormats(platform: string): AppIconFormat[] {
-  if (platform === 'darwin') return ['png', 'icns', 'ico', 'svg']
-  if (platform === 'win32') return ['png', 'ico']
-  return ['png']
+  return platform === 'darwin'
+    ? ['png', 'icns', 'ico', 'svg']
+    : ['png', 'icns', 'ico']
+}
+
+/**
+ * Linux reports only the appearance Hibi itself sets, so Follow system would
+ * silently follow Hibi there; it is not offered.
+ */
+export function appIconModes(platform: string): AppIconMode[] {
+  return APP_ICON_MODES.filter(
+    (mode) => platform !== 'linux' || mode !== 'system',
+  )
 }

@@ -34,6 +34,7 @@ import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
+import { APP_ICON_CHANNELS } from '../shared/app-icon'
 import { BACKGROUND_CHANNELS, QUICK_NOTE_COMMAND } from '../shared/background'
 import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -128,7 +129,14 @@ import {
   windowAddonName,
 } from './addons'
 import { analysisService } from './analysis'
-import { appIconPath, applyAppIcon } from './app-icon'
+import {
+  appIconState,
+  applyAppIcon,
+  chooseAppIcon,
+  loadAppIcon,
+  resetAppIcon,
+  saveAppIconMode,
+} from './app-icon'
 import {
   appearanceColors,
   loadAppearance,
@@ -1032,7 +1040,6 @@ function createWindow(): void {
     // Linux cannot change focusability after creation; CI shows test windows.
     focusable: !testing || process.platform === 'linux',
     title: 'Hibi',
-    ...(process.platform === 'darwin' ? {} : { icon: appIconPath() }),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 12, y: 11 } }
@@ -1577,6 +1584,7 @@ if (!app.requestSingleInstanceLock()) {
       await Promise.all([
         startupSpan('appearance', loadAppearance),
         startupSpan('window-controls', loadWindowControls),
+        startupSpan('app-icon', loadAppIcon),
       ])
       applyAppIcon()
       const handle = (
@@ -1803,6 +1811,14 @@ if (!app.requestSingleInstanceLock()) {
         refreshAddonWindowColors()
         await saved
       })
+      handle(APP_ICON_CHANNELS.get, () => appIconState())
+      handle(APP_ICON_CHANNELS.set, (_event, value: unknown) =>
+        saveAppIconMode(value),
+      )
+      handle(APP_ICON_CHANNELS.choose, (event) =>
+        chooseAppIcon(trustedWindow(event)),
+      )
+      handle(APP_ICON_CHANNELS.reset, () => resetAppIcon())
       handle(WINDOW_CONTROLS_CHANNELS.get, () => getHideWindowControls())
       handle(WINDOW_CONTROLS_CHANNELS.set, (_event, value: unknown) =>
         saveHideWindowControls(value),
@@ -3011,6 +3027,16 @@ if (!app.requestSingleInstanceLock()) {
           return renamed
         }),
       )
+      // Hibi's own appearance hides macOS appearance changes from nativeTheme.
+      if (process.platform === 'darwin') {
+        const subscription = systemPreferences.subscribeNotification(
+          'AppleInterfaceThemeChangedNotification',
+          applyAppIcon,
+        )
+        app.once('will-quit', () =>
+          systemPreferences.unsubscribeNotification(subscription),
+        )
+      }
       nativeTheme.on('updated', () => {
         applyAppIcon()
         mainWindow?.setBackgroundColor(appearanceColors().background)

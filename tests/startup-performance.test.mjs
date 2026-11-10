@@ -59,7 +59,7 @@ test('production entry keeps editor implementations behind demand imports', asyn
     .join('\n')
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor)\.tsx|src\/renderer\/src\/document-media\.ts/,
+    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor|CommandPalette)\.tsx|src\/renderer\/src\/document-media\.ts/,
   )
   assert.doesNotMatch(initial, /node_modules\/@tiptap\//)
   assert.doesNotMatch(
@@ -87,6 +87,11 @@ test('production entry keeps editor implementations behind demand imports', asyn
   assert.ok(
     chunks.some((chunk) =>
       chunk.modules.includes('src/renderer/src/FormatEditor.tsx'),
+    ),
+  )
+  assert.ok(
+    chunks.some((chunk) =>
+      chunk.modules.includes('src/renderer/src/CommandPalette.tsx'),
     ),
   )
 })
@@ -431,6 +436,20 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
       childList: true,
     })
   })
+  // The palette stays off the startup path but loads once the window is idle,
+  // so keys typed right after its shortcut reach its search field.
+  const paletteChunk = chunks.find((chunk) =>
+    chunk.modules.includes('src/renderer/src/CommandPalette.tsx'),
+  ).file
+  if (!files.has(paletteChunk))
+    await new Promise((resolve) => {
+      const parsed = ({ url }) => {
+        if (url !== `app://hibi/${paletteChunk}`) return
+        session.off('Debugger.scriptParsed', parsed)
+        resolve()
+      }
+      session.on('Debugger.scriptParsed', parsed)
+    })
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+k' : 'Control+k',

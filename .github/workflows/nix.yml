@@ -16,5 +16,18 @@ jobs:
           name: hibi
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           skipPush: ${{ github.event_name != 'push' }}
+      # Recompute the npm deps hash from package-lock.json with the flake's own
+      # prefetch-npm-deps. A store or cache hit on the declared fixed output
+      # never refetches, so the build alone can pass on a stale hash.
+      - name: npmDepsHash matches package-lock.json
+        run: |
+          set -euo pipefail
+          declared=$(sed -n 's/^[[:space:]]*npmDepsHash = "\(sha256-[A-Za-z0-9+/=]*\)";.*/\1/p' nix/package.nix)
+          computed=$(nix shell --inputs-from . nixpkgs#prefetch-npm-deps --command prefetch-npm-deps package-lock.json)
+          if [[ $declared != "$computed" ]]; then
+            echo "::error file=nix/package.nix::npmDepsHash is $declared but package-lock.json needs $computed"
+            printf 'Set `npmDepsHash = "%s";` in nix/package.nix (declared: `%s`).\n' "$computed" "$declared" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - run: nix flake check -L
       - run: nix build -L --no-link .#hibi

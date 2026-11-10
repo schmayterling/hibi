@@ -60,6 +60,10 @@ export async function loadAppearance() {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
       console.error('could not load appearance:', error)
   }
+  // Without a desktop portal answer, Electron on Linux reads the GTK theme
+  // only when themeSource changes, so "system" would start light under a
+  // dark GTK theme (#741).
+  if (process.platform === 'linux') nativeTheme.themeSource = 'light'
   nativeTheme.themeSource = appearance.preferences.mode
 }
 export function appearanceColors() {

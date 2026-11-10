@@ -335,6 +335,8 @@ export const electron = {
       },
       args: [...options.args, '--hibi-test', ...electronGpuArgs],
     })
+    // Playwright disposes the process handle once the app has exited.
+    const launched = application.process()
     const observeStartup = (page) => {
       if (page.hibiStartupTrace) return
       const requests = new Map()
@@ -382,14 +384,11 @@ export const electron = {
     for (const page of application.windows?.() ?? []) observeStartup(page)
     let quit = false
     let onQuit
-    forwardElectronDiagnostics(application.process().stderr).on(
-      'line',
-      (line) => {
-        if (line !== 'electron-main-quit') return
-        quit = true
-        onQuit?.()
-      },
-    )
+    forwardElectronDiagnostics(launched.stderr).on('line', (line) => {
+      if (line !== 'electron-main-quit') return
+      quit = true
+      onQuit?.()
+    })
     // A page that stopped answering never answers a detach either.
     const context = application.context?.()
     if (context?.newCDPSession) {
@@ -431,7 +430,7 @@ export const electron = {
       clearTimeout(slowStartTimer)
       // A failed startup wait closes the app; let its report finish first.
       await slowStart
-      const child = application.process()
+      const child = launched
       let timer, diagnosticTimer
       try {
         diagnosticTimer = setTimeout(() => {
@@ -553,7 +552,7 @@ export const electron = {
       // The inspector may already be closed; keep only validated stdout events.
       let detachQuitTrace
       try {
-        const child = application.process()
+        const child = launched
         const prefix = 'hibi-test-quit '
         const events = [
           'armed',

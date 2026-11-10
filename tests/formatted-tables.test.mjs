@@ -116,7 +116,7 @@ before(
     const html = join(bundle, 'index.html')
     await writeFile(
       html,
-      '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+      '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
     await mkdir(join(folder, 'notes'))
     const file = join(folder, 'notes', 'tables.md')

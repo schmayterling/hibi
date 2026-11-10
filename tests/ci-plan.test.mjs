@@ -4,12 +4,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
@@ -249,7 +250,10 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
   write('tests/one.test.mjs', testFile('hosted'))
   write('tests/dev/two.test.mjs', testFile('dev'))
   write('tests/dev/fixtures/held.mjs', '')
-  write('tests/spawns.test.mjs', "import 'node:child_process'\n")
+  write(
+    'tests/spawns.test.mjs',
+    "import 'node:child_process'\nimport test from 'node:test'\ntest('spawns', () => {})\n",
+  )
   git('init', '-q')
   git('config', 'user.name', 'ci')
   git('config', 'user.email', 'ci@example.com')
@@ -303,6 +307,8 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
         CI_CLEAN: '',
         CI_FULL: '',
         CI_SHARD: '0/1',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
         npm_execpath: stub,
       },
     })
@@ -367,7 +373,12 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
   }
   write('.gitignore', 'out/\n.cache/\n')
   write('src/app.ts', 'export const version = 1\n')
-  write('scripts/tool.mjs', '// a script the app build runs\n'.repeat(4))
+  // Runs a test once it moves to tests/.
+  write(
+    'scripts/tool.mjs',
+    `${'// a script the app build runs\n'.repeat(4)}import test from 'node:test'\ntest('tool', () => {})\n`,
+  )
+  write('tests/file-limit.mjs', '')
   write(
     'tests/one.test.mjs',
     "import test from 'node:test'\ntest('one', () => {})\n",
@@ -406,11 +417,14 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
       stdio: 'pipe',
       env: {
         ...process.env,
+        NODE_TEST_CONTEXT: undefined,
         CALLS: calls,
         CI_BASE: base,
         CI_CLEAN: '',
         CI_FULL: '',
         CI_SHARD: '0/1',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
         npm_execpath: stub,
       },
     })
@@ -463,6 +477,12 @@ test('test workers follow the machine and tests that share a machine resource ru
       "import './electron.mjs'; navigator.clipboard.readText()",
     'tests/stub.test.mjs': "import './electron.mjs'; const clipboardData = 1",
     'tests/unit.test.mjs': 'const unit = 1',
+    // Starts the app through a test script it runs by path.
+    'tests/gate.test.mjs':
+      "import { spawnSync } from 'node:child_process'\nspawnSync(process.execPath, ['--test', 'tests/fixtures/gate.test.js'])\nconst gone = 'tests/fixtures/gone.js'",
+    'tests/fixtures/gate.test.js': "import '../electron.mjs'",
+    // Names a script without running it.
+    'tests/named.test.mjs': "const script = 'tests/fixtures/gate.test.js'",
   }
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(root, file)), { recursive: true })
@@ -479,12 +499,14 @@ test('test workers follow the machine and tests that share a machine resource ru
     'tests/shortcut.test.mjs',
   ])
   assert.deepEqual(plan.appTests, [
+    'tests/gate.test.mjs',
     'tests/plain.test.mjs',
     'tests/stub.test.mjs',
   ])
+  assert.ok(plan.unitTests.includes('tests/named.test.mjs'))
 })
 
-test('a red past the unit files leaves the others to run, and fails the check', (t) => {
+test('a red in any group leaves the others to run, fails the check, and names every red', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-red-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const repo = join(root, 'repo')
@@ -492,7 +514,7 @@ test('a red past the unit files leaves the others to run, and fails the check', 
   const stub = join(root, 'npm.cjs')
   writeFileSync(stub, '')
   const testFile = (name, first = '') =>
-    `${first}\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('${name}', () => {\n  appendFileSync(process.env.RAN, '${name} ')\n  if (process.env.RED === '${name}') throw new Error('red')\n})\n`
+    `${first}\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('${name}', async (t) => {\n  appendFileSync(process.env.RAN, '${name} ')\n  await t.test('${name}', () => {\n    if (process.env.RED === '${name}') throw new Error('red')\n  })\n})\n`
   const files = {
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
@@ -519,10 +541,12 @@ test('a red past the unit files leaves the others to run, and fails the check', 
   git('commit', '-qm', 'first')
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const record = join(repo, '.cache/ci/success.json')
-  const check = (red) => {
+  const summary = join(root, 'summary.md')
+  const check = (red, actions = false) => {
     writeFileSync(ran, '')
+    writeFileSync(summary, '')
     rmSync(record, { force: true })
-    const { status } = spawnSync(
+    const { status, stdout } = spawnSync(
       process.execPath,
       [resolve('scripts/ci.mjs')],
       {
@@ -537,6 +561,138 @@ test('a red past the unit files leaves the others to run, and fails the check', 
           CI_FULL: 'true',
           CI_SHARD: '0/1',
           CI_WORKERS: '1',
+          GITHUB_ACTIONS: actions ? 'true' : '',
+          GITHUB_OUTPUT: '',
+          GITHUB_STEP_SUMMARY: actions ? summary : '',
+          npm_execpath: stub,
+        },
+        encoding: 'utf8',
+      },
+    )
+    return {
+      status,
+      ran: readFileSync(ran, 'utf8').trim().split(' ').sort(),
+      recorded: existsSync(record),
+      stdout,
+    }
+  }
+  const all = ['alone', 'app', 'other', 'unit']
+  const { stdout: greenOutput, ...green } = check('')
+  assert.deepEqual(green, { status: 0, ran: all, recorded: true })
+  assert.doesNotMatch(greenOutput, /failing tests/)
+  const batch = { unit: 'unit', other: 'node', app: 'app', alone: 'alone' }
+  for (const red of ['unit', 'other', 'app', 'alone']) {
+    const { stdout, ...result } = check(red)
+    assert.deepEqual(result, { status: 1, ran: all, recorded: false }, red)
+    // One line per red at the end, after every group's own output.
+    assert.match(
+      stdout,
+      new RegExp(
+        `\\nci: 1 failing tests\\n  ${batch[red]}  tests/${red}\\.test\\.mjs:\\d+  ${red}: red\\n$`,
+      ),
+      red,
+    )
+  }
+  // A hosted run puts each red on the run page and in the step summary.
+  const hosted = check('app', true)
+  assert.match(
+    hosted.stdout,
+    /^::error file=tests\/app\.test\.mjs,line=\d+,title=app%3A app::red$/m,
+  )
+  assert.match(
+    readFileSync(summary, 'utf8'),
+    /### 1 failing tests\n\n- app `tests\/app\.test\.mjs:\d+` app: red\n/,
+  )
+})
+
+test('a group that fails to start or report in full is a red of its own, and the rest still run', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-faults-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const ran = join(root, 'ran')
+  const stub = join(root, 'npm.cjs')
+  const faults = join(root, 'faults.mjs')
+  writeFileSync(stub, '')
+  // Stands in for what the machine can do to the unit group's run or report.
+  writeFileSync(
+    faults,
+    `import process from 'node:child_process'
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const spawnSync = process.spawnSync
+process.spawnSync = (command, args, options) => {
+  const fault = globalThis.process.env.FAULT
+  if (!args.includes('tests/unit.test.mjs')) return spawnSync(command, args, options)
+  if (fault === 'spawn') return { error: new Error('spawnSync ENOMEM'), status: null, signal: null }
+  if (fault === 'throw') throw new Error('EPERM, operation not permitted')
+  const result = spawnSync(command, args, options)
+  const report = args.find((arg) => arg.startsWith('--test-reporter-destination=') && !arg.endsWith('=stdout')).slice(28)
+  if (fault === 'missing') rmSync(report)
+  if (fault === 'torn') appendFileSync(report, '{"name":')
+  if (fault === 'cut') writeFileSync(report, '')
+  if (fault === 'null') writeFileSync(report, 'null\\n')
+  // Loses the failure line, keeps the count that names it.
+  if (fault === 'dropped') writeFileSync(report, readFileSync(report, 'utf8').split('\\n').slice(1).join('\\n'))
+  if (fault === 'killed') return { ...result, status: null, signal: 'SIGTERM' }
+  if (!['typed', 'twice', 'unknown', 'files', 'footer', 'key', 'error'].includes(fault)) return result
+  const lines = readFileSync(report, 'utf8').split('\\n').filter(Boolean)
+  const footer = JSON.parse(lines.at(-1))
+  const write = (...rest) => writeFileSync(report, [...lines.slice(0, -1), ...rest].map((line) => typeof line === 'string' ? line : JSON.stringify(line)).join('\\n') + '\\n')
+  if (fault === 'typed') write({ ...footer, failures: { toString: null } })
+  if (fault === 'twice') write(lines.at(-1), ...lines)
+  if (fault === 'unknown') write(lines.at(-1), { unexpected: true })
+  if (fault === 'files') write({ ...footer, files: 0 })
+  if (fault === 'footer') write({ ...footer, extra: 1 })
+  if (fault === 'key') write({ name: 'x', error: 'e', extra: 1 }, { ...footer, failures: 1 })
+  if (fault === 'error') write({ name: 'x', error: 1 }, { ...footer, failures: 1 })
+  return result
+}
+syncBuiltinESMExports()
+`,
+  )
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    'tests/electron.mjs': "export const later = () => import('playwright')",
+    'tests/unit.test.mjs': `import { appendFileSync } from 'node:fs'\nimport test from 'node:test'\nif (process.env.SHAPE !== 'empty') (process.env.SHAPE === 'skip' ? test.skip : test)('unit', () => {\n  appendFileSync(process.env.RAN, 'unit ')\n  if (process.env.RED) throw new Error('red')\n})\nif (process.env.SHAPE !== 'empty') test.todo('later', () => {\n  throw new Error('not yet')\n})\n`,
+    'tests/app.test.mjs': `import './electron.mjs'\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('app', () => appendFileSync(process.env.RAN, 'app '))\n`,
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const record = join(repo, '.cache/ci/success.json')
+  const check = (fault, red = '', shape = '') => {
+    writeFileSync(ran, '')
+    rmSync(record, { force: true })
+    const { status, stdout } = spawnSync(
+      process.execPath,
+      ['--import', faults, resolve('scripts/ci.mjs')],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: {
+          ...env,
+          FAULT: fault,
+          SHAPE: shape,
+          RED: red,
+          RAN: ran,
+          CI_BASE: '',
+          CI_CLEAN: '',
+          CI_FULL: 'true',
+          CI_SHARD: '0/1',
+          CI_WORKERS: '1',
+          GITHUB_ACTIONS: '',
+          GITHUB_OUTPUT: '',
+          GITHUB_STEP_SUMMARY: '',
           npm_execpath: stub,
         },
       },
@@ -545,16 +701,186 @@ test('a red past the unit files leaves the others to run, and fails the check', 
       status,
       ran: readFileSync(ran, 'utf8').trim().split(' ').sort(),
       recorded: existsSync(record),
+      reds: stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
     }
   }
-  const all = ['alone', 'app', 'other', 'unit']
-  assert.deepEqual(check(''), { status: 0, ran: all, recorded: true })
-  for (const red of ['other', 'app', 'alone'])
-    assert.deepEqual(check(red), { status: 1, ran: all, recorded: false }, red)
-  // Unit files still stop the run before anything slow starts.
-  assert.deepEqual(check('unit'), {
-    status: 1,
-    ran: ['unit'],
-    recorded: false,
-  })
+  // A todo that throws is no red.
+  const { reds: green, ...clean } = check('')
+  assert.deepEqual(clean, { status: 0, ran: ['app', 'unit'], recorded: true })
+  assert.doesNotMatch(green, /failing tests/)
+  const line = /tests\/unit\.test\.mjs:\d+/
+  const cases = {
+    spawn: [
+      ['app'],
+      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: spawnSync ENOMEM; its report did not finish; 1 test files$/,
+    ],
+    throw: [
+      ['app'],
+      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: EPERM, operation not permitted; its report did not finish; 1 test files$/,
+    ],
+    null: [
+      ['app', 'unit'],
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+    ],
+    missing: [
+      ['app', 'unit'],
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 test files$/,
+    ],
+    cut: [
+      ['app', 'unit'],
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 test files$/,
+    ],
+  }
+  for (const [fault, [ranGroups, reds]] of Object.entries(cases)) {
+    const { reds: listed, ...result } = check(fault)
+    assert.deepEqual(
+      result,
+      { status: 1, ran: ranGroups, recorded: false },
+      fault,
+    )
+    assert.match(listed, reds, fault)
+  }
+  // With a real red, the records read before the fault are kept beside it.
+  const torn = check('torn', 'red')
+  assert.equal(torn.status, 1)
+  assert.deepEqual(torn.ran, ['app', 'unit'])
+  assert.match(
+    torn.reds,
+    new RegExp(
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: its report did not finish; 2 unreadable report lines; 1 test files$`,
+    ),
+  )
+  // A group whose files skipped every test or registered none proved nothing,
+  // and a report must be read exactly as the reporter wrote it.
+  for (const [fault, shape, reds] of [
+    [
+      '',
+      'skip',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: ran no tests; 1 test files$/,
+    ],
+    [
+      '',
+      'empty',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: ran no tests; 1 test files$/,
+    ],
+    [
+      'typed',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+    ],
+    [
+      'twice',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: 1 unreadable report lines; 1 test files$/,
+    ],
+    [
+      'unknown',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 2 unreadable report lines; 1 test files$/,
+    ],
+    [
+      'files',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: heard from 0 of its 1 files; 1 test files$/,
+    ],
+    [
+      'footer',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+    ],
+    ...['key', 'error'].map((fault) => [
+      fault,
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: 1 unreadable report lines; its report counted 1 failures but held 0; 1 test files$/,
+    ]),
+  ]) {
+    const { reds: listed, ...result } = check(fault, '', shape)
+    assert.deepEqual(
+      { ...result, ran: result.ran.includes('app') },
+      { status: 1, ran: true, recorded: false },
+      fault || shape,
+    )
+    assert.match(listed, reds, fault || shape)
+  }
+  const dropped = check('dropped', 'red')
+  assert.equal(dropped.status, 1)
+  assert.match(
+    dropped.reds,
+    /^ci: 1 failing tests\n {2}unit {4}exited 1 with no failing test reported: its report counted 1 failures but held 0; 1 test files$/,
+  )
+  const killed = check('killed', 'red')
+  assert.equal(killed.status, 1)
+  assert.deepEqual(killed.ran, ['app', 'unit'])
+  assert.match(
+    killed.reds,
+    new RegExp(
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: killed by SIGTERM; 1 test files$`,
+    ),
+  )
+})
+
+test('the report counts tests by the file that ran them, on every supported node', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-report-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const files = {
+    // Tests a helper declares belong to the file that imports it.
+    'helper.mjs':
+      "import test from 'node:test'\nexport const register = (name) => test(name, () => {})\n",
+    'one.test.mjs':
+      "import { register } from './helper.mjs'\nregister('one')\n",
+    'two.test.mjs':
+      "import { register } from './helper.mjs'\nregister('two')\n",
+    'skipped.test.mjs':
+      "import test from 'node:test'\ntest.skip('skipped', () => {})\n",
+    'empty.test.mjs': "import 'node:test'\n",
+    'crash.test.mjs': 'process.exit(3)\n',
+  }
+  for (const [file, source] of Object.entries(files))
+    writeFileSync(join(root, file), source)
+  const report = (node, tests) => {
+    const destination = join(root, 'report.jsonl')
+    rmSync(destination, { force: true })
+    const { NODE_TEST_CONTEXT: _, ...env } = process.env
+    spawnSync(
+      node,
+      [
+        '--test',
+        `--test-reporter=${new URL('../scripts/ci-failures.mjs', import.meta.url).href}`,
+        `--test-reporter-destination=${destination}`,
+        ...tests,
+      ],
+      { cwd: root, env },
+    )
+    return JSON.parse(
+      readFileSync(destination, 'utf8').trim().split('\n').at(-1),
+    )
+  }
+  // package.json allows node 22.18 and later; each one installed here gets a run.
+  const installed = join(homedir(), '.nvm/versions/node')
+  const nodes = new Map([[process.version, process.execPath]])
+  for (const version of existsSync(installed) ? readdirSync(installed) : []) {
+    const [major, minor] = version.slice(1).split('.').map(Number)
+    if (major > 22 || (major === 22 && minor >= 18))
+      nodes.set(version, join(installed, version, 'bin/node'))
+  }
+  for (const major of [22, 24])
+    if (![...nodes.keys()].some((version) => version.startsWith(`v${major}.`)))
+      t.diagnostic(`no node ${major} installed: its run is skipped`)
+  for (const [version, node] of nodes) {
+    assert.deepEqual(
+      report(node, ['one.test.mjs', 'two.test.mjs']),
+      { done: true, failures: 0, ran: 2, files: 2 },
+      version,
+    )
+    assert.deepEqual(
+      report(node, ['skipped.test.mjs', 'empty.test.mjs']),
+      { done: true, failures: 0, ran: 0, files: 2 },
+      version,
+    )
+    assert.deepEqual(
+      report(node, ['crash.test.mjs', 'one.test.mjs']),
+      { done: true, failures: 1, ran: 1, files: 2 },
+      version,
+    )
+  }
 })

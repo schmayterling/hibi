@@ -33,7 +33,7 @@ buildNpmPackage {
   src = lib.cleanSource ./..;
 
   nodejs = nodejs_24;
-  npmDepsHash = "sha256-AC4R7Nw8/SajQMrOTHaBf1vDzCnZJ7aq+nu9V0INYuc=";
+  npmDepsHash = "sha256-CHB35leYtSfEmCdJOeLlqpA0MEn0PQgSkUU880f6pVg=";
   # npmConfigHook runs `npm rebuild`, which fires the root postinstall
   # (install-electron downloads -> fetch failed). Skip it; deps are prebuilt.
   npmRebuildFlags = [ "--ignore-scripts" ];

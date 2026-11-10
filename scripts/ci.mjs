@@ -373,46 +373,102 @@ export async function runCI({ dev = false } = {}) {
   }
   if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
     npm('run', 'build:app')
-  const failuresFile = join(directory, 'failures.jsonl')
-  // TAP prints each failure's details immediately; spec defers them to the end.
-  // A group that can't start or report in full is a red of its own, green exit
-  // or not, and the groups after it still run.
-  // node:test can't stop a file stuck in a synchronous loop, so the run does: a
-  // file still running past its time is named, the run stops, and the files it
-  // hadn't finished start again without it. A file can ask for longer with
+  // node:test can't stop a file stuck in a synchronous loop, so each test file
+  // runs in a runner of its own: one still running past its time is stopped,
+  // with every process it started, and named, while the files beside it run on.
+  // A file can ask for longer in the comments it opens with:
   // `// ci: timeout <seconds> s (why)`.
-  const timeout = (test) =>
-    Number(
-      /^\/\/ ci: timeout (\d+) s\b/m.exec(
-        readFileSync(join(root, test), 'utf8'),
-      )?.[1] ?? fileTimeout,
-    )
-  const readReport = () => {
+  const limit = (test) => {
+    const opening = /^(?:[ \t]*(?:\/\/[^\n]*)?\r?\n)*/.exec(
+      readFileSync(join(root, test), 'utf8'),
+    )[0]
+    const asked = /^\/\/ ci: timeout (\S+) s\b/m.exec(opening)?.[1]
+    if (asked === undefined) return fileTimeout
+    const seconds = /^\d{1,5}$/.test(asked) ? Number(asked) : 0
+    if (seconds < 1 || seconds > 86400)
+      throw new Error(`ci: timeout ${asked} s is not 1 to 86400 seconds`)
+    return seconds
+  }
+  // Found before any is stopped: a stopped parent's children move to init, and
+  // Playwright starts Electron in a process group of its own.
+  const descendants = (pid) => {
+    const children = new Map()
+    for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid='], {
+      encoding: 'utf8',
+    })
+      .trim()
+      .split('\n')) {
+      const [child, parent] = line.trim().split(/\s+/).map(Number)
+      children.set(parent, [...(children.get(parent) ?? []), child])
+    }
+    const found = []
+    for (const next = [pid]; next.length; ) {
+      const current = next.pop()
+      found.push(current)
+      next.push(...(children.get(current) ?? []))
+    }
+    return found
+  }
+  const alive = (pid) => {
     try {
-      return readFileSync(failuresFile, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          try {
-            return JSON.parse(line)
-          } catch {
-            return undefined
-          }
-        })
+      process.kill(pid, 0)
+      return true
     } catch {
-      return []
+      return false
     }
   }
-  const runTests = async (batch, tests, concurrency) => {
-    if (!tests.length) return []
-    const limits = new Map(
-      tests.map((test) => [resolve(root, test), timeout(test)]),
-    )
-    const running = new Map()
-    const overdue = []
-    let result
+  // Stops a run and everything it started; resolves to what outlived it.
+  const stopRun = async (pid) => {
+    if (process.platform === 'win32') {
+      // 128: it had already exited.
+      const { status } = spawnSync('taskkill', [
+        '/pid',
+        String(pid),
+        '/T',
+        '/F',
+      ])
+      return [0, 128].includes(status) ? [] : [pid]
+    }
+    let pids = [pid]
     try {
-      rmSync(failuresFile, { force: true })
+      pids = descendants(pid)
+    } catch {
+      /* ps failed: the group below still goes. */
+    }
+    for (const each of pids)
+      try {
+        process.kill(each, 'SIGKILL')
+      } catch {
+        /* Already gone. */
+      }
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      /* Already gone. */
+    }
+    // A killed process lingers until its parent collects it.
+    for (let wait = 0; wait < 50 && pids.some(alive); wait++)
+      await new Promise((done) => setTimeout(done, 100))
+    return pids.filter(alive)
+  }
+  const running = new Set()
+  const interrupt = async (signal) => {
+    await Promise.all([...running].map((stop) => stop()))
+    process.kill(process.pid, signal)
+  }
+  const count = (value) => Number.isInteger(value) && value >= 0
+  const keys = (record, allowed) =>
+    Object.keys(record).every((key) => allowed.includes(key))
+  const runFile = async (batch, test, report) => {
+    const failed = []
+    const problems = []
+    let result
+    let seconds
+    let overdue = false
+    let outlived = []
+    try {
+      seconds = limit(test)
+      rmSync(report, { force: true })
       result = await new Promise((settle) => {
         const child = spawn(
           process.execPath,
@@ -423,73 +479,81 @@ export async function runCI({ dev = false } = {}) {
             '--test-reporter=tap',
             '--test-reporter-destination=stdout',
             `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
-            `--test-reporter-destination=${failuresFile}`,
-            `--test-concurrency=${concurrency}`,
-            ...tests,
+            `--test-reporter-destination=${report}`,
+            test,
           ],
-          // Its own process group, so stopping it stops every file it started.
+          // A group of its own, so stopping it stops what it started.
           {
-            stdio: 'inherit',
+            stdio: ['ignore', 'pipe', 'pipe'],
             env: process.env,
             detached: process.platform !== 'win32',
           },
         )
+        // Files run side by side, so each prints its output whole when it ends.
+        let output = ''
+        child.stdout?.on('data', (chunk) => {
+          output += chunk
+        })
+        child.stderr?.on('data', (chunk) => {
+          output += chunk
+        })
+        let stopping
         const stop = () => {
-          try {
-            if (process.platform === 'win32')
-              spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
-            else process.kill(-child.pid, 'SIGKILL')
-          } catch {
-            /* It already exited. */
-          }
+          stopping ??= stopRun(child.pid)
+          return stopping
         }
-        // An interrupted check takes its tests with it.
-        const interrupt = (signal) => {
+        running.add(stop)
+        // Timers keep the machine's monotonic time: clock changes don't move
+        // them, and time asleep doesn't count.
+        const timer = setTimeout(() => {
+          overdue = true
           stop()
-          process.kill(process.pid, signal)
-        }
-        process.once('SIGINT', interrupt)
-        process.once('SIGTERM', interrupt)
-        const watch = setInterval(() => {
-          for (const record of readReport()) {
-            if (
-              typeof record?.started === 'string' &&
-              !running.has(record.started)
-            )
-              running.set(record.started, Date.now())
-            if (typeof record?.finished === 'string')
-              running.delete(record.finished)
-          }
-          for (const [test, since] of running)
-            if (Date.now() - since > (limits.get(test) ?? fileTimeout) * 1000)
-              overdue.push(test)
-          if (overdue.length) {
-            clearInterval(watch)
-            stop()
-          }
-        }, 1000)
-        const done = (outcome) => {
-          clearInterval(watch)
-          process.off('SIGINT', interrupt)
-          process.off('SIGTERM', interrupt)
+        }, seconds * 1000)
+        let ended = false
+        const end = async (outcome) => {
+          if (ended) return
+          ended = true
+          clearTimeout(timer)
+          running.delete(stop)
+          if (stopping) outlived = await stopping
+          process.stdout.write(output)
           settle(outcome)
         }
-        child.once('error', (error) => done({ error }))
-        child.once('close', (status, signal) => done({ status, signal }))
+        child.once('error', (error) => end({ error }))
+        child.once('close', (status, signal) => end({ status, signal }))
       })
     } catch (error) {
       result = { error }
     }
-    const failed = []
-    const problems = [
-      result.error && String(result.error.message ?? result.error),
-      result.signal && `killed by ${result.signal}`,
-    ]
-    const records = readReport()
+    if (overdue)
+      failed.push({
+        batch,
+        name: `did not finish within ${seconds} s`,
+        file: test,
+        error: 'stopped with everything it started',
+      })
+    if (outlived.length)
+      problems.push(`${outlived.join(', ')} kept running after it was stopped`)
+    if (!overdue)
+      problems.push(
+        result.error && String(result.error.message ?? result.error),
+        result.signal && `killed by ${result.signal}`,
+      )
+    let ran = 0
     try {
-      const count = (value) => Number.isInteger(value) && value >= 0
-      const keys = (record, allowed) =>
-        Object.keys(record).every((key) => allowed.includes(key))
+      let lines = []
+      try {
+        lines = readFileSync(report, 'utf8').split('\n').filter(Boolean)
+      } catch {
+        /* A missing report didn't finish, as below. */
+      }
+      const records = lines.map((line) => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return undefined
+        }
+      })
       const last = records.at(-1)
       const done =
         last?.done === true &&
@@ -499,14 +563,8 @@ export async function runCI({ dev = false } = {}) {
         count(last.files)
           ? last
           : undefined
-      const progress = (record) =>
-        record &&
-        typeof record === 'object' &&
-        Object.keys(record).length === 1 &&
-        typeof (record.started ?? record.finished) === 'string'
-      const body = (done ? records.slice(0, -1) : records).filter(
-        (record) => !progress(record),
-      )
+      const body = done ? records.slice(0, -1) : records
+      const listed = []
       for (const record of body)
         if (
           record &&
@@ -517,68 +575,81 @@ export async function runCI({ dev = false } = {}) {
           ['string', 'undefined'].includes(typeof record.file) &&
           (record.line === undefined || count(record.line))
         )
-          failed.push({
+          listed.push({
             batch,
             ...record,
             file:
               record.file && relative(root, record.file).replaceAll('\\', '/'),
           })
-      problems.push(
-        !done && 'its report did not finish',
-        body.length > failed.length &&
-          `${body.length - failed.length} unreadable report lines`,
-        done &&
-          done.failures !== failed.length &&
-          `its report counted ${done.failures} failures but held ${failed.length}`,
-        // A batch where every file skipped or registered nothing proves nothing.
-        done?.ran === 0 && 'ran no tests',
-        done &&
-          done.files < tests.length &&
-          `heard from ${done.files} of its ${tests.length} files`,
-      )
+      failed.unshift(...listed)
+      ran = done?.ran ?? 0
+      // A stopped file's report is cut short: its reds so far are all it has.
+      if (!overdue)
+        problems.push(
+          !done && 'its report did not finish',
+          body.length > listed.length &&
+            `${body.length - listed.length} unreadable report lines`,
+          done &&
+            done.failures !== listed.length &&
+            `its report counted ${done.failures} failures but held ${listed.length}`,
+          done?.files === 0 && 'its runner heard nothing from it',
+        )
     } catch (error) {
       problems.push(`its report could not be read: ${error?.message}`)
     }
-    if (overdue.length) {
-      const name = (test) => relative(root, test).replaceAll('\\', '/')
-      const finished = new Set(records.map((record) => record?.finished))
-      const rest = tests.filter(
-        (test) =>
-          !finished.has(resolve(root, test)) &&
-          !overdue.includes(resolve(root, test)),
-      )
-      const others = [...running.keys()]
-        .filter((test) => !overdue.includes(test))
-        .map(name)
-      return [
-        // Files stopped beside it run again, so their partial results go.
-        ...failed.filter((failure) => !rest.includes(failure.file)),
-        ...overdue.map((test) => ({
-          batch,
-          name: `did not finish within ${limits.get(test)} s`,
-          file: name(test),
-          error: others.length
-            ? `stopped, with ${others.join(', ')} still running`
-            : 'stopped',
-        })),
-        ...(await runTests(batch, rest, concurrency)),
-      ]
-    }
-    if (problems.some(Boolean) || (result.status !== 0 && !failed.length))
+    if (
+      problems.some(Boolean) ||
+      (!overdue && result.status !== 0 && !failed.length)
+    )
       failed.push({
         batch,
         name:
           failed.length || result.status === 0
             ? 'did not finish'
-            : `exited ${result.status ?? result.signal ?? 'early'} with no failing test reported`,
-        error: [...problems.filter(Boolean), `${tests.length} test files`].join(
-          '; ',
-        ),
+            : result.status === undefined
+              ? 'could not start'
+              : `exited ${result.status ?? result.signal} with no failing test reported`,
+        file: test,
+        error: problems.filter(Boolean).join('; ') || 'no report',
+      })
+    return { failed, ran }
+  }
+  // A red in one file or group must not hide the reds of the others.
+  const runTests = async (batch, tests, concurrency) => {
+    const results = []
+    let next = 0
+    await Promise.all(
+      Array.from(
+        { length: Math.min(concurrency, tests.length) },
+        async (_, slot) => {
+          while (next < tests.length) {
+            const index = next++
+            results[index] = await runFile(
+              batch,
+              tests[index],
+              join(directory, `report-${slot}.jsonl`),
+            )
+          }
+        },
+      ),
+    )
+    const failed = results.flatMap((result) => result.failed)
+    // A group where every file skipped or registered nothing proves nothing.
+    if (
+      tests.length &&
+      !failed.length &&
+      results.every((result) => result.ran === 0)
+    )
+      failed.push({
+        batch,
+        name: 'did not finish',
+        error: `ran no tests; ${tests.length} test files`,
       })
     return failed
   }
-  // A red in one group must not hide the reds of the groups after it.
   const failures = []
+  process.once('SIGINT', interrupt)
+  process.once('SIGTERM', interrupt)
   for (const [batch, tests, concurrency] of [
     ['unit', unitTests, availableParallelism()],
     [
@@ -595,6 +666,8 @@ export async function runCI({ dev = false } = {}) {
     ['alone', aloneTests, 1],
   ])
     failures.push(...(await runTests(batch, tests, concurrency)))
+  process.off('SIGINT', interrupt)
+  process.off('SIGTERM', interrupt)
   const where = ({ file, line }) =>
     file ? `${file}${line ? `:${line}` : ''}` : ''
   if (failures.length) {
@@ -651,4 +724,4 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 )
-  runCI()
+  await runCI()

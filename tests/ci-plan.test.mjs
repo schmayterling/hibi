@@ -721,23 +721,23 @@ syncBuiltinESMExports()
   const cases = {
     spawn: [
       ['app'],
-      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: spawn \/nonexistent\/ci-fault ENOENT; its report did not finish; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}could not start: spawn \/nonexistent\/ci-fault ENOENT; its report did not finish$/,
     ],
     throw: [
       ['app'],
-      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: EPERM, operation not permitted; its report did not finish; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}could not start: EPERM, operation not permitted; its report did not finish$/,
     ],
     null: [
       ['app', 'unit'],
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its report did not finish; 1 unreadable report lines$/,
     ],
     missing: [
       ['app', 'unit'],
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its report did not finish$/,
     ],
     cut: [
       ['app', 'unit'],
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its report did not finish$/,
     ],
   }
   for (const [fault, [ranGroups, reds]] of Object.entries(cases)) {
@@ -756,7 +756,7 @@ syncBuiltinESMExports()
   assert.match(
     torn.reds,
     new RegExp(
-      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: its report did not finish; 2 unreadable report lines; 1 test files$`,
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {2}tests/unit\\.test\\.mjs {2}did not finish: its report did not finish; 2 unreadable report lines$`,
     ),
   )
   // A group whose files skipped every test or registered none proved nothing,
@@ -775,32 +775,32 @@ syncBuiltinESMExports()
     [
       'typed',
       '',
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its report did not finish; 1 unreadable report lines$/,
     ],
     [
       'twice',
       '',
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: 1 unreadable report lines; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: 1 unreadable report lines$/,
     ],
     [
       'unknown',
       '',
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 2 unreadable report lines; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its report did not finish; 2 unreadable report lines$/,
     ],
     [
       'files',
       '',
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: heard from 0 of its 1 files; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its runner heard nothing from it$/,
     ],
     [
       'footer',
       '',
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: its report did not finish; 1 unreadable report lines$/,
     ],
     ...['key', 'error'].map((fault) => [
       fault,
       '',
-      /^ci: 1 failing tests\n {2}unit {4}did not finish: 1 unreadable report lines; its report counted 1 failures but held 0; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}did not finish: 1 unreadable report lines; its report counted 1 failures but held 0$/,
     ]),
   ]) {
     const { reds: listed, ...result } = check(fault, '', shape)
@@ -815,7 +815,7 @@ syncBuiltinESMExports()
   assert.equal(dropped.status, 1)
   assert.match(
     dropped.reds,
-    /^ci: 1 failing tests\n {2}unit {4}exited 1 with no failing test reported: its report counted 1 failures but held 0; 1 test files$/,
+    /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}exited 1 with no failing test reported: its report counted 1 failures but held 0$/,
   )
   const killed = check('killed', 'red')
   assert.equal(killed.status, 1)
@@ -823,7 +823,7 @@ syncBuiltinESMExports()
   assert.match(
     killed.reds,
     new RegExp(
-      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: killed by SIGTERM; 1 test files$`,
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {2}tests/unit\\.test\\.mjs {2}did not finish: killed by SIGTERM$`,
     ),
   )
 })
@@ -910,9 +910,13 @@ test('a file that runs past its time is stopped and named, and every other file 
     'tests/file-limit.mjs': '',
     'tests/electron.mjs': "export const later = () => import('playwright')",
     // node:test can't time out a synchronous loop. This one gives up after a
-    // minute, so a broken check fails instead of hanging.
-    [spin]: `// ci: timeout 2 s (spins)\n${testFile('spin', 'for (const end = Date.now() + 60000; Date.now() < end; );')}`,
-    // Still running when the spin is stopped, so it runs again.
+    // minute, so a broken check fails instead of hanging, and first starts a
+    // process in a group of its own, as Playwright does with Electron.
+    [spin]: `// ci: timeout 2 s (spins)\n${testFile(
+      'spin',
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(process.env.HELD, String(held.pid))\n  for (const end = Date.now() + 60000; Date.now() < end; );",
+    )}`,
+    // Runs beside the spin, and on after it's stopped.
     'tests/mate.test.mjs': testFile(
       'mate',
       "await new Promise((done) => setTimeout(done, 8000))\n  appendFileSync(process.env.RAN, 'mate-done ')",
@@ -920,6 +924,14 @@ test('a file that runs past its time is stopped and named, and every other file 
     // Slow, but within the time it asks for.
     'tests/slow.test.mjs': `// ci: timeout 4 s (sleeps)\n${testFile('slow', 'await new Promise((done) => setTimeout(done, 1500))')}`,
     'tests/app.test.mjs': testFile('app', '', "import './electron.mjs'"),
+    // A red beside a stopped file stays a red.
+    'tests/red.test.mjs': testFile('red', "throw new Error('red')"),
+    // Only the comments a file opens with set its time.
+    'tests/quoted.test.mjs': testFile(
+      'quoted',
+      'const text = `\n// ci: timeout 1 s\n`\n  await new Promise((done) => setTimeout(done, 1500 + text.length))',
+    ),
+    'tests/zero.test.mjs': `// ci: timeout 0 s (no time)\n${testFile('zero', '')}`,
   }
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(repo, file)), { recursive: true })
@@ -934,6 +946,16 @@ test('a file that runs past its time is stopped and named, and every other file 
   git('commit', '-qm', 'first')
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const started = Date.now()
+  const held = join(root, 'held')
+  let heldPid
+  // A broken check would leave it running.
+  t.after(() => {
+    try {
+      process.kill(heldPid, 'SIGKILL')
+    } catch {
+      /* Stopped, as it should be. */
+    }
+  })
   const { status, stdout } = spawnSync(
     process.execPath,
     [resolve('scripts/ci.mjs')],
@@ -943,6 +965,9 @@ test('a file that runs past its time is stopped and named, and every other file 
       timeout: 120000,
       env: {
         ...env,
+        // A red exits 1 even where a rejection only warns.
+        NODE_OPTIONS: '--unhandled-rejections=warn',
+        HELD: held,
         RAN: ran,
         CI_BASE: '',
         CI_CLEAN: '',
@@ -956,28 +981,39 @@ test('a file that runs past its time is stopped and named, and every other file 
       },
     },
   )
+  heldPid = existsSync(held) ? Number(readFileSync(held, 'utf8')) : undefined
   assert.equal(status, 1)
   // Stopped, not waited out: the spin alone would take a minute.
   assert.ok(Date.now() - started < 45000, `took ${Date.now() - started} ms`)
   assert.equal(existsSync(join(repo, '.cache/ci/success.json')), false)
   const runs = readFileSync(ran, 'utf8').trim().split(' ')
-  for (const name of ['spin', 'mate-done', 'slow', 'app'])
-    assert.ok(runs.includes(name), `${name} ran: ${runs}`)
-  // Files that finished before the stop don't run again.
-  assert.equal(runs.filter((name) => name === 'slow').length, 1, String(runs))
-  // The spin alone is red; the mate it stopped passed on its second run.
-  assert.match(
-    stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
-    new RegExp(
-      `^ci: 1 failing tests\\n {2}node {2}${spin.replace(/\./g, '\\.')} {2}did not finish within 2 s: stopped${
-        // With two workers or more, the mate runs beside the spin.
-        testWorkers().node > 1
-          ? ', with tests/mate\\.test\\.mjs still running'
-          : ''
-      }$`,
-    ),
+  // Each file ran once: stopping one stops nothing else.
+  assert.deepEqual(runs.sort(), [
+    'app',
+    'mate',
+    'mate-done',
+    'quoted',
+    'red',
+    'slow',
+    'spin',
+  ])
+  const reds = stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd()
+  assert.equal(
+    reds,
+    [
+      'ci: 3 failing tests',
+      '  node  tests/red.test.mjs:4  red: red',
+      `  node  ${spin}  did not finish within 2 s: stopped with everything it started`,
+      '  node  tests/zero.test.mjs  could not start: ci: timeout 0 s is not 1 to 86400 seconds',
+    ].join('\n'),
   )
-  // Stopping the run stops the file it started, not only the runner.
-  if (process.platform !== 'win32')
+  // Stopping a file stops what it started, in its group or out of it.
+  if (process.platform !== 'win32') {
     assert.equal(spawnSync('pgrep', ['-f', spin]).status, 1)
+    assert.throws(
+      () => process.kill(heldPid, 0),
+      { code: 'ESRCH' },
+      String(heldPid),
+    )
+  }
 })

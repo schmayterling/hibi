@@ -17,13 +17,6 @@ export default async function* failures(source) {
       files.add(data.file)
       ran += data.counts.passed + data.counts.failed
     }
-    // A file's own test starts when it runs and completes when it exits: ci.mjs
-    // watches these to stop a file that runs past its time.
-    const whole = data?.name !== undefined && data.file === resolve(data.name)
-    if (whole && type === 'test:dequeue')
-      yield `${JSON.stringify({ started: data.file })}\n`
-    if (whole && type === 'test:complete')
-      yield `${JSON.stringify({ finished: data.file })}\n`
     if (type !== 'test:pass' && type !== 'test:fail') continue
     // The runner names the test it stands in for a file that registered none, or
     // crashed, by that file's path: heard from, but nothing ran.

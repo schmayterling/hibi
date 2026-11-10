@@ -171,13 +171,49 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   await app.evaluate(({ ipcMain }) => {
     const save = ipcMain._invokeHandlers.get('document:autosave')
     ipcMain.removeHandler('document:autosave')
+    const held = new Promise((resolve) => {
+      globalThis.releaseFirstSave = resolve
+    })
     ipcMain.handle('document:autosave', async (...args) => {
+      const started = performance.now()
+      globalThis.attempt = null
       const result = await save(...args)
-      globalThis.firstSaved = result.document?.markdown
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      // The first save is held until typing during it is done.
+      if (globalThis.firstSaved === undefined) {
+        globalThis.firstSaved = result.document?.markdown
+        await held
+      }
+      globalThis.attempt = performance.now() - started
       return result
     })
   })
+  // A note rests ten times its last attempt's length before the next, and
+  // slow disks make attempts long; the pill says what it waited on.
+  const rested = async () => {
+    const deadline = performance.now() + 6500
+    let attempt = await app.evaluate(() => globalThis.attempt)
+    while (attempt === null && performance.now() < deadline) {
+      await delay(20)
+      attempt = await app.evaluate(() => globalThis.attempt)
+    }
+    assert.notEqual(attempt, null, 'the last autosave attempt never ended')
+    return { timeout: Math.max(6500, 10 * attempt + 1000 + 2000) }
+  }
+  const pillIs = async (text) => {
+    const options = await rested()
+    try {
+      await page.waitForFunction(
+        (text) =>
+          document.querySelector('[data-status-id="autosave"]').textContent ===
+          text,
+        text,
+        options,
+      )
+    } catch (error) {
+      error.message += ` (pill ${JSON.stringify(await pill.innerText())}, tooltip ${JSON.stringify(await pill.getAttribute('data-tooltip'))}, last attempt ${Math.round(await app.evaluate(() => globalThis.attempt))} ms, file ${JSON.stringify(await readFile(file, 'utf8'))})`
+      throw error
+    }
+  }
   await replaceRichText(page, rich, 'first automatic save')
   await waitForAsync(
     page,
@@ -186,22 +222,21 @@ test('autosave preserves later edits, pauses on external changes, and never prom
       'first automatic save',
   )
   await replaceRichText(page, rich, 'keep typing during save')
-  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
-  await page.waitForFunction(
-    () =>
-      document.querySelector('[data-status-id="autosave"]').textContent ===
-      'Autosave · saved',
+  assert.equal(await app.evaluate(() => globalThis.attempt), null)
+  await app.evaluate(() => globalThis.releaseFirstSave())
+  await waitForAsync(
+    page,
+    async () => !(await window.hibi.getDocument()).dirty,
+    undefined,
+    await rested(),
   )
+  await pillIs('Autosave · saved')
   assert.equal(await rich.innerText(), 'keep typing during save')
   assert.equal(await readFile(file, 'utf8'), 'keep typing during save')
   assert.ok((await page.evaluate(() => window.hibi.listVersions())).length >= 3)
   await writeFile(file, 'external edit')
   await replaceRichText(page, rich, 'local edit')
-  await page.waitForFunction(
-    () =>
-      document.querySelector('[data-status-id="autosave"]').textContent ===
-      'Autosave · paused',
-  )
+  await pillIs('Autosave · paused')
   assert.equal(await app.evaluate(() => globalThis.dialogsShown), 0)
   assert.equal(await readFile(file, 'utf8'), 'external edit')
   assert.equal(
@@ -221,7 +256,12 @@ test('autosave preserves later edits, pauses on external changes, and never prom
         ?.getAttribute('contenteditable') === 'true',
   )
   await replaceRichText(page, rich, 'autosave resumes')
-  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  await waitForAsync(
+    page,
+    async () => !(await window.hibi.getDocument()).dirty,
+    undefined,
+    await rested(),
+  )
   assert.equal(await readFile(file, 'utf8'), 'autosave resumes')
   await page.reload()
   await rich.waitFor()

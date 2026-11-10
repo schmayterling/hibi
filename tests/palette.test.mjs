@@ -454,18 +454,103 @@ test('the palette takes keys while its module loads and retries a failed load', 
     await held()
   }
 
+  // The dialog and field that took the keys stay when the module arrives, so
+  // focus never leaves them and the caret and selection stay put.
+  const mark = () =>
+    page.evaluate(() => {
+      window.focusTrace = []
+      document.addEventListener('focusin', (event) =>
+        window.focusTrace.push(event.target.getAttribute('aria-label')),
+      )
+      const dialog = document.querySelector('dialog.command-palette')
+      window.openedParts = [dialog, dialog.querySelector('input')]
+    })
+  const kept = () =>
+    page.evaluate(() => {
+      const dialog = document.querySelector('dialog.command-palette')
+      const input = dialog.querySelector('input')
+      return {
+        same:
+          window.openedParts[0] === dialog && window.openedParts[1] === input,
+        focus: window.focusTrace,
+        animating: dialog
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === 'running'),
+        selection: [input.selectionStart, input.selectionEnd],
+        direction: input.selectionDirection,
+      }
+    })
+
   // Keys typed before the module arrives land in the palette, in order.
   await cold()
   const before = await markdown()
   await pressShortcut(app, shortcut)
   await search.waitFor()
-  await page.keyboard.type('abc')
-  assert.equal(await search.inputValue(), 'abc')
+  await page.keyboard.type('abcd')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await search.inputValue(), 'abcd')
+  await page.waitForFunction(() =>
+    document
+      .querySelector('dialog.command-palette')
+      .getAnimations({ subtree: true })
+      .every((animation) => animation.playState !== 'running'),
+  )
+  await mark()
   await release()
   await results.waitFor()
-  await page.keyboard.type('123')
-  assert.equal(await search.inputValue(), 'abc123')
+  const caret = await kept()
+  assert.deepEqual(
+    [caret.same, caret.focus, caret.animating, caret.selection],
+    [true, [], false, [2, 2]],
+  )
+  await page.keyboard.type('X')
+  assert.equal(await search.inputValue(), 'abXcd')
   assert.equal(await markdown(), before)
+  await page.keyboard.press('Escape')
+  await palette.waitFor({ state: 'hidden' })
+
+  // A selection made before it arrives is the one typing replaces after.
+  await cold()
+  await pressShortcut(app, shortcut)
+  await search.waitFor()
+  await page.keyboard.type('abcd')
+  await search.evaluate((input) => input.setSelectionRange(1, 3, 'backward'))
+  await mark()
+  await release()
+  await results.waitFor()
+  const selected = await kept()
+  assert.deepEqual(
+    [...selected.selection, selected.direction],
+    [1, 3, 'backward'],
+  )
+  await page.keyboard.type('X')
+  assert.equal(await search.inputValue(), 'aXd')
+  await page.keyboard.press('Escape')
+  await palette.waitFor({ state: 'hidden' })
+
+  // An input method's composition runs on through the arrival.
+  await cold()
+  await pressShortcut(app, shortcut)
+  await search.waitFor()
+  await page.evaluate(() => {
+    window.compositionTrace = []
+    for (const type of ['compositionstart', 'compositionend'])
+      document.addEventListener(type, () => window.compositionTrace.push(type))
+  })
+  await session.send('Input.imeSetComposition', {
+    text: '日本',
+    selectionStart: 2,
+    selectionEnd: 2,
+  })
+  await release()
+  await results.waitFor()
+  await session.send('Input.insertText', { text: '日本語' })
+  assert.equal(await search.inputValue(), '日本語')
+  assert.deepEqual(await page.evaluate(() => window.compositionTrace), [
+    'compositionstart',
+    'compositionend',
+  ])
   await page.keyboard.press('Escape')
   await palette.waitFor({ state: 'hidden' })
 

@@ -17,13 +17,13 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import { foldSearchText } from '../../shared/search-fold'
 import { sentenceCase } from '../../shared/ui-case'
-import { IconButton, TextInput } from '../../ui/Controls'
 import { composing } from '../../ui/composing'
-import { Modal } from '../../ui/Modal'
 import { ShortcutKeys } from '../../ui/ShortcutKeys'
+import { PaletteFrame, type PaletteFrameParts } from './PaletteFrame'
 
 const categoryIcons = {
   app: LayoutTemplate,
@@ -123,17 +123,7 @@ const CommandRow = memo(function CommandRow({
   )
 })
 
-export function CommandPalette({
-  commands,
-  onClose,
-  platform,
-  searchCommands,
-  captureContext,
-  onQueryChange,
-  pending,
-  initialQuery = '',
-  initialEnter = false,
-}: {
+type PaletteProps = {
   commands: PaletteCommand[]
   onClose: () => void
   platform: string
@@ -141,20 +131,32 @@ export function CommandPalette({
   captureContext?: () => CommandExecutionContext
   onQueryChange?: (query: string) => void
   pending?: (query: string) => boolean
-  /** Typed before the palette loaded; Enter runs the first match once it can. */
-  initialQuery?: string
-  initialEnter?: boolean
-}) {
-  const dialog = useRef<HTMLDialogElement>(null)
-  const input = useRef<HTMLInputElement>(null)
-  const closing = useRef(false)
-  const queuedEnter = useRef<string | null>(
-    initialEnter ? foldSearchText(initialQuery).trim() : null,
+}
+
+export function CommandPalette(props: PaletteProps) {
+  return (
+    <PaletteFrame onClose={props.onClose}>
+      {(frame) => <PaletteBody frame={frame} {...props} />}
+    </PaletteFrame>
   )
+}
+
+/** Results and commands for a palette frame that may already be taking keys. */
+export function PaletteBody({
+  frame,
+  commands,
+  onClose,
+  platform,
+  searchCommands,
+  captureContext,
+  onQueryChange,
+  pending,
+}: PaletteProps & { frame: PaletteFrameParts }) {
+  const { dialog, input, query, setQuery } = frame
+  const closing = useRef(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
-  const [query, setQuery] = useState(initialQuery)
   useEffect(() => {
     onQueryChange?.(query)
   }, [query, onQueryChange])
@@ -165,6 +167,10 @@ export function CommandPalette({
     null,
   )
   const normalized = foldSearchText(query).trim()
+  // Enter pressed before this loaded runs the first match once it can.
+  const queuedEnter = useRef<string | null>(
+    frame.enter.current ? normalized : null,
+  )
   const waiting = pending?.(query) ?? false
   // Arrow keys and hover reuse these results until the query, menu or commands change.
   const results = useMemo(() => {
@@ -202,6 +208,10 @@ export function CommandPalette({
   const active = Math.min(selected, results.length - 1)
   const activeId = results[active]?.id
   const resultCount = results.length
+  const { setActive } = frame
+  useLayoutEffect(() => {
+    setActive(activeId ? `command-${activeId}` : undefined)
+  }, [activeId, setActive])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: selection and filtering change the measured row.
   useLayoutEffect(() => {
@@ -225,12 +235,7 @@ export function CommandPalette({
     return () => observer.disconnect()
   }, [activeId, resultCount])
 
-  useEffect(() => {
-    input.current?.focus()
-    return () => {
-      clearTimeout(closeTimer.current)
-    }
-  }, [])
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
 
   useEffect(() => {
     if (activeId)
@@ -290,23 +295,47 @@ export function CommandPalette({
     if (results[0]) execute(results[0])
   })
 
-  return (
-    <Modal
-      ref={dialog}
-      className="command-palette"
-      aria-label="Command palette"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape' && !composing(event)) {
-          event.preventDefault()
-          if (menuPath.length) backTo(menuPath.length - 1)
-          else close()
+  frame.behaviour.current = {
+    close,
+    onChange() {
+      queuedEnter.current = null
+      setSelected(0)
+    },
+    onDialogKeyDown(event) {
+      if (event.key === 'Escape' && !composing(event)) {
+        event.preventDefault()
+        if (menuPath.length) backTo(menuPath.length - 1)
+        else close()
+      }
+    },
+    onKeyDown(event) {
+      if (composing(event)) return
+      if (event.key === 'Backspace' && !query && menuPath.length) {
+        event.preventDefault()
+        backTo(menuPath.length - 1)
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        if (results.length)
+          setSelected(
+            (active + (event.key === 'ArrowDown' ? 1 : results.length - 1)) %
+              results.length,
+          )
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        if (waiting && active === 0) queuedEnter.current = normalized
+        else {
+          const command = results[active]
+          if (command) execute(command)
         }
-      }}
-      onDismiss={() => close()}
-    >
-      <div className="command-search">
-        <Search size={16} aria-hidden="true" />
-        {menuPath.length > 0 && (
+      }
+    },
+  }
+
+  return (
+    <>
+      {menuPath.length > 0 &&
+        frame.scopes &&
+        createPortal(
           <div className="command-scopes">
             {menuPath.map((menu, index) => (
               <button
@@ -321,61 +350,9 @@ export function CommandPalette({
                 <span>{sentenceCase(menu.label)}</span>
               </button>
             ))}
-          </div>
+          </div>,
+          frame.scopes,
         )}
-        <TextInput
-          variant="inline"
-          ref={input}
-          role="combobox"
-          aria-label="Search commands"
-          aria-expanded="true"
-          aria-controls="command-results"
-          aria-autocomplete="list"
-          aria-activedescendant={
-            results[active] ? `command-${results[active].id}` : undefined
-          }
-          placeholder="Search commands…"
-          autoComplete="off"
-          spellCheck={false}
-          value={query}
-          onChange={(event) => {
-            queuedEnter.current = null
-            setQuery(event.target.value)
-            setSelected(0)
-          }}
-          onKeyDown={(event) => {
-            if (composing(event)) return
-            if (event.key === 'Backspace' && !query && menuPath.length) {
-              event.preventDefault()
-              backTo(menuPath.length - 1)
-            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault()
-              if (results.length)
-                setSelected(
-                  (active +
-                    (event.key === 'ArrowDown' ? 1 : results.length - 1)) %
-                    results.length,
-                )
-            } else if (event.key === 'Enter') {
-              event.preventDefault()
-              if (waiting && active === 0) queuedEnter.current = normalized
-              else {
-                const command = results[active]
-                if (command) execute(command)
-              }
-            }
-          }}
-        />
-        <IconButton
-          type="button"
-          className="palette-close"
-          aria-label="Close command palette"
-          title="Close (Escape)"
-          onClick={() => close()}
-        >
-          <X size={16} aria-hidden="true" />
-        </IconButton>
-      </div>
       <div
         id="command-results"
         ref={list}
@@ -427,6 +404,6 @@ export function CommandPalette({
           {menuPath.length ? 'Back' : 'Close'}
         </span>
       </footer>
-    </Modal>
+    </>
   )
 }

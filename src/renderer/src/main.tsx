@@ -55,11 +55,9 @@ import {
   type WorkspaceEntry,
   type WorkspaceState,
 } from '../../shared/workspace'
-import { Button, IconButton, TextInput } from '../../ui/Controls'
+import { Button, IconButton } from '../../ui/Controls'
 import { publishActivePalette } from '../../ui/colorschemes'
-import { composing } from '../../ui/composing'
 import { DocumentNotice } from '../../ui/DocumentNotice'
-import { Modal } from '../../ui/Modal'
 import { settingsIndex } from '../../ui/settings-index'
 import {
   SIDEBAR_OVERLAY_WIDTH,
@@ -113,6 +111,7 @@ import {
   type OutlineRequest,
   OutlineSidebar,
 } from './OutlineSidebar'
+import { PaletteFrame } from './PaletteFrame'
 import { RecoveryBoundary } from './RecoveryBoundary'
 import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
@@ -715,21 +714,16 @@ function App() {
     history.navigating = false
   }, [settingsOpen, settingsCategory])
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [CommandPalette, setCommandPalette] =
-    useState<typeof import('./CommandPalette').CommandPalette>()
-  // What was typed into the palette before its module arrived.
-  const paletteDraft = useRef({ query: '', enter: false })
-  useLayoutEffect(() => {
-    if (!paletteOpen) paletteDraft.current = { query: '', enter: false }
-  }, [paletteOpen])
+  const [PaletteBody, setPaletteBody] =
+    useState<typeof import('./CommandPalette').PaletteBody>()
   useEffect(() => {
-    if (CommandPalette) return
+    if (PaletteBody) return
     let active = true
     const load = () => {
       const module = loadPalette()
       module.then(
-        ({ CommandPalette }) => {
-          if (active) setCommandPalette(() => CommandPalette)
+        ({ PaletteBody }) => {
+          if (active) setPaletteBody(() => PaletteBody)
         },
         () => {
           // Not cached, so the next open tries again.
@@ -751,7 +745,7 @@ function App() {
       active = false
       if (idle) cancelIdleCallback(idle)
     }
-  }, [paletteOpen, CommandPalette, toasts])
+  }, [paletteOpen, PaletteBody, toasts])
   const [introductionOpen, setIntroductionOpen] = useState<
     'automatic' | 'manual' | null
   >(null)
@@ -3321,49 +3315,22 @@ function App() {
         availableViews={availableViews}
         onMode={(view) => addonHost.app.runAction(view)}
       />
-      {paletteOpen &&
-        (CommandPalette ? (
-          <CommandPalette
-            platform={info?.platform ?? 'darwin'}
-            commands={paletteCommands}
-            captureContext={() => captureAddonCommandContext('palette')}
-            onClose={() => setPaletteOpen(false)}
-            initialQuery={paletteDraft.current.query}
-            initialEnter={paletteDraft.current.enter}
-          />
-        ) : (
-          // Holds focus and the typed query until the palette loads, so no
-          // key reaches the editor; Escape closes it as it closes the palette.
-          <Modal
-            className="command-palette"
-            aria-label="Command palette"
-            onDismiss={() => setPaletteOpen(false)}
-          >
-            <div className="command-search">
-              <TextInput
-                variant="inline"
-                role="combobox"
-                aria-label="Search commands"
-                aria-expanded="false"
-                aria-busy="true"
-                placeholder="Search commands…"
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(event) => {
-                  paletteDraft.current = {
-                    query: event.target.value,
-                    enter: false,
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter' || composing(event)) return
-                  event.preventDefault()
-                  paletteDraft.current.enter = true
-                }}
+      {paletteOpen && (
+        // The frame takes keys at once; the rest of the palette loads into it.
+        <PaletteFrame onClose={() => setPaletteOpen(false)}>
+          {(frame) =>
+            PaletteBody && (
+              <PaletteBody
+                frame={frame}
+                platform={info?.platform ?? 'darwin'}
+                commands={paletteCommands}
+                captureContext={() => captureAddonCommandContext('palette')}
+                onClose={() => setPaletteOpen(false)}
               />
-            </div>
-          </Modal>
-        ))}
+            )
+          }
+        </PaletteFrame>
+      )}
       {introductionOpen && (
         <Suspense fallback={null}>
           <Introduction

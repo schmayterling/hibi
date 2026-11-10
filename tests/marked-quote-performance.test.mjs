@@ -76,7 +76,15 @@ test('quotes that stop early leave the rest of the extent unscanned', () => {
   const shape = (tokens) =>
     tokens
       .filter((token) => token.type !== 'space')
-      .map((token) => [token.type, token.type === 'blockquote' ? '' : token.type === 'heading' ? token.text : token.raw, shape(token.tokens ?? [])])
+      .map((token) => [
+        token.type,
+        token.type === 'blockquote'
+          ? ''
+          : token.type === 'heading'
+            ? token.text
+            : token.raw,
+        shape(token.tokens ?? []),
+      ])
   try {
     for (const unit of [heading, fence, nested, tabbed, widened]) {
       const source = unit.repeat(2000)
@@ -279,8 +287,15 @@ test('empty quote bodies keep source newlines and native lazy boundaries', () =>
         source,
       )
       // Native tab expansion invents whitespace in empty nested quotes.
-      assert.equal(tokens.map((token) => token.raw).join(''), source.replaceAll('\r\n', '\n'))
-      assert.equal(new Marked(blockMarkdown).parse(source).trimEnd(), micromark(source).replaceAll('\r\n', '\n').trimEnd(), source)
+      assert.equal(
+        tokens.map((token) => token.raw).join(''),
+        source.replaceAll('\r\n', '\n'),
+      )
+      assert.equal(
+        new Marked(blockMarkdown).parse(source).trimEnd(),
+        micromark(source).replaceAll('\r\n', '\n').trimEnd(),
+        source,
+      )
     }
 })
 
@@ -513,8 +528,8 @@ for (const [shape, unit] of Object.entries({
           shape === 'paragraph' || shape === 'code'
             ? 1
             : shape === 'nested'
-              // CommonMark §5.1: restated markers retain one outer quote.
-              ? units + 1
+              ? // CommonMark §5.1: restated markers retain one outer quote.
+                units + 1
               : units,
         )
       } else

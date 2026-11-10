@@ -25,6 +25,10 @@ const space = /\s*/y
 
 const malformed = () =>
   new Error('This SVG is not valid XML. Choose another image.')
+const refusedStyle = () =>
+  new Error(
+    "This SVG's styles use @ rules or CSS functions Hibi doesn't accept, such as image-set() or circle(). Choose a self-contained image.",
+  )
 const refused = () =>
   new Error(
     "This SVG uses content Hibi doesn't accept, such as scripts, links to other files or unknown elements. Choose a self-contained image.",
@@ -63,9 +67,12 @@ function checkCss(value: string, stylesheet: boolean) {
         : '\ufffd'
     },
   )
-  if (stylesheet && css.includes('@')) throw refused()
-  for (const [, call] of css.matchAll(/([a-z_-][\w-]*)\(/gi))
-    if (!functions.has(call?.toLowerCase() ?? '')) throw refused()
+  if (stylesheet && css.includes('@')) throw refusedStyle()
+  // Each match takes a whole run of name characters, so a long run without
+  // '(' is read once; matching just names before '(' rescans it per start.
+  for (const [run] of css.matchAll(/[\w-]+\(?/g))
+    if (run.endsWith('(') && !functions.has(run.slice(0, -1).toLowerCase()))
+      throw refusedStyle()
   for (const [, target] of css.matchAll(/url\(\s*["']?\s*([^"')\s]*)/gi))
     if (!target?.startsWith('#')) throw refused()
 }

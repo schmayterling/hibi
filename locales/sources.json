@@ -938,7 +938,7 @@
   "cf344c7a8b0f": [
     "src/addons/quick-note/native.ts"
   ],
-  "503688919128": [
+  "c88f8a669850": [
     "src/shared/app-icon.ts"
   ],
   "3aa9d06341aa": [
@@ -6639,6 +6639,9 @@
     "src/shared/svg-icon.ts"
   ],
   "c4f9175519e3": [
+    "src/shared/svg-icon.ts"
+  ],
+  "5bf5359fea20": [
     "src/shared/svg-icon.ts"
   ],
   "b29376d8e035": [

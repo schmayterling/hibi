@@ -202,11 +202,18 @@ async function drawSvg(bytes: Buffer) {
     }
     // Quick Look shows a stock document icon for an SVG it can't draw; drawing
     // one it surely can't, at the same size, tells the two apart.
-    const [image, control] = await Promise.all([
+    // Both settle before the folder goes, so neither writes into a removed one.
+    const [image, control] = await Promise.allSettled([
       draw('icon.svg', bytes),
       draw('control.svg', '<'),
     ])
-    return { image, drawn: !image.toBitmap().equals(control.toBitmap()) }
+    if (image.status === 'rejected') throw image.reason
+    if (control.status === 'rejected') throw control.reason
+    // An SVG that embeds the stock icon itself is refused too: it can't be told apart.
+    return {
+      image: image.value,
+      drawn: !image.value.toBitmap().equals(control.value.toBitmap()),
+    }
   } finally {
     await rm(folder, { recursive: true, force: true })
   }

@@ -73,7 +73,7 @@ import { addonRegistry } from './addon-registry'
 import { addonViews } from './addon-views'
 import { addons, useAddons, useEditorAddons } from './addons'
 import { useAutosave } from './autosave'
-import { CommandPalette, type PaletteCommand } from './CommandPalette'
+import type { PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import {
   documentFormats,
@@ -111,6 +111,7 @@ import {
   type OutlineRequest,
   OutlineSidebar,
 } from './OutlineSidebar'
+import { PaletteFrame } from './PaletteFrame'
 import { RecoveryBoundary } from './RecoveryBoundary'
 import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
@@ -151,6 +152,8 @@ const History = lazy(() =>
     default: module.History,
   })),
 )
+let paletteModule: Promise<typeof import('./CommandPalette')> | undefined
+const loadPalette = () => (paletteModule ??= import('./CommandPalette'))
 const BacklinksSidebar = lazy(() =>
   import('./BacklinksSidebar').then((module) => ({
     default: module.BacklinksSidebar,
@@ -711,6 +714,38 @@ function App() {
     history.navigating = false
   }, [settingsOpen, settingsCategory])
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [PaletteBody, setPaletteBody] =
+    useState<typeof import('./CommandPalette').PaletteBody>()
+  useEffect(() => {
+    if (PaletteBody) return
+    let active = true
+    const load = () => {
+      const module = loadPalette()
+      module.then(
+        ({ PaletteBody }) => {
+          if (active) setPaletteBody(() => PaletteBody)
+        },
+        () => {
+          // Not cached, so the next open tries again.
+          if (paletteModule === module) paletteModule = undefined
+          if (!active || !paletteOpen) return
+          setPaletteOpen(false)
+          toasts.show({
+            message: 'The command palette could not load. Try again.',
+            variant: 'error',
+          })
+        },
+      )
+    }
+    // Off the startup path, but loaded once the window is idle.
+    let idle = 0
+    if (paletteOpen) load()
+    else idle = requestIdleCallback(load)
+    return () => {
+      active = false
+      if (idle) cancelIdleCallback(idle)
+    }
+  }, [paletteOpen, PaletteBody, toasts])
   const [introductionOpen, setIntroductionOpen] = useState<
     'automatic' | 'manual' | null
   >(null)
@@ -3281,12 +3316,20 @@ function App() {
         onMode={(view) => addonHost.app.runAction(view)}
       />
       {paletteOpen && (
-        <CommandPalette
-          platform={info?.platform ?? 'darwin'}
-          commands={paletteCommands}
-          captureContext={() => captureAddonCommandContext('palette')}
-          onClose={() => setPaletteOpen(false)}
-        />
+        // The frame takes keys at once; the rest of the palette loads into it.
+        <PaletteFrame onClose={() => setPaletteOpen(false)}>
+          {(frame) =>
+            PaletteBody && (
+              <PaletteBody
+                frame={frame}
+                platform={info?.platform ?? 'darwin'}
+                commands={paletteCommands}
+                captureContext={() => captureAddonCommandContext('palette')}
+                onClose={() => setPaletteOpen(false)}
+              />
+            )
+          }
+        </PaletteFrame>
       )}
       {introductionOpen && (
         <Suspense fallback={null}>

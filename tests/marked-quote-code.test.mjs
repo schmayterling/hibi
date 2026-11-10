@@ -13,6 +13,20 @@ import { BlockTokenizer, blockMarkdown } from '../src/shared/marked-blocks.ts'
 
 const code = (html) =>
   html.match(/<pre><code[^>]*>[\s\S]*?<\/code><\/pre>/g) ?? []
+// Marked #4110 expands code tabs in quotes. Check code bytes against CommonMark
+// separately while retaining native grammar and extension-state comparisons.
+const grammar = (tokens) =>
+  JSON.parse(
+    JSON.stringify(tokens, function (key, value) {
+      if ((key === 'raw' || key === 'text') && this.type === 'code')
+        return undefined
+      if (key === 'text' && this.type === 'blockquote') return undefined
+      return value
+    }),
+  )
+const compact = (html) => html.replace(/>\n(?=<)/g, '>').trimEnd()
+const withoutCode = (html) =>
+  html.replace(/<pre><code[^>]*>[\s\S]*?<\/code><\/pre>/g, '')
 const contexts = [
   ['quote', '> ', '> '],
   ['compact quote', '>', '>'],
@@ -110,7 +124,7 @@ test('fenced code keeps residual structural tab columns and unclosed bodies', ()
     }
 })
 
-test('quoted list compensation keeps preexisting native rules distinct and tilde fences follow CommonMark', () => {
+test('quote list fences retain source tabs and tilde fences follow CommonMark', () => {
   for (const source of [
     '>  ~~~\n>  \tcode\n>  ~~~',
     '>   ~~~\n>   \tcode\n>   ~~~',
@@ -136,7 +150,7 @@ test('quoted list compensation keeps preexisting native rules distinct and tilde
     )
     assert.deepEqual(
       code(new Marked({ gfm: false }, blockMarkdown).parse(source)),
-      code(native),
+      code(oracle),
       source,
     )
   }
@@ -275,8 +289,15 @@ test('identical normalized sibling bodies retain tab provenance in both orders',
           const source = lines.join(eol)
           const native = new Marked({ gfm: false })
           const markdown = new Marked({ gfm: false }, blockMarkdown)
-          assert.deepEqual(markdown.lexer(source), native.lexer(source), source)
-          assert.equal(markdown.parse(source), native.parse(source), source)
+          const tokens = markdown.lexer(source),
+            oracle = native.lexer(source)
+          assert.deepEqual(grammar(tokens), grammar(oracle), source)
+          assert.deepEqual(tokens.links, oracle.links, source)
+          assert.equal(
+            compact(markdown.parse(source)),
+            compact(micromark(source).replaceAll('\r\n', '\n')),
+            source,
+          )
           assert.deepEqual(
             code(markdown.parse(source)),
             code(micromark(source).replaceAll('\r\n', '\n')),
@@ -291,7 +312,17 @@ test('lazy frame transitions preserve quote text, nested siblings and parser reu
   const comparable = (token) =>
     JSON.parse(
       JSON.stringify(token, function (key, value) {
+        // Source assertions keep separator bytes; blank tokens render nothing.
+        if (key === 'tokens' && Array.isArray(value))
+          return value.filter((token) => token.type !== 'space')
+        if ((key === 'raw' || key === 'text') && this.type === 'code')
+          return undefined
         if (key === 'text' && this.type === 'blockquote') return undefined
+        if (
+          key === 'raw' &&
+          (this.type === 'list' || this.type === 'list_item')
+        )
+          return value.replace(/\n+$/, '')
         return key === 'raw' && this.type === 'blockquote'
           ? value.replaceAll('\n', '')
           : value
@@ -350,11 +381,20 @@ test('lazy frame transitions preserve quote text, nested siblings and parser reu
         // the quote. They have no rendered content; the exact raw check above
         // keeps those lines accounted for.
         assert.deepEqual(
-          tail.filter((token) => token.type !== 'space'),
-          nativeTail.filter((token) => token.type !== 'space'),
+          comparable(tail.filter((token) => token.type !== 'space')),
+          comparable(nativeTail.filter((token) => token.type !== 'space')),
           source,
         )
-        assert.equal(markdown.parse(source), native.parse(source), source)
+        assert.equal(
+          compact(withoutCode(markdown.parse(source))),
+          compact(withoutCode(native.parse(source))),
+          source,
+        )
+        assert.deepEqual(
+          code(markdown.parse(source)),
+          code(micromark(source).replaceAll('\r\n', '\n')),
+          source,
+        )
         assert.equal(
           markdown.parse('[ref]: /next\n\n[ref]'),
           native.parse('[ref]: /next\n\n[ref]'),
@@ -363,6 +403,8 @@ test('lazy frame transitions preserve quote text, nested siblings and parser reu
 })
 
 test('quote protection preserves extension work, inline queues and parser state', () => {
+  const source =
+    '> probe\n>\n> ```\n> \tcode\n> ```\n>\n> [ref]: /x\n>\n> [ref]\n'
   const exercise = (fixed) => {
     let calls = 0
     const markdown = new Marked(
@@ -391,16 +433,19 @@ test('quote protection preserves extension work, inline queues and parser state'
     const lexer = new Lexer(markdown.defaults)
     const rules = lexer.tokenizer.rules
     const blockTokens = lexer.blockTokens
-    const tokens = lexer.lex(
-      '> probe\n>\n> ```\n> \tcode\n> ```\n>\n> [ref]: /x\n>\n> [ref]\n',
-    )
+    const tokens = lexer.lex(source)
     assert.equal(lexer.tokenizer.rules, rules)
     assert.equal(lexer.blockTokens, blockTokens)
     assert.equal(lexer.inlineQueue.length, 0)
     assert.equal(lexer.state.top, true)
     return { calls, tokens, html: markdown.parser(tokens) }
   }
-  assert.deepEqual(exercise(true), exercise(false))
+  const fixed = exercise(true),
+    native = exercise(false)
+  assert.equal(fixed.calls, native.calls)
+  assert.deepEqual(grammar(fixed.tokens), grammar(native.tokens))
+  assert.equal(withoutCode(fixed.html), withoutCode(native.html))
+  assert.deepEqual(code(fixed.html), code(micromark(source)))
 })
 
 test('throwing quote and list reads restore grammar, hooks and container metadata', () => {

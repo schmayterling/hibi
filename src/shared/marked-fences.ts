@@ -5,9 +5,8 @@ const commonMark = new WeakMap<Rules, Rules>()
 
 /**
  * Marked's rules with its fence rules corrected to CommonMark: a closing
- * fence may end in tabs as well as spaces, it repeats only the opening
- * fence's character, and tilde fences remove their indentation from body
- * lines as backtick fences do.
+ * fence may end in tabs as well as spaces, and tilde fences remove their
+ * indentation from body lines as backtick fences do.
  */
 function fenceRules(rules: Rules) {
   // Pedantic mode has no fence rule.
@@ -21,9 +20,7 @@ function fenceRules(rules: Rules) {
       block: {
         ...rules.block,
         fences: new RegExp(
-          fences.source
-            .replace(' *(?=\\n|$)', '[ \\t]*(?=\\n|$)')
-            .replace('\\1[~`]*', '\\1(?:(?<=`)`*|(?<=~)~*)'),
+          fences.source.replace(' *(?=\\n|$)', '[ \\t]*(?=\\n|$)'),
           fences.flags,
         ),
       },

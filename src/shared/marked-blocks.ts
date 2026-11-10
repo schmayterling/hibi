@@ -23,6 +23,11 @@ const paragraphRules = new WeakMap<RegExp, RegExp>()
 const quoteRules = new WeakMap<RegExp, RegExp | null>()
 // Tabs keep their physical columns when a list removes its content indent.
 const containerColumns = new WeakMap<Tokenizer, number>()
+// Lazy setext candidates, measured from the end of this item's unchanged text.
+const lazyUnderlines = new WeakMap<
+  Tokenizer,
+  { text: string; ends: Set<number> }
+>()
 
 // Candidate calls and source spans, including title interruption windows, and
 // the quote lines scanned for the native quote rule's extent.
@@ -42,8 +47,8 @@ function quoteInterrupt(tokenizer: Tokenizer) {
   const pattern = tokenizer.rules.block.blockquote
   let interrupt = quoteRules.get(pattern)
   if (interrupt === undefined) {
-    const start = '^( {0,3}> ?(([^\\n]+(?:\\n(?!'
-    const end = ')[^\\n]+)*)|[^\\n]*)(?:\\n|$))+'
+    const start = '^( {0,3}> ?(?:(?![ \\t]*(?:\\n|$))(([^\\n]+(?:\\n(?!'
+    const end = ')[^\\n]+)*))|[^\\n]*)(?:\\n|$))+'
     interrupt =
       pattern.source.startsWith(start) && pattern.source.endsWith(end)
         ? new RegExp(`^(?:${pattern.source.slice(start.length, -end.length)})`)
@@ -118,7 +123,7 @@ function quoteScan(
     blockScanCounters.quoteLines++
     if (blockquoteStart.test(line)) {
       const marker = line.indexOf('>')
-      lazy = marker + (line[marker + 1] === ' ' ? 2 : 1) < line.length
+      lazy = /[^ \t]/.test(line.slice(marker + 1))
     } else if (
       !lazy ||
       !line ||
@@ -235,7 +240,9 @@ function rememberQuote(
 function quoteText(source: string, rules: Tokenizer['rules']) {
   return source
     .replace(rules.other.blockquoteSetextReplace, '\n    $1')
-    .replace(rules.other.blockquoteSetextReplace2, '')
+    .replace(rules.other.blockquoteSetextReplace2, (prefix: string) =>
+      prefix.endsWith('\t') ? ' '.repeat(3 - ((prefix.length - 1) % 4)) : '',
+    )
 }
 
 /**
@@ -277,14 +284,8 @@ export function readNativeQuote(source: string, lexer?: Lexer) {
       // physical source and remove one quote level without child text splices.
       if (quote) {
         if (quote.raw.length > source.length) quote.raw = source
-        // Native leaf-only alerts already have one source quote level.
-        if (
-          !/^ {0,3}>[ \t]*\[!/.test(quote.raw) ||
-          quote.tokens.some(
-            ({ type }) => type === 'blockquote' || type === 'list',
-          )
-        )
-          quote.text = quoteText(quote.raw, tokenizer.rules)
+        // Native marker expansion also consumes literal tabs in fenced code.
+        quote.text = quoteText(quote.raw, tokenizer.rules)
         if (lexer && nested.length) {
           if (!cache) {
             cache = new Map()
@@ -656,7 +657,11 @@ function readQuote(
       // A re-read can omit an already known definition from the token list.
       // Its preceding leaf is no longer the block at the continuation boundary.
       if (definitionEnd === body.length) continue
-      if (last && ['code', 'heading', 'hr', 'html'].includes(last.type)) break
+      if (
+        last &&
+        ['code', 'heading', 'hr', 'html', 'table'].includes(last.type)
+      )
+        break
       if (last?.type === 'blockquote') {
         // Marked re-reads the nested quote with every remaining line, one
         // quote level removed. Feed it those lines as it asks for them.
@@ -711,6 +716,9 @@ function readQuote(
         )
           used++
         for (; used > 0; used--) takeLine()
+        const next = lineAt()
+        if (next !== undefined && this.rules.other.blockquoteStart.test(next))
+          continue
         break
       }
       if (last?.type === 'list') {
@@ -925,10 +933,14 @@ export const blockMarkdown: MarkedExtension = {
   },
 }
 
-/** Only container overrides, for addons used with a plain Marked instance. */
+/** Container parsing and setext boundaries for plain Marked addons. */
 export const blockContainers = {
   list: blockMarkdown.tokenizer!.list!,
   blockquote: blockMarkdown.tokenizer!.blockquote!,
+  lheading(this: Tokenizer, source: string) {
+    if (!lazyUnderlines.has(this)) return false as const
+    return BlockTokenizer.prototype.lheading.call(this, source)
+  },
 }
 
 // Let upstream construct tokens, including its version-specific newline behavior.
@@ -1041,7 +1053,7 @@ function quoteIndent(state: QuoteState, row: number, limit: number) {
         used += kept
       }
       column += width
-      if (used >= limit) {
+      if (used >= limit && column >= cut) {
         const end = raw.indexOf('>', at + 1)
         return prefix + raw.slice(at + 1, end < 0 ? undefined : end)
       }
@@ -1365,8 +1377,10 @@ function installQuoteState(
 
 export class BlockTokenizer extends Tokenizer {
   override list(source: string, read = Tokenizer.prototype.list) {
-    return withLeafBlocks(this, () =>
-      BlockTokenizer.prototype.readList.call(this, source, read),
+    return withQuoteScan(this, () =>
+      withLeafBlocks(this, () =>
+        BlockTokenizer.prototype.readList.call(this, source, read),
+      ),
     )
   }
 
@@ -1382,14 +1396,27 @@ export class BlockTokenizer extends Tokenizer {
     const restart =
       state && parent?.kind === 'quote' && state.frame?.scope !== parent
     if (state && scope) state.scope = scope
-    const rows: number[] = []
+    const rows: number[] = [],
+      itemsAt: number[] = []
     let row = origin ?? 0,
       scanned = 0
     const rules = this.rules,
       columns: number[] = [],
       base = containerColumns.get(this) ?? 0
+    const pattern = rules.block.lheading
+    const nativeSetext =
+      !this.options.pedantic &&
+      (pattern === marked.Lexer.rules.block.normal.lheading ||
+        pattern === marked.Lexer.rules.block.gfm.lheading)
+    const lheading = nativeSetext
+      ? new RegExp(pattern.source, pattern.flags)
+      : pattern
+    // Marked adds four source spaces to lazy underlines. Keep the bytes and
+    // reject those heading candidates during item lexing instead.
+    if (nativeSetext) lheading.test = () => false
     this.rules = {
       ...rules,
+      block: { ...rules.block, lheading },
       other: {
         ...rules.other,
         listItemRegex: (bullet) => {
@@ -1398,6 +1425,7 @@ export class BlockTokenizer extends Tokenizer {
           rule.exec = (text) => {
             const match = exec.call(rule, text)
             if (match) {
+              itemsAt.push(source.length - text.length)
               if (scope) {
                 const at = source.length - text.length
                 row += quoteLines(source, scanned, at)
@@ -1430,9 +1458,35 @@ export class BlockTokenizer extends Tokenizer {
         scope.next = rows[current]!
         scope.indent = parent!.indent + columns[current]! - base
       }
+      const previous = lazyUnderlines.get(this),
+        text = args[0],
+        ends = new Set<number>()
+      if (nativeSetext && /\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)/.test(text)) {
+        let physical = itemsAt[current]!
+        for (let at = 0, row = 0; at <= text.length; row++) {
+          const lf = text.indexOf('\n', at),
+            end = lf < 0 ? text.length : lf
+          const next = source.indexOf('\n', physical)
+          const line = text.slice(at, end)
+          const written = source.slice(physical, next < 0 ? undefined : next)
+          if (
+            row &&
+            /^ {0,3}(?:=+|-+)[ \t]*$/.test(line) &&
+            (line === written || (lf < 0 && line === written.trimEnd()))
+          )
+            ends.add(text.length - at)
+          if (lf < 0) break
+          at = lf + 1
+          physical = next < 0 ? source.length : next + 1
+        }
+      }
+      if (ends.size) lazyUnderlines.set(this, { text, ends })
+      else lazyUnderlines.delete(this)
       try {
         return Reflect.apply(blockTokens, lexer, args)
       } finally {
+        if (previous) lazyUnderlines.set(this, previous)
+        else lazyUnderlines.delete(this)
         containerColumns.set(this, base)
         lexer.blockTokens = nested
       }
@@ -1606,13 +1660,13 @@ export class BlockTokenizer extends Tokenizer {
       const indent =
         match &&
         this.rules.other.indentCodeCompensation.exec(match[0])?.[1]?.length
-      if (!match || !indent) return read.call(this, source)
+      if (!match) return read.call(this, source)
       // Expand only the columns consumed by the opening fence's indentation.
       const body = quoteInput(
         this,
         match[3] ?? '',
         quoteOrigin(state, source) + 1,
-        indent,
+        indent ?? 0,
         true,
       )
       const parts = Array.from(match) as [string, ...string[]]
@@ -1738,7 +1792,17 @@ export class BlockTokenizer extends Tokenizer {
     let candidate = frame?.candidates.get(pattern)
     if (candidate === undefined || (candidate && candidate.index < from)) {
       rule.candidate.lastIndex = from
-      candidate = rule.candidate.exec(frame?.source ?? source)
+      const scanned = frame?.source ?? source,
+        lazy = lazyUnderlines.get(this)
+      candidate = rule.candidate.exec(scanned)
+      if (lazy && (lazy.text === scanned || lazy.text.endsWith(scanned)))
+        while (
+          candidate?.[1] &&
+          lazy.ends.has(scanned.length - candidate.index - 1)
+        ) {
+          rule.candidate.lastIndex = candidate.index + 1
+          candidate = rule.candidate.exec(scanned)
+        }
       blockScanCounters.units += candidate
         ? candidate.index + candidate[0].length - from
         : source.length

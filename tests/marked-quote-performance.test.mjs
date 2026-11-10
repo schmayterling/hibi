@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
+import { micromark } from 'micromark'
 import { alertMarkdown, alertToken } from '../src/addons/markdown/alerts.ts'
 import { mathTokens } from '../src/addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
@@ -75,7 +76,7 @@ test('quotes that stop early leave the rest of the extent unscanned', () => {
   const shape = (tokens) =>
     tokens
       .filter((token) => token.type !== 'space')
-      .map((token) => [token.type, token.raw, shape(token.tokens ?? [])])
+      .map((token) => [token.type, token.type === 'blockquote' ? '' : token.type === 'heading' ? token.text : token.raw, shape(token.tokens ?? [])])
   try {
     for (const unit of [heading, fence, nested, tabbed, widened]) {
       const source = unit.repeat(2000)
@@ -83,6 +84,7 @@ test('quotes that stop early leave the rest of the extent unscanned', () => {
       const tokens = parser().lexer(source)
       const counted = checks
       assert.deepEqual(shape(tokens), shape(new Marked().lexer(source)), unit)
+      assert.equal(tokens.map((token) => token.raw).join(''), source)
       // Scanning the whole extent again at every quote call checks the lines
       // of every unit after it: millions of lines here.
       assert.ok(counted < 2000 * 100, `${JSON.stringify(unit)}: ${counted}`)
@@ -276,11 +278,9 @@ test('empty quote bodies keep source newlines and native lazy boundaries', () =>
         tokens[0].raw.replace(/\n$/, '').replace(/^ {0,3}>[ \t]?/gm, ''),
         source,
       )
-      assert.deepEqual(
-        quoteGrammar(tokens),
-        quoteGrammar(new Marked().lexer(source)),
-        source,
-      )
+      // Native tab expansion invents whitespace in empty nested quotes.
+      assert.equal(tokens.map((token) => token.raw).join(''), source.replaceAll('\r\n', '\n'))
+      assert.equal(new Marked(blockMarkdown).parse(source).trimEnd(), micromark(source).replaceAll('\r\n', '\n').trimEnd(), source)
     }
 })
 
@@ -513,7 +513,8 @@ for (const [shape, unit] of Object.entries({
           shape === 'paragraph' || shape === 'code'
             ? 1
             : shape === 'nested'
-              ? 2 * units + 1
+              // CommonMark §5.1: restated markers retain one outer quote.
+              ? units + 1
               : units,
         )
       } else

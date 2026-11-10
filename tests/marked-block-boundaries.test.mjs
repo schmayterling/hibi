@@ -2,11 +2,15 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { build } from 'esbuild'
-import { Marked } from 'marked'
+import { Lexer, Marked } from 'marked'
+import { micromark } from 'micromark'
+import { gfm, gfmHtml } from 'micromark-extension-gfm'
 import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import { obsidianMarkdown } from '../src/addons/markdown/obsidian-markdown.ts'
-import { mathTokens } from '../src/addons/math/syntax.ts'
+import { blockMath as readMath } from '../src/addons/math/grammar.ts'
+import { formulaLimit } from '../src/addons/math/inline-display.ts'
+import { mathTokens, mathTokensWith } from '../src/addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import {
   typstBlock,
@@ -33,13 +37,19 @@ function boundaries(tokens) {
       // Native quotes also splice list text over markers; their raw is unsafe
       // as a source oracle. The separate corpus test below checks physical raw.
       const result = { type }
-      if (type !== 'blockquote') result.raw = token.raw
+      if (type !== 'blockquote') result.raw = token.raw.replace(/\n+$/, '')
+      // Native padding is not paragraph content (CommonMark §5.2).
+      if (type === 'paragraph' || type === 'text')
+        result.raw = result.raw.replace(
+          /\n {4}(?=(?:=+|-+)[ \t]*(?:\n|$))/g,
+          '\n',
+        )
       if (type === 'heading')
         Object.assign(result, { depth: token.depth, text: token.text })
       if (type === 'code') result.text = token.text ?? token.source
       if (type === 'list')
         result.items = token.items.map((item) => ({
-          raw: item.raw,
+          raw: item.raw.replace(/\n+$/, ''),
           tokens: boundaries(item.tokens),
         }))
       if (type === 'blockquote') result.tokens = boundaries(token.tokens)
@@ -47,6 +57,16 @@ function boundaries(tokens) {
     })
 }
 
+const expandTabs = (source) =>
+  source
+    .split('\n')
+    .map((line) => {
+      let text = ''
+      for (const char of line)
+        text += char === '\t' ? ' '.repeat(4 - (text.length % 4)) : char
+      return text
+    })
+    .join('\n')
 function containerBoundaries(tokens) {
   return tokens
     .filter((token) => token.type !== 'space')
@@ -294,7 +314,10 @@ test('tab-indented item lines after math stay in the item', () => {
   ])
     assert.deepEqual(
       containerBoundaries(new Marked(mathTokens).lexer(source)),
-      containerBoundaries(new Marked().lexer(source.replaceAll('$$', '```'))),
+      // CommonMark §2.2: structural tabs use physical four-column stops.
+      containerBoundaries(
+        new Marked().lexer(expandTabs(source.replaceAll('$$', '```'))),
+      ),
       source,
     )
 })
@@ -320,6 +343,158 @@ test('unclosed math runs to the end of its quote or list item, as in Obsidian', 
     boundaries(marked.lexer(source)),
     boundaries(new Marked().lexer(source)),
   )
+})
+
+test('list math keeps physical lazy underlines through nested containers', () => {
+  const cases = [
+    ['- $$x\noutside\n===', '$$x\noutside\n==='],
+    ['- para\n  $$x\nfoo\n===', '$$x\nfoo\n==='],
+    ['> - $$x\n> outside\n> ===', '$$x\noutside\n==='],
+    ...['- 1.', '- -', '> - -', '1. -', '- - -'].map((marker) => [
+      `${marker} $$x\n${marker.startsWith('>') ? '> ' : ''}outside\n${marker.startsWith('>') ? '> ' : ''}===`,
+      '$$x\noutside\n===',
+    ]),
+    ...[1, 2, 3].map((spaces) => [
+      `- $$x\noutside\n${' '.repeat(spaces)}===`,
+      `$$x\noutside\n${' '.repeat(spaces < 2 ? spaces : spaces - 2)}===`,
+    ]),
+    ['- $$x\n      ===', '$$x\n    ==='],
+    ['- - $$x\n      ===', '$$x\n  ==='],
+    ['- $$x\noutside\n===\t\nmore', '$$x\noutside\n===\t\nmore'],
+  ]
+  for (const shared of [false, true]) {
+    const parser = new Marked(...(shared ? [blockMarkdown] : []), mathTokens)
+    for (const [source, physical] of cases) {
+      const tokens = parser.lexer(source),
+        found = []
+      parser.walkTokens(tokens, (token) => {
+        if (token.type === 'blockMath')
+          found.push({ raw: token.raw, latex: token.latex })
+        if (token.type === 'list')
+          for (const item of token.items) {
+            let rest = item.text
+            for (const child of item.tokens) {
+              const at = rest.indexOf(child.raw)
+              assert.ok(at >= 0, source)
+              rest = rest.slice(at + child.raw.length)
+            }
+            assert.ok(token.raw.includes(item.raw), source)
+          }
+      })
+      assert.deepEqual(
+        found,
+        [{ raw: physical.trimEnd(), latex: readMath(physical).latex }],
+        source,
+      )
+      assert.equal(tokens.map((token) => token.raw).join(''), source)
+    }
+  }
+})
+
+test('list source padding cannot change the formula limit or replay extensions', () => {
+  for (const shared of [false, true])
+    for (const enabled of [false, true])
+      for (const slack of [-1, 0, 3, 4]) {
+        // body includes the newline before the closing line.
+        const physical = `$$${'x'.repeat(formulaLimit - 13 - slack)}\noutside\n===\n$$`
+        const expected = readMath(physical)
+        let reads = 0
+        const extension = mathTokensWith(() => enabled)
+        const math = extension.extensions.find(
+          (rule) => rule.name === 'blockMath',
+        )
+        const read = math.tokenizer
+        math.tokenizer = function (...args) {
+          const token = read.apply(this, args)
+          if (token) reads++
+          return token
+        }
+        const parser = new Marked(...(shared ? [blockMarkdown] : []), extension)
+        const tokens = parser.lexer(
+          `- ${physical.replace(/\n\$\$$/, () => '\n  $$')}`,
+        )
+        const found = []
+        parser.walkTokens(tokens, (token) => {
+          if (['blockMath', 'blockMathText'].includes(token.type))
+            found.push(token)
+        })
+        if (enabled || slack >= 0) {
+          assert.equal(found.length, 1)
+          assert.equal(found[0].type, expected.type)
+          assert.equal(found[0].raw, physical)
+          assert.equal(found[0].latex, expected.latex)
+        }
+        assert.equal(
+          reads,
+          enabled || slack >= 0 ? 1 : 0,
+          `no math replay: ${shared}/${enabled}/${slack}`,
+        )
+      }
+})
+
+test('lazy list underlines stay paragraph text while indented underlines stay headings', () => {
+  // CommonMark §5.2: laziness extends paragraph text, never a setext heading.
+  // Marked #4126's padding misses short and nested lazy lines.
+  for (const source of [
+    '1. e\n=',
+    '- e\nf\n===',
+    '- - para\noutside\n===',
+    '- 1. e\nf\n===',
+    '- - [ ] x\noutside\n===',
+    '- e\n=\t',
+    '- e\n  =',
+    '- - e\n    ===',
+    '- [a]: /b\n===',
+    '- a\n===\n  para\n===',
+  ])
+    for (const tables of [false, true]) {
+      for (const extension of [blockMarkdown, mathTokens]) {
+        const parser = new Marked(extension, { gfm: tables })
+        const html = micromark(
+          source,
+          tables ? { extensions: [gfm()], htmlExtensions: [gfmHtml()] } : {},
+        )
+        const compact = (html) =>
+          html
+            .trim()
+            .replace(/>\n(?=<)/g, '>')
+            .replace(/<input\b[^>]*>/g, '<input type="checkbox" disabled="">')
+        assert.equal(compact(parser.parse(source)), compact(html), source)
+      }
+    }
+  const parser = new Marked(blockMarkdown)
+  assert.equal(parser.lexer('real\n===')[0].type, 'heading')
+  // Genuine four-space continuation is content, not synthetic padding.
+  assert.equal(parser.lexer('- e\n      ===')[0].items[0].text, 'e\n    ===')
+  assert.equal(
+    new Marked(blockMarkdown, { pedantic: true }).parse('- e\n='),
+    new Marked({ pedantic: true }).parse('- e\n='),
+  )
+})
+
+test('failed list reads restore lazy heading context and parser hooks', () => {
+  const sentinel = new Error('list probe')
+  const parser = new Marked(blockMarkdown, {
+    extensions: [
+      {
+        name: 'explode',
+        level: 'block',
+        tokenizer(source) {
+          if (source.startsWith('explode')) throw sentinel
+        },
+      },
+    ],
+  })
+  const lexer = new Lexer(parser.defaults)
+  const rules = lexer.tokenizer.rules,
+    read = lexer.blockTokens
+  assert.throws(
+    () => lexer.lex('- explode\n==='),
+    (error) => error === sentinel,
+  )
+  assert.equal(lexer.tokenizer.rules, rules)
+  assert.equal(lexer.blockTokens, read)
+  assert.equal(lexer.tokenizer.lheading('explode\n===').type, 'heading')
 })
 
 for (const [name, extension, body] of [
@@ -414,7 +589,10 @@ test('tabbed nested alerts retain their renderer after native continuation', () 
     assert.match(html, /<h1>outside<\/h1>/)
     assert.equal(
       html.match(/<pre><code>([\s\S]*?)<\/code>/)?.[1],
-      new Marked().parse(source).match(/<pre><code>([\s\S]*?)<\/code>/)?.[1],
+      // CommonMark §4.5 preserves literal code tabs; Marked #4110 expands them.
+      micromark(source)
+        .replaceAll('\r\n', '\n')
+        .match(/<pre><code>([\s\S]*?)<\/code>/)?.[1],
     )
   }
 })

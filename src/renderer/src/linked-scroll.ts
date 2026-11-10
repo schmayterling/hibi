@@ -1,8 +1,6 @@
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
+import { announcedScroll, announceScroll, watchScrolls } from './pane-scroll'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
-
-// About a quarter second: layout a caret change starts settles within it.
-const ALIGN_SETTLE_FRAMES = 15
 
 /** Markdown caret alignment stays active even when linked scrolling is disabled. */
 export function linkScroll(
@@ -16,19 +14,12 @@ export function linkScroll(
   let frame = 0
   let refinements = 0
   // With scrolling unlinked, a caret alignment still follows the layout
-  // settling under it for a few frames, until the reader scrolls a pane.
+  // settling under it, until either pane scrolls by other than a correction:
+  // the reader's, a script's or a reveal.
   let aligning = false
-  let settleFrames = 0
-  let ticker = 0
-  const align = () => {
-    aligning = true
-    settleFrames = ALIGN_SETTLE_FRAMES
-    if (!ticker) ticker = requestAnimationFrame(tick)
-  }
-  const tick = () => {
-    ticker = --settleFrames > 0 && aligning ? requestAnimationFrame(tick) : 0
-    if (!ticker) aligning = false
-  }
+  const unwatch = syncScrolling
+    ? []
+    : [watchScrolls(first), watchScrolls(second)]
   const paneState = (pane: HTMLElement) => {
     const content = pane.querySelector('.cm-content')
     const view = content && sourceView(content)
@@ -94,8 +85,6 @@ export function linkScroll(
   }
   const sync = () => {
     frame = 0
-    // Unlinked, only a caret in view has a line to align.
-    if (!syncScrolling && !caretShown()) return
     const target = leader === first ? second : first
     let top: number | null
     if (markdown) top = sourceTop(target)
@@ -113,6 +102,7 @@ export function linkScroll(
     )
     if (Math.abs(target.scrollTop - clamped) < 1) return
     target.scrollTop = clamped
+    announceScroll(target)
     if (markdown && refinements++ < 3) frame = requestAnimationFrame(sync)
   }
   const schedule = () => {
@@ -121,19 +111,19 @@ export function linkScroll(
     frame = requestAnimationFrame(sync)
   }
   const scroll = (event: Event) => {
-    if (!syncScrolling) return
     const origin = event.currentTarget as HTMLElement
+    if (!syncScrolling) {
+      if (aligning && !announcedScroll(origin)) {
+        aligning = false
+        cancelAnimationFrame(frame)
+        frame = 0
+      }
+      return
+    }
     // Virtualized source layout can emit several delayed scroll events. Only
     // direct input or focus changes may hand control to the other pane.
     if (origin !== leader) return
     schedule()
-  }
-  const caretShown = () => {
-    const content = leader.querySelector('.cm-content')
-    const view = content && sourceView(content)
-    const point = view?.coordsAtPos(view.state.selection.main.head)
-    const bounds = leader.getBoundingClientRect()
-    return !!point && point.bottom > bounds.top && point.top < bounds.bottom
   }
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
@@ -165,7 +155,7 @@ export function linkScroll(
     const deliberate =
       event instanceof Event && ['pointerup', 'focusin'].includes(event.type)
     if (!changed && !deliberate) return
-    align()
+    aligning = true
     schedule()
   }
   // CodeMirror panes report caret and text changes, and focus leaving, as
@@ -221,15 +211,17 @@ export function linkScroll(
     }
     first.addEventListener('hibi:source-layout', schedule)
   }
-  first.addEventListener('scroll', scroll, { passive: true })
-  second.addEventListener('scroll', scroll, { passive: true })
+  // Capturing, before the views' own listeners measure, and so announce, the
+  // position the scroll reached.
+  first.addEventListener('scroll', scroll, { passive: true, capture: true })
+  second.addEventListener('scroll', scroll, { passive: true, capture: true })
   // Widths settle during the view transition; new files are already at their final widths.
   first.addEventListener('transitionend', settled)
   sourcePane?.addEventListener('transitionend', settled)
   settled()
   return () => {
     cancelAnimationFrame(frame)
-    cancelAnimationFrame(ticker)
+    for (const stop of unwatch) stop()
     observer.disconnect()
     drawn.disconnect()
     for (const pane of [first, second]) {
@@ -248,8 +240,8 @@ export function linkScroll(
       )
     }
     first.removeEventListener('hibi:source-layout', schedule)
-    first.removeEventListener('scroll', scroll)
-    second.removeEventListener('scroll', scroll)
+    first.removeEventListener('scroll', scroll, true)
+    second.removeEventListener('scroll', scroll, true)
     first.removeEventListener('transitionend', settled)
     sourcePane?.removeEventListener('transitionend', settled)
   }

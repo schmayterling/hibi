@@ -144,20 +144,56 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   )
   await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
 
-  // A pane scrolled apart from the caret, by a script or a reveal, stays
-  // apart: only layout settling under an alignment moves the other pane.
-  const tops = () =>
-    page.evaluate(async () => {
-      for (let frame = 0; frame < 25; frame++)
+  // An alignment follows layout changing under it however late, and keeps
+  // its place through the preview's own corrections, however far.
+  const frames = (count) =>
+    page.evaluate(async (count) => {
+      for (let frame = 0; frame < count; frame++)
         await new Promise(requestAnimationFrame)
-      return {
-        source: document.querySelector('.source-pane .cm-scroller').scrollTop,
-        rich: document.querySelector('.rich-pane').scrollTop,
-      }
-    })
+    }, count)
+  const tops = async () => {
+    await frames(25)
+    return page.evaluate(() => ({
+      source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+      rich: document.querySelector('.rich-pane').scrollTop,
+    }))
+  }
+  const restyle = (css) =>
+    page.evaluate((css) => {
+      const style = document.createElement('style')
+      style.className = 'preview-scroll-test'
+      style.textContent = css
+      document.head.append(style)
+    }, css)
   await source.press('ArrowDown')
   await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
-  const beforePreview = await tops()
+  await frames(25)
+  await restyle('.rich-pane .cm-content > * { padding-top: 1px }')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(200)
+  const beforeGrowth = await tops()
+  // The drawn blocks above grow, the preview's place moves by hundreds of pixels.
+  await restyle('.rich-pane .cm-content > * { padding-top: 120px }')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  const afterGrowth = await tops()
+  assert.ok(
+    afterGrowth.rich - beforeGrowth.rich > 200,
+    JSON.stringify({ beforeGrowth, afterGrowth }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+
+  // A pane scrolled apart from the caret, by a script or a reveal, stays
+  // apart, even while the layout under the alignment can still settle.
+  await source.press('ArrowUp')
+  await frames(2)
+  const beforePreview = await page.evaluate(() => ({
+    source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+    rich: document.querySelector('.rich-pane').scrollTop,
+  }))
   const moved = await page.evaluate(() => {
     const pane = document.querySelector('.rich-pane')
     pane.scrollTop += 3500
@@ -169,16 +205,12 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
       Math.abs(afterPreview.source - beforePreview.source) < 3,
     JSON.stringify({ beforePreview, moved, afterPreview }),
   )
-  // Even while the layout under a caret's alignment can still settle.
-  await source.press('ArrowUp')
-  const beforeReveal = await page.evaluate(async () => {
-    for (let frame = 0; frame < 2; frame++)
-      await new Promise(requestAnimationFrame)
-    return {
-      source: document.querySelector('.source-pane .cm-scroller').scrollTop,
-      rich: document.querySelector('.rich-pane').scrollTop,
-    }
-  })
+  await source.press('ArrowDown')
+  await frames(2)
+  const beforeReveal = await page.evaluate(() => ({
+    source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+    rich: document.querySelector('.rich-pane').scrollTop,
+  }))
   await source.evaluate((element) => {
     const view = element.cmTile.root.view
     view.dispatch({
@@ -191,7 +223,7 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   const afterReveal = await tops()
   assert.ok(
     afterReveal.source - beforeReveal.source > 1000 &&
-      Math.abs(afterReveal.rich - beforeReveal.rich) < 100,
+      Math.abs(afterReveal.rich - beforeReveal.rich) < 3,
     JSON.stringify({ beforeReveal, afterReveal }),
   )
 

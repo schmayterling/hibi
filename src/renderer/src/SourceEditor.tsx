@@ -150,6 +150,7 @@ import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
+import { layoutScrolls } from './pane-scroll'
 import { placedByView, scrolledItself } from './reading-position'
 import {
   observeSourceAnnotations,
@@ -1985,6 +1986,7 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           firstStateRead,
+          layoutScrolls(scrollerOf),
           // A widget that fails shows empty and the editor goes on: the user
           // sees why it is empty, and every failure still reaches the console.
           EditorView.exceptionSink.of((error: unknown, context?: string) => {

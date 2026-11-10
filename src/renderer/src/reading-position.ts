@@ -1,6 +1,7 @@
 import { Annotation, Facet, type Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
+import { announceScroll, scrollTarget } from './pane-scroll.ts'
 import { isViewDead } from './view-death.ts'
 
 /**
@@ -314,10 +315,6 @@ const revealing = new WeakMap<EditorView, Reading>()
 
 /** A scroll command the reading position sends itself. */
 const revealed = Annotation.define<boolean>()
-// ponytail: CodeMirror exports no type for its scroll command's effect; its
-// value's class names it. A public effect type would replace this.
-const scrollTarget = (EditorView.scrollIntoView(0).value as object).constructor
-
 /** Whether a transaction asks the view to scroll, other than to a reading position. */
 function asksScroll(transaction: Transaction) {
   return (
@@ -448,8 +445,10 @@ function restore(view: EditorView, position: Reading) {
   const now = screenTop(view, position) - paneTop(position.pane)
   // Measuring can execute a pending scroll command; its destination takes precedence.
   if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
-  if (Math.abs(now - position.top) >= 0.5)
+  if (Math.abs(now - position.top) >= 0.5) {
     position.pane.scrollTop += now - position.top
+    announceScroll(position.pane)
+  }
   hold(view, position)
   return true
 }
@@ -561,6 +560,7 @@ export const keepRead = [
       const now = drawnTop(view, position.pos)
       if (now === null) return false
       position.pane.scrollTop += now - paneTop(position.pane) - position.top
+      announceScroll(position.pane)
       const keep = kept.get(view)
       if (keep) keep.scroll = keep.pane.scrollTop
       hold(view, position)

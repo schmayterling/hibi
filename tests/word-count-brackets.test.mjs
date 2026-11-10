@@ -273,22 +273,28 @@ test('warm body edits after stray openers keep work bounded at 1000 and 4000 par
     }
 })
 
-test('title closers after backslashes reject blank title lines', (t) => {
+test('escaped title closers stay literal and blank title lines reject definitions', (t) => {
   const parser = countParser(syntax)
+  // CommonMark §4.7: an escaped delimiter cannot close a reference title.
   for (const eol of ['\n', '\r\n'])
-    for (const [open, gap, close] of [
-      ['"', '\n\n', '"'],
-      ["'", '\n', "'"],
-      ['(', '\n\n', ')'],
-    ]) {
-      const source =
-        `[ref]: /target ${open}first${gap}last\\${close}`.replaceAll('\n', eol)
-      const tokens = parser.lexer(source)
-      const valid = gap === '\n'
-      assert.equal(tokens[0]?.type === 'def', valid, JSON.stringify(source))
-      const f = fixture(t, source)
-      assert.equal(f.brackets.canClose(0), valid, JSON.stringify(source))
-    }
+    for (const [open, close] of [
+      ['"', '"'],
+      ["'", "'"],
+      ['(', ')'],
+    ])
+      for (const gap of ['\n', '\n\n'])
+        for (const slashes of [1, 2]) {
+          const source = (
+            `[ref]: /target ${open}first${gap}last` +
+            '\\'.repeat(slashes) +
+            close
+          ).replaceAll('\n', eol)
+          const tokens = parser.lexer(source)
+          const valid = gap === '\n' && slashes === 2
+          assert.equal(tokens[0]?.type === 'def', valid, JSON.stringify(source))
+          const f = fixture(t, source)
+          assert.equal(f.brackets.canClose(0), valid, JSON.stringify(source))
+        }
 })
 
 test('blank title lines do not consume following block state in regional counts', async (t) => {
@@ -649,7 +655,8 @@ test('definition candidates retain native destination post-validation', (t) => {
     '/target(x)',
     '<target(>',
   ]) {
-    const source = `[ref\n\n]: ${destination}`
+    // A valid multiline label keeps this probe about destination validation.
+    const source = `[ref\n]: ${destination}`
     const f = fixture(t, source)
     const valid =
       Object.keys(countParser(syntax).lexer(source).links).length > 0

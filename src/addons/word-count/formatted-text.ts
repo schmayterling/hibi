@@ -291,10 +291,11 @@ function listItem(
 
 /** An ordered list item: its blocks, with no paragraph added or blank lines kept. */
 function orderedItem(
-  tokens: readonly Token[],
+  entry: Tokens.ListItem,
   syntax: ProjectionSyntax,
   out: string[],
 ) {
+  const { tokens } = entry
   // Native ordered items parse a leading alert marker apart from following quotes.
   if (tokens[0]?.type === 'githubAlert') {
     const [first, ...rest] = tokens
@@ -306,7 +307,10 @@ function orderedItem(
     children(rest, syntax, out, true)
     return
   }
-  let checkbox = ''
+  // Ordered markers stay literal, including their original whitespace.
+  let checkbox = entry.task
+    ? (/^[ \t]*\d+[.)][ \t]+(\[[ xX]\][ \t]+)/.exec(entry.raw)?.[1] ?? '')
+    : ''
   const firstParagraph = tokens.findIndex(
     (token) => token.type === 'text' || token.type === 'paragraph',
   )
@@ -335,11 +339,7 @@ function orderedItem(
         }),
       }
     }
-    if (token.type === 'checkbox') {
-      // Ordered items are no tasks: the box stays text.
-      checkbox = token.raw
-      continue
-    }
+    if (token.type === 'checkbox') continue
     if (token.type === 'text' && 'tokens' in token && token.tokens) {
       out.push('\n', checkbox)
       inline(token.tokens, out)
@@ -360,7 +360,7 @@ function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
     out.push('\n')
     for (const entry of token.items) {
       out.push('\n')
-      orderedItem(entry.tokens, syntax, out)
+      orderedItem(entry, syntax, out)
     }
     return
   }

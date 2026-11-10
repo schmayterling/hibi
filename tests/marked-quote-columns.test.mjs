@@ -160,6 +160,75 @@ test('a nested alert whose list takes a lazy line opens no second quote', () => 
   }
 })
 
+test('blank quote bodies cannot admit lazy paragraph lines', () => {
+  // CommonMark §§2.2, 5.1: only spaces/tabs make a blank quote body.
+  for (const source of [
+    '>  \noutside',
+    '>\t\noutside',
+    '> \t\noutside',
+    '  > \t\noutside',
+    '> \u00a0\noutside',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const text = source.replaceAll('\n', eol)
+      assert.equal(
+        new Marked(blockMarkdown).parse(text).trimEnd(),
+        micromark(text).replaceAll('\r\n', '\n').trimEnd(),
+        text,
+      )
+    }
+})
+
+test('restated outer markers keep lazy nested quotes in one container', () => {
+  // Marked #4175; CommonMark §5.1 keeps the restated outer container.
+  for (const tail of ['c', '# heading', '---', '- item']) {
+    const source = '> > a\nb\n>\n> ' + tail
+    assert.equal(
+      new Marked(blockMarkdown).parse(source).trimEnd(),
+      micromark(source).replaceAll('<hr />', '<hr>').trimEnd(),
+      source,
+    )
+  }
+})
+
+test('a gfm table ends lazy quote continuation', () => {
+  // Marked #4161: laziness continues paragraphs, never a table.
+  for (const source of [
+    '> | a | b |\n> | - | - |\n> | x | y |\noutside',
+    '> a | b\n> --- | ---\n> x | y\noutside',
+    '> > | a | b |\n> > | - | - |\n> > | x | y |\noutside',
+  ]) {
+    const html = micromark(source, {
+      extensions: [gfmSyntax()],
+      htmlExtensions: [gfmHtml()],
+    })
+    const compact = (html) => html.replace(/>\n(?=<)/g, '>').trimEnd()
+    assert.equal(
+      compact(new Marked(blockMarkdown).parse(source)),
+      compact(html),
+      source,
+    )
+  }
+})
+
+test('native alert reads preserve literal code tabs, short or long', () => {
+  // Marked #4110 expands body tabs too; CommonMark §§2.2, 4.5 preserve them.
+  for (const padding of [0, 40]) {
+    const source =
+      '> [!NOTE]\n' + '> a\n'.repeat(padding) + '> ```\n> \tx\n> ```'
+    assert.equal(
+      readNativeQuote(source).text,
+      '[!NOTE]\n' + 'a\n'.repeat(padding) + '```\n\tx\n```',
+      source,
+    )
+    assert.deepEqual(
+      code(new Marked(blockMarkdown, alertMarkdown).parse(source)),
+      oracle(source),
+      source,
+    )
+  }
+})
+
 test('an alert reads the quote Marked reads, short or long', () => {
   const tokenizer = new Tokenizer()
   new Lexer({ gfm: true, tokenizer })

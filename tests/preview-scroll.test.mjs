@@ -144,6 +144,57 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   )
   await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
 
+  // A pane scrolled apart from the caret, by a script or a reveal, stays
+  // apart: only layout settling under an alignment moves the other pane.
+  const tops = () =>
+    page.evaluate(async () => {
+      for (let frame = 0; frame < 25; frame++)
+        await new Promise(requestAnimationFrame)
+      return {
+        source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+        rich: document.querySelector('.rich-pane').scrollTop,
+      }
+    })
+  await source.press('ArrowDown')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  const beforePreview = await tops()
+  const moved = await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop += 3500
+    return pane.scrollTop
+  })
+  const afterPreview = await tops()
+  assert.ok(
+    Math.abs(afterPreview.rich - moved) < 3 &&
+      Math.abs(afterPreview.source - beforePreview.source) < 3,
+    JSON.stringify({ beforePreview, moved, afterPreview }),
+  )
+  // Even while the layout under a caret's alignment can still settle.
+  await source.press('ArrowUp')
+  const beforeReveal = await page.evaluate(async () => {
+    for (let frame = 0; frame < 2; frame++)
+      await new Promise(requestAnimationFrame)
+    return {
+      source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+      rich: document.querySelector('.rich-pane').scrollTop,
+    }
+  })
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(
+        view.state.doc.toString().indexOf('## Section 70'),
+        { y: 'center' },
+      ),
+    })
+  })
+  const afterReveal = await tops()
+  assert.ok(
+    afterReveal.source - beforeReveal.source > 1000 &&
+      Math.abs(afterReveal.rich - beforeReveal.rich) < 100,
+    JSON.stringify({ beforeReveal, afterReveal }),
+  )
+
   // Clicking the independently scrolled preview also reveals its line in source.
   await scroll('.rich-pane', 0.6)
   const sourceBeforeClick = await page
@@ -202,14 +253,39 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   await page.getByRole('button', { name: /^side-by-side$/i }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, markdown)
+  const end = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await source.press(
     process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
   )
+  // The source keeps its first line a scroll margin inside its top padding,
+  // so the preview aligns that line rather than reaching zero.
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop < 10,
+    (before) => document.querySelector('.rich-pane').scrollTop < before / 2,
+    end,
   )
+  // No mirror caret is drawn in the heading's hidden marker.
+  await page.waitForFunction(() => {
+    const caret = document
+      .querySelector('.source-pane .editor-cursor')
+      ?.getBoundingClientRect()
+    const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root
+      .view
+    const start = view?.coordsAtPos(0)
+    return (
+      caret?.height &&
+      start &&
+      Math.abs((start.top + start.bottom) / 2 - caret.top - caret.height / 2) <
+        3
+    )
+  })
+  const top = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await scroll('.source-pane .cm-scroller', 0.5)
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop > 100,
+    (top) => document.querySelector('.rich-pane').scrollTop > top + 100,
+    top,
   )
 })

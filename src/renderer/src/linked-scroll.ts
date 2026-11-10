@@ -1,6 +1,9 @@
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
+// About a quarter second: layout a caret change starts settles within it.
+const ALIGN_SETTLE_FRAMES = 15
+
 /** Markdown caret alignment stays active even when linked scrolling is disabled. */
 export function linkScroll(
   first: HTMLElement,
@@ -12,6 +15,20 @@ export function linkScroll(
   let leader = initial
   let frame = 0
   let refinements = 0
+  // With scrolling unlinked, a caret alignment still follows the layout
+  // settling under it for a few frames, until the reader scrolls a pane.
+  let aligning = false
+  let settleFrames = 0
+  let ticker = 0
+  const align = () => {
+    aligning = true
+    settleFrames = ALIGN_SETTLE_FRAMES
+    if (!ticker) ticker = requestAnimationFrame(tick)
+  }
+  const tick = () => {
+    ticker = --settleFrames > 0 && aligning ? requestAnimationFrame(tick) : 0
+    if (!ticker) aligning = false
+  }
   const paneState = (pane: HTMLElement) => {
     const content = pane.querySelector('.cm-content')
     const view = content && sourceView(content)
@@ -77,6 +94,8 @@ export function linkScroll(
   }
   const sync = () => {
     frame = 0
+    // Unlinked, only a caret in view has a line to align.
+    if (!syncScrolling && !caretShown()) return
     const target = leader === first ? second : first
     let top: number | null
     if (markdown) top = sourceTop(target)
@@ -109,9 +128,17 @@ export function linkScroll(
     if (origin !== leader) return
     schedule()
   }
+  const caretShown = () => {
+    const content = leader.querySelector('.cm-content')
+    const view = content && sourceView(content)
+    const point = view?.coordsAtPos(view.state.selection.main.head)
+    const bounds = leader.getBoundingClientRect()
+    return !!point && point.bottom > bounds.top && point.top < bounds.bottom
+  }
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
     if (!syncScrolling) {
+      aligning = false
       cancelAnimationFrame(frame)
       frame = 0
     }
@@ -138,6 +165,7 @@ export function linkScroll(
     const deliberate =
       event instanceof Event && ['pointerup', 'focusin'].includes(event.type)
     if (!changed && !deliberate) return
+    align()
     schedule()
   }
   // CodeMirror panes report caret and text changes, and focus leaving, as
@@ -165,7 +193,7 @@ export function linkScroll(
       selection(event)
   }
   const settled = () => {
-    if (syncScrolling) schedule()
+    if (syncScrolling || aligning) schedule()
   }
   const observer = new ResizeObserver(settled)
   // Virtualized table rows can arrive without changing the content's height.
@@ -201,6 +229,7 @@ export function linkScroll(
   settled()
   return () => {
     cancelAnimationFrame(frame)
+    cancelAnimationFrame(ticker)
     observer.disconnect()
     drawn.disconnect()
     for (const pane of [first, second]) {

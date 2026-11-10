@@ -179,7 +179,14 @@ test('the app icon persists, shows before the first window, imports a custom ima
       /ICO has no PNG/,
     ],
     ...(mac
-      ? []
+      ? [
+          // Valid, but Quick Look can't draw it and would show a stock document icon.
+          [
+            'undrawable.svg',
+            '<svg xmlns="http://www.w3.org/2000/svg"><path d="M"/></svg>',
+            /macOS couldn't draw this SVG/,
+          ],
+        ]
       : [
           [
             'clean.svg',

@@ -7,6 +7,7 @@ import {
   appIconPreference,
   darkAppIcon,
   MAX_APP_ICON_BYTES,
+  MAX_SVG_BYTES,
   readAppIcon,
 } from '../src/shared/app-icon.ts'
 
@@ -124,6 +125,8 @@ test('icon files that are invalid, huge or empty inside are refused', async () =
     // A header alone, or images without any PNG.
     [icns(), /ICNS has no PNG image/],
     [icns(['ic04', Buffer.from('ARGB0000')]), /ICNS has no PNG image/],
+    // A zero-length element would never advance the reader.
+    [Buffer.from('icns\0\0\0\x10ic07\0\0\0\0', 'latin1'), /ICNS has no PNG/],
     [icns(['ic10', pngHeader(5000, 5000)]), /up to 4096 by 4096/],
     // An element claiming more bytes than the file has.
     [
@@ -195,6 +198,39 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
     [svg('<animate attributeName="fill"/>'), outside],
     [svg('<rect onload="alert(1)"/>'), outside],
     [svg('<rect onclick="x"/>'), outside],
+    // Comments are not stripped, so nothing can hide behind or inside one.
+    [svg('<style>\\/*{} rect{fill:url(http://h/x.svg#a)} */</style>'), outside],
+    [
+      svg(
+        '<style>a{x:"/*"} @font-face{src:url(http://h/f.woff)} b{y:"*/"}</style>',
+      ),
+      outside,
+    ],
+    [svg('<rect style="x:\\/*;fill:url(http://h/z#a);*/"/>'), outside],
+    [
+      svg(
+        "<rect style=\"x:'/*';fill:image-set('http://h/q.png' 1x);y:'*/'\"/>",
+      ),
+      outside,
+    ],
+    [svg('<style><![CDATA[@import "a.css";]]></style>'), outside],
+    [svg('<image href="data:image/svg+xml;base64,PHN2Zy8+"/>'), outside],
+    [svg('<rect xml:base="https://example.com/"/>'), outside],
+    [svg('<rect foo:href="#a"/>'), outside],
+    [svg('<text>&#xD800;</text>'), /not valid XML/],
+    [
+      svg(
+        '<g/>',
+        Array.from({ length: 32 }, (_, n) => ` xmlns:n${n}="urn:n${n}"`).join(
+          '',
+        ),
+      ),
+      outside,
+    ],
+    [
+      Buffer.concat([svg('<!--'), Buffer.alloc(MAX_SVG_BYTES)]),
+      /SVG smaller than 1 MB/,
+    ],
     [svg('<rect style="fill: url\\28 https://example.com/g)"/>'), outside],
     [svg('<rect fill="url&#40;https://example.com/g)"/>'), outside],
     [svg('<rect z:href="#a"/>', ' xmlns:z="urn:other"'), outside],
@@ -257,6 +293,34 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
       error,
       new TextDecoder().decode(bytes),
     )
+})
+
+test('SVG checks stay linear in the input', { timeout: 20000 }, () => {
+  // Namespace scopes are copied only where an element declares one.
+  const RealMap = globalThis.Map
+  let copied = 0
+  globalThis.Map = class extends RealMap {
+    constructor(entries) {
+      super(entries)
+      if (entries) copied += this.size
+    }
+  }
+  try {
+    readAppIcon(
+      svg(
+        '<g>'.repeat(4000) + '</g>'.repeat(4000),
+        Array.from({ length: 31 }, (_, n) => ` xmlns:n${n}="urn:n${n}"`).join(
+          '',
+        ),
+      ),
+    )
+  } finally {
+    globalThis.Map = RealMap
+  }
+  assert.ok(copied <= 32, `${copied} namespace entries copied`)
+  // A megabyte of unclosed comment openers took minutes with a comment strip.
+  const style = '/* '.repeat((MAX_SVG_BYTES - 200) / 3)
+  assert.equal(readAppIcon(svg(`<style>${style}</style>`)).format, 'svg')
 })
 
 test('each platform offers only the formats and modes it can honour', () => {

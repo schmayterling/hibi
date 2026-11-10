@@ -1961,6 +1961,7 @@
   "96c5ae0b5065": "The bar returns when you pause or move your pointer to the top.",
   "72498ff535eb": "The blocked request was not sent. Run the command again and allow it to look up this word.",
   "8a4ff1954358": "The cached addon revocation list is too large.",
+  "dd78e6f543df": "The command palette could not load. Try again.",
   "2ea18168d79b": "The command target is no longer available.",
   "32c1f3399caa": "The content is encrypted. Protected sites use hash-based links.",
   "d2cb42ff7704": "The default shortcut for the {value1} command is not available on every platform. Choose a supported key combination that Hibi does not reserve.",

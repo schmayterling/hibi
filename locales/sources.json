@@ -1119,14 +1119,14 @@
     "src/ui/DialogProvider.tsx"
   ],
   "8be57fbed5f6": [
-    "src/renderer/src/CommandPalette.tsx"
+    "src/renderer/src/PaletteFrame.tsx"
   ],
   "a3e654d430b1": [
     "src/renderer/src/addon-views.ts",
     "src/renderer/src/addons.ts"
   ],
   "5d3b18dbef3a": [
-    "src/renderer/src/CommandPalette.tsx"
+    "src/renderer/src/PaletteFrame.tsx"
   ],
   "c8df66c5fe3f": [
     "src/ui/DialogProvider.tsx"
@@ -1218,7 +1218,7 @@
   ],
   "0347f794d69c": [
     "src/main/index.ts",
-    "src/renderer/src/CommandPalette.tsx",
+    "src/renderer/src/PaletteFrame.tsx",
     "src/shared/hotkeys.ts"
   ],
   "ecf83f59ca6c": [
@@ -5381,10 +5381,10 @@
     "src/addons/documentation/ExportDialog.tsx"
   ],
   "00ff7398c308": [
-    "src/renderer/src/CommandPalette.tsx"
+    "src/renderer/src/PaletteFrame.tsx"
   ],
   "baad3d0583e1": [
-    "src/renderer/src/CommandPalette.tsx"
+    "src/renderer/src/PaletteFrame.tsx"
   ],
   "ea582e69cce7": [
     "src/site/main.tsx"
@@ -6161,6 +6161,9 @@
   ],
   "8a4ff1954358": [
     "src/main/addon-trust.ts"
+  ],
+  "dd78e6f543df": [
+    "src/renderer/src/main.tsx"
   ],
   "2ea18168d79b": [
     "src/renderer/src/addons.ts"

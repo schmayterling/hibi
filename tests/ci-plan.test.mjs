@@ -370,6 +370,7 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
   write('.gitignore', 'out/\n.cache/\n')
   write('src/app.ts', 'export const version = 1\n')
   write('scripts/tool.mjs', '// a script the app build runs\n'.repeat(4))
+  write('tests/file-limit.mjs', '')
   write(
     'tests/one.test.mjs',
     "import test from 'node:test'\ntest('one', () => {})\n",
@@ -408,6 +409,7 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
       stdio: 'pipe',
       env: {
         ...process.env,
+        NODE_TEST_CONTEXT: undefined,
         CALLS: calls,
         CI_BASE: base,
         CI_CLEAN: '',
@@ -584,5 +586,155 @@ test('a red in any group leaves the others to run, fails the check, and names ev
   assert.match(
     readFileSync(summary, 'utf8'),
     /### 1 failing tests\n\n- app `tests\/app\.test\.mjs:\d+` app: red\n/,
+  )
+})
+
+test('a group that fails to start or report in full is a red of its own, and the rest still run', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-faults-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const ran = join(root, 'ran')
+  const stub = join(root, 'npm.cjs')
+  const faults = join(root, 'faults.mjs')
+  writeFileSync(stub, '')
+  // Stands in for what the machine can do to the unit group's run or report.
+  writeFileSync(
+    faults,
+    `import process from 'node:child_process'
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const spawnSync = process.spawnSync
+process.spawnSync = (command, args, options) => {
+  const fault = globalThis.process.env.FAULT
+  if (!args.includes('tests/unit.test.mjs')) return spawnSync(command, args, options)
+  if (fault === 'spawn') return { error: new Error('spawnSync ENOMEM'), status: null, signal: null }
+  if (fault === 'throw') throw new Error('EPERM, operation not permitted')
+  const result = spawnSync(command, args, options)
+  const report = args.find((arg) => arg.startsWith('--test-reporter-destination=') && !arg.endsWith('=stdout')).slice(28)
+  if (fault === 'missing') rmSync(report)
+  if (fault === 'torn') appendFileSync(report, '{"name":')
+  if (fault === 'cut') writeFileSync(report, '')
+  if (fault === 'null') writeFileSync(report, 'null\\n')
+  // Loses the failure line, keeps the count that names it.
+  if (fault === 'dropped') writeFileSync(report, readFileSync(report, 'utf8').split('\\n').slice(1).join('\\n'))
+  if (fault === 'killed') return { ...result, status: null, signal: 'SIGTERM' }
+  return result
+}
+syncBuiltinESMExports()
+`,
+  )
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    'tests/electron.mjs': "export const later = () => import('playwright')",
+    'tests/unit.test.mjs': `import { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('unit', () => {\n  appendFileSync(process.env.RAN, 'unit ')\n  if (process.env.RED) throw new Error('red')\n})\ntest.todo('later', () => {\n  throw new Error('not yet')\n})\n`,
+    'tests/app.test.mjs': `import './electron.mjs'\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('app', () => appendFileSync(process.env.RAN, 'app '))\n`,
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const record = join(repo, '.cache/ci/success.json')
+  const check = (fault, red = '') => {
+    writeFileSync(ran, '')
+    rmSync(record, { force: true })
+    const { status, stdout } = spawnSync(
+      process.execPath,
+      ['--import', faults, resolve('scripts/ci.mjs')],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: {
+          ...env,
+          FAULT: fault,
+          RED: red,
+          RAN: ran,
+          CI_BASE: '',
+          CI_CLEAN: '',
+          CI_FULL: 'true',
+          CI_SHARD: '0/1',
+          CI_WORKERS: '1',
+          GITHUB_ACTIONS: '',
+          GITHUB_OUTPUT: '',
+          GITHUB_STEP_SUMMARY: '',
+          npm_execpath: stub,
+        },
+      },
+    )
+    return {
+      status,
+      ran: readFileSync(ran, 'utf8').trim().split(' ').sort(),
+      recorded: existsSync(record),
+      reds: stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    }
+  }
+  // A todo that throws is no red.
+  const { reds: green, ...clean } = check('')
+  assert.deepEqual(clean, { status: 0, ran: ['app', 'unit'], recorded: true })
+  assert.doesNotMatch(green, /failing tests/)
+  const line = /tests\/unit\.test\.mjs:\d+/
+  const cases = {
+    spawn: [
+      ['app'],
+      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: spawnSync ENOMEM; its report did not finish; 1 test files$/,
+    ],
+    throw: [
+      ['app'],
+      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: EPERM, operation not permitted; its report did not finish; 1 test files$/,
+    ],
+    null: [
+      ['app', 'unit'],
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+    ],
+    missing: [
+      ['app', 'unit'],
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 test files$/,
+    ],
+    cut: [
+      ['app', 'unit'],
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 test files$/,
+    ],
+  }
+  for (const [fault, [ranGroups, reds]] of Object.entries(cases)) {
+    const { reds: listed, ...result } = check(fault)
+    assert.deepEqual(
+      result,
+      { status: 1, ran: ranGroups, recorded: false },
+      fault,
+    )
+    assert.match(listed, reds, fault)
+  }
+  // With a real red, the records read before the fault are kept beside it.
+  const torn = check('torn', 'red')
+  assert.equal(torn.status, 1)
+  assert.deepEqual(torn.ran, ['app', 'unit'])
+  assert.match(
+    torn.reds,
+    new RegExp(
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: 1 unreadable report lines; 1 test files$`,
+    ),
+  )
+  const dropped = check('dropped', 'red')
+  assert.equal(dropped.status, 1)
+  assert.match(
+    dropped.reds,
+    /^ci: 1 failing tests\n {2}unit {4}exited 1 with no failing test reported: its report counted 1 failures but held 0; 1 test files$/,
+  )
+  const killed = check('killed', 'red')
+  assert.equal(killed.status, 1)
+  assert.deepEqual(killed.ran, ['app', 'unit'])
+  assert.match(
+    killed.reds,
+    new RegExp(
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: killed by SIGTERM; 1 test files$`,
+    ),
   )
 })

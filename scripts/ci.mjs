@@ -364,45 +364,76 @@ export function runCI({ dev = false } = {}) {
     npm('run', 'build:app')
   const failuresFile = join(directory, 'failures.jsonl')
   // TAP prints each failure's details immediately; spec defers them to the end.
+  // A group that can't start or report in full is a red of its own, green exit
+  // or not, and the groups after it still run.
   const runTests = (batch, tests, concurrency) => {
     if (!tests.length) return []
-    rmSync(failuresFile, { force: true })
-    const result = spawnSync(
-      process.execPath,
-      [
-        '--import',
-        './tests/file-limit.mjs',
-        '--test',
-        '--test-reporter=tap',
-        '--test-reporter-destination=stdout',
-        `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
-        `--test-reporter-destination=${failuresFile}`,
-        `--test-concurrency=${concurrency}`,
-        ...tests,
-      ],
-      { stdio: 'inherit', env: process.env },
-    )
-    if (result.error) throw result.error
-    if (result.status === 0) return []
-    const failed = existsSync(failuresFile)
-      ? readFileSync(failuresFile, 'utf8')
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => JSON.parse(line))
-      : []
-    if (!failed.length)
-      return [
-        {
-          batch,
-          name: `exited ${result.status ?? result.signal} with no failing test reported`,
-          error: `${tests.length} test files`,
-        },
-      ]
-    return failed.map(({ file, ...failure }) => ({
-      batch,
-      ...failure,
-      file: file && relative(root, file).replaceAll('\\', '/'),
-    }))
+    let result
+    try {
+      rmSync(failuresFile, { force: true })
+      result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          './tests/file-limit.mjs',
+          '--test',
+          '--test-reporter=tap',
+          '--test-reporter-destination=stdout',
+          `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
+          `--test-reporter-destination=${failuresFile}`,
+          `--test-concurrency=${concurrency}`,
+          ...tests,
+        ],
+        { stdio: 'inherit', env: process.env },
+      )
+    } catch (error) {
+      result = { error }
+    }
+    let lines = []
+    try {
+      lines = readFileSync(failuresFile, 'utf8').split('\n').filter(Boolean)
+    } catch {
+      /* A missing report didn't finish, as below. */
+    }
+    const records = lines.flatMap((line) => {
+      try {
+        const record = JSON.parse(line)
+        return record && typeof record === 'object' ? [record] : []
+      } catch {
+        return []
+      }
+    })
+    const done = records.find((record) => record.done === true)
+    const failed = records
+      .filter((record) => record !== done && typeof record.name === 'string')
+      .map(({ file, ...failure }) => ({
+        batch,
+        ...failure,
+        file:
+          typeof file === 'string'
+            ? relative(root, file).replaceAll('\\', '/')
+            : undefined,
+      }))
+    const problems = [
+      result.error?.message,
+      result.signal && `killed by ${result.signal}`,
+      !done && 'its report did not finish',
+      lines.length > records.length &&
+        `${lines.length - records.length} unreadable report lines`,
+      done &&
+        done.failures !== failed.length &&
+        `its report counted ${done.failures} failures but held ${failed.length}`,
+    ].filter(Boolean)
+    if (problems.length || (result.status !== 0 && !failed.length))
+      failed.push({
+        batch,
+        name:
+          failed.length || result.status === 0
+            ? 'did not finish'
+            : `exited ${result.status ?? result.signal ?? 'early'} with no failing test reported`,
+        error: [...problems, `${tests.length} test files`].join('; '),
+      })
+    return failed
   }
   // A red in one group must not hide the reds of the groups after it.
   const failures = [

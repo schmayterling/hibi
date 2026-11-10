@@ -303,6 +303,8 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
         CI_CLEAN: '',
         CI_FULL: '',
         CI_SHARD: '0/1',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
         npm_execpath: stub,
       },
     })
@@ -411,6 +413,8 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
         CI_CLEAN: '',
         CI_FULL: '',
         CI_SHARD: '0/1',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
         npm_execpath: stub,
       },
     })

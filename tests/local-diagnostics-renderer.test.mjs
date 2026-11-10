@@ -37,7 +37,7 @@ test('both renderer profiles preserve native error propagation, safe original lo
   })
   await writeFile(
     join(root, 'index.html'),
-    '<!doctype html><body><script src="harness.js"></script></body>',
+    '<!doctype html><meta charset="utf-8"><body><script src="harness.js"></script></body>',
   )
   await writeFile(
     join(root, 'worker.js'),

@@ -249,7 +249,10 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
   write('tests/one.test.mjs', testFile('hosted'))
   write('tests/dev/two.test.mjs', testFile('dev'))
   write('tests/dev/fixtures/held.mjs', '')
-  write('tests/spawns.test.mjs', "import 'node:child_process'\n")
+  write(
+    'tests/spawns.test.mjs',
+    "import 'node:child_process'\nimport test from 'node:test'\ntest('spawns', () => {})\n",
+  )
   git('init', '-q')
   git('config', 'user.name', 'ci')
   git('config', 'user.email', 'ci@example.com')
@@ -369,7 +372,11 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
   }
   write('.gitignore', 'out/\n.cache/\n')
   write('src/app.ts', 'export const version = 1\n')
-  write('scripts/tool.mjs', '// a script the app build runs\n'.repeat(4))
+  // Runs a test once it moves to tests/.
+  write(
+    'scripts/tool.mjs',
+    `${'// a script the app build runs\n'.repeat(4)}import test from 'node:test'\ntest('tool', () => {})\n`,
+  )
   write('tests/file-limit.mjs', '')
   write(
     'tests/one.test.mjs',
@@ -626,6 +633,17 @@ process.spawnSync = (command, args, options) => {
   // Loses the failure line, keeps the count that names it.
   if (fault === 'dropped') writeFileSync(report, readFileSync(report, 'utf8').split('\\n').slice(1).join('\\n'))
   if (fault === 'killed') return { ...result, status: null, signal: 'SIGTERM' }
+  if (!['typed', 'twice', 'unknown', 'files', 'footer', 'key', 'error'].includes(fault)) return result
+  const lines = readFileSync(report, 'utf8').split('\\n').filter(Boolean)
+  const footer = JSON.parse(lines.at(-1))
+  const write = (...rest) => writeFileSync(report, [...lines.slice(0, -1), ...rest].map((line) => typeof line === 'string' ? line : JSON.stringify(line)).join('\\n') + '\\n')
+  if (fault === 'typed') write({ ...footer, failures: { toString: null } })
+  if (fault === 'twice') write(lines.at(-1), ...lines)
+  if (fault === 'unknown') write(lines.at(-1), { unexpected: true })
+  if (fault === 'files') write({ ...footer, files: 0 })
+  if (fault === 'footer') write({ ...footer, extra: 1 })
+  if (fault === 'key') write({ name: 'x', error: 'e', extra: 1 }, { ...footer, failures: 1 })
+  if (fault === 'error') write({ name: 'x', error: 1 }, { ...footer, failures: 1 })
   return result
 }
 syncBuiltinESMExports()
@@ -635,7 +653,7 @@ syncBuiltinESMExports()
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
     'tests/electron.mjs': "export const later = () => import('playwright')",
-    'tests/unit.test.mjs': `import { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('unit', () => {\n  appendFileSync(process.env.RAN, 'unit ')\n  if (process.env.RED) throw new Error('red')\n})\ntest.todo('later', () => {\n  throw new Error('not yet')\n})\n`,
+    'tests/unit.test.mjs': `import { appendFileSync } from 'node:fs'\nimport test from 'node:test'\nif (process.env.SHAPE !== 'empty') (process.env.SHAPE === 'skip' ? test.skip : test)('unit', () => {\n  appendFileSync(process.env.RAN, 'unit ')\n  if (process.env.RED) throw new Error('red')\n})\nif (process.env.SHAPE !== 'empty') test.todo('later', () => {\n  throw new Error('not yet')\n})\n`,
     'tests/app.test.mjs': `import './electron.mjs'\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('app', () => appendFileSync(process.env.RAN, 'app '))\n`,
   }
   for (const [file, source] of Object.entries(files)) {
@@ -651,7 +669,7 @@ syncBuiltinESMExports()
   git('commit', '-qm', 'first')
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const record = join(repo, '.cache/ci/success.json')
-  const check = (fault, red = '') => {
+  const check = (fault, red = '', shape = '') => {
     writeFileSync(ran, '')
     rmSync(record, { force: true })
     const { status, stdout } = spawnSync(
@@ -663,6 +681,7 @@ syncBuiltinESMExports()
         env: {
           ...env,
           FAULT: fault,
+          SHAPE: shape,
           RED: red,
           RAN: ran,
           CI_BASE: '',
@@ -727,9 +746,61 @@ syncBuiltinESMExports()
   assert.match(
     torn.reds,
     new RegExp(
-      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: 1 unreadable report lines; 1 test files$`,
+      `^ci: 2 failing tests\\n {2}unit {2}${line.source} {2}unit: red\\n {2}unit {4}did not finish: its report did not finish; 2 unreadable report lines; 1 test files$`,
     ),
   )
+  // A group whose files skipped every test or registered none proved nothing,
+  // and a report must be read exactly as the reporter wrote it.
+  for (const [fault, shape, reds] of [
+    [
+      '',
+      'skip',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: ran no tests; 1 test files$/,
+    ],
+    [
+      '',
+      'empty',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: ran no tests; 1 test files$/,
+    ],
+    [
+      'typed',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+    ],
+    [
+      'twice',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: 1 unreadable report lines; 1 test files$/,
+    ],
+    [
+      'unknown',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 2 unreadable report lines; 1 test files$/,
+    ],
+    [
+      'files',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: heard from 0 of its 1 files; 1 test files$/,
+    ],
+    [
+      'footer',
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: its report did not finish; 1 unreadable report lines; 1 test files$/,
+    ],
+    ...['key', 'error'].map((fault) => [
+      fault,
+      '',
+      /^ci: 1 failing tests\n {2}unit {4}did not finish: 1 unreadable report lines; its report counted 1 failures but held 0; 1 test files$/,
+    ]),
+  ]) {
+    const { reds: listed, ...result } = check(fault, '', shape)
+    assert.deepEqual(
+      { ...result, ran: result.ran.includes('app') },
+      { status: 1, ran: true, recorded: false },
+      fault || shape,
+    )
+    assert.match(listed, reds, fault || shape)
+  }
   const dropped = check('dropped', 'red')
   assert.equal(dropped.status, 1)
   assert.match(

@@ -396,49 +396,80 @@ export function runCI({ dev = false } = {}) {
     } catch (error) {
       result = { error }
     }
-    let lines = []
-    try {
-      lines = readFileSync(failuresFile, 'utf8').split('\n').filter(Boolean)
-    } catch {
-      /* A missing report didn't finish, as below. */
-    }
-    const records = lines.flatMap((line) => {
-      try {
-        const record = JSON.parse(line)
-        return record && typeof record === 'object' ? [record] : []
-      } catch {
-        return []
-      }
-    })
-    const done = records.find((record) => record.done === true)
-    const failed = records
-      .filter((record) => record !== done && typeof record.name === 'string')
-      .map(({ file, ...failure }) => ({
-        batch,
-        ...failure,
-        file:
-          typeof file === 'string'
-            ? relative(root, file).replaceAll('\\', '/')
-            : undefined,
-      }))
+    const failed = []
     const problems = [
-      result.error?.message,
+      result.error && String(result.error.message ?? result.error),
       result.signal && `killed by ${result.signal}`,
-      !done && 'its report did not finish',
-      lines.length > records.length &&
-        `${lines.length - records.length} unreadable report lines`,
-      done &&
-        done.failures !== failed.length &&
-        `its report counted ${done.failures} failures but held ${failed.length}`,
-    ].filter(Boolean)
-    if (problems.length || (result.status !== 0 && !failed.length))
+    ]
+    try {
+      let lines = []
+      try {
+        lines = readFileSync(failuresFile, 'utf8').split('\n').filter(Boolean)
+      } catch {
+        /* A missing report didn't finish, as below. */
+      }
+      const records = lines.map((line) => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return undefined
+        }
+      })
+      const count = (value) => Number.isInteger(value) && value >= 0
+      const keys = (record, allowed) =>
+        Object.keys(record).every((key) => allowed.includes(key))
+      const last = records.at(-1)
+      const done =
+        last?.done === true &&
+        keys(last, ['done', 'failures', 'ran', 'files']) &&
+        count(last.failures) &&
+        count(last.ran) &&
+        count(last.files)
+          ? last
+          : undefined
+      const body = done ? records.slice(0, -1) : records
+      for (const record of body)
+        if (
+          record &&
+          typeof record === 'object' &&
+          keys(record, ['name', 'file', 'line', 'error']) &&
+          typeof record.name === 'string' &&
+          typeof record.error === 'string' &&
+          ['string', 'undefined'].includes(typeof record.file) &&
+          (record.line === undefined || count(record.line))
+        )
+          failed.push({
+            batch,
+            ...record,
+            file:
+              record.file && relative(root, record.file).replaceAll('\\', '/'),
+          })
+      problems.push(
+        !done && 'its report did not finish',
+        body.length > failed.length &&
+          `${body.length - failed.length} unreadable report lines`,
+        done &&
+          done.failures !== failed.length &&
+          `its report counted ${done.failures} failures but held ${failed.length}`,
+        // A batch where every file skipped or registered nothing proves nothing.
+        done?.ran === 0 && 'ran no tests',
+        done &&
+          done.files < tests.length &&
+          `heard from ${done.files} of its ${tests.length} files`,
+      )
+    } catch (error) {
+      problems.push(`its report could not be read: ${error?.message}`)
+    }
+    if (problems.some(Boolean) || (result.status !== 0 && !failed.length))
       failed.push({
         batch,
         name:
           failed.length || result.status === 0
             ? 'did not finish'
             : `exited ${result.status ?? result.signal ?? 'early'} with no failing test reported`,
-        error: [...problems, `${tests.length} test files`].join('; '),
+        error: [...problems.filter(Boolean), `${tests.length} test files`].join(
+          '; ',
+        ),
       })
     return failed
   }

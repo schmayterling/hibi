@@ -302,6 +302,15 @@ test('SVG icons must be well-formed drawings that load nothing', async () => {
     )
 })
 
+test('the SVG size cap is the 256 KB its message names', () => {
+  // The other cases read the constant; this pins it to the message.
+  assert.equal(MAX_SVG_BYTES, 262144)
+  assert.throws(
+    () => readAppIcon(Buffer.concat([svg(''), Buffer.alloc(MAX_SVG_BYTES)])),
+    /Choose an SVG smaller than 256 KB/,
+  )
+})
+
 test('SVG checks stay linear in the input', { timeout: 20000 }, () => {
   // Namespace scopes are copied only where an element declares one.
   const RealMap = globalThis.Map

@@ -146,7 +146,7 @@ test('formatted selection previews stay bounded in 50 mib code and prose notes',
   })
   await writeFile(
     join(bundle, 'index.html'),
-    '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
   )
   server = createServer(async (request, response) => {
     try {

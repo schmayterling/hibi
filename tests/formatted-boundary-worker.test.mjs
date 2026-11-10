@@ -38,7 +38,7 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   })
   await writeFile(
     join(bundle, 'index.html'),
-    '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
   )
   server = createServer(async (request, response) => {
     try {

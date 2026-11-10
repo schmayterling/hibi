@@ -258,6 +258,32 @@ test('tab-separated task markers match the rendered task text and counts', () =>
   }
 })
 
+test('ordered boxes retain their spelling in loose and nested items', () => {
+  for (const [source, text] of [
+    ['1. [x]\tbuy milk\n\n2. next', '\n\n\n[x]\tbuy milk\n\nnext'],
+    [
+      '1. [ ] \tbuy milk\n\n   continuation',
+      '\n\n\n[ ] \tbuy milk\ncontinuation',
+    ],
+    ['1. first\n   1. [X]\tbuy milk', '\n\n\nfirst\n\n\n[X]\tbuy milk'],
+  ]) {
+    assert.equal(richText(source, defaultNoteSyntax), text, source)
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'ordered-boxes', revision: 0 }),
+      defaultNoteSyntax,
+    )
+    try {
+      const work = counter.read()
+      let step
+      do step = work.next()
+      while (!step.done)
+      assert.deepEqual(step.value, countText(text.slice(1)), source)
+    } finally {
+      counter.dispose()
+    }
+  }
+})
+
 test('indented code in list items stays literal instead of becoming a task', () => {
   for (const [source, characters] of [
     ['-     [ ] x', 7],
@@ -289,7 +315,8 @@ test('indented code in list items stays literal instead of becoming a task', () 
 
 test('list and definition projection counts stay explicit', () => {
   for (const [source, formatted] of [
-    ['1. e\n=', [1, 3]],
+    // CommonMark §5.2: lazy list text cannot become a setext heading.
+    ['1. e\n=', [1, 5]],
     ['1. 2.', [0, 3]],
     ['2.\n    e', [1, 3]],
     ['- [ ]\n ', [0, 2]],

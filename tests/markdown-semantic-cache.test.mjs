@@ -132,13 +132,17 @@ test('missing references and equal-value declaration replacements invalidate cac
       (row) => row.owner.kind === 'markdown:LinkReference',
     ).owner.slot,
     winner = declared.read(declarationCache, owners, declaration),
+    winnerOwner = winner.scope.resolve('ref').owner,
     replaced = declared.edit(0, 0, '[ref]: /same\n\n'),
     duplicate = declared.read(declarationCache, replaced, declaration)
   assert.equal(winner.tokens.filter((token) => token.type === 'def').length, 1)
   assert.equal(
     duplicate.tokens.filter((token) => token.type === 'def').length,
-    0,
+    1,
   )
+  // CommonMark §4.7: duplicate declarations stay invisible; the first wins.
+  assert.equal(duplicate.scope.resolve('ref').value.href, '/same')
+  assert.notEqual(duplicate.scope.resolve('ref').owner, winnerOwner)
   assert.notEqual(duplicate.tokens, winner.tokens)
   assert.equal(winner.scope.current(), false)
 })

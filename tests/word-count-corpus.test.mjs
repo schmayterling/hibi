@@ -5,6 +5,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { Marked } from 'marked'
+import { micromark } from 'micromark'
 import { countText } from '../src/addons/word-count/count.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
@@ -59,6 +61,44 @@ const digest = (text) =>
 const richText = (config, source) => frozen({ kind: 'text', config, source })
 const stateText = (config, body) =>
   frozen({ kind: 'state', config, digest: digest(body) })
+
+// Keep the recording unchanged. Marked #4145 applies CommonMark §6.2 rules
+// 9–10 to the whole delimiter run; #4165 rejects blank reference labels (§4.7).
+// Correct only those recorded spans, then compare every state's full count.
+const commonMarkChanges = [
+  {
+    states: ['30:5'],
+    from: '</div>\ns //example.test',
+    to: '</div>\n[ref\n]: ht\ns //example.test',
+  },
+  {
+    states: ['59:1'],
+    from: 'plain café',
+    to: '[re\nf]: https://example.test\nplain café',
+  },
+  {
+    states: Array.from({ length: 11 }, (_, index) => `28:${index + 3}`),
+    from: 'an*oft',
+    to: 'an**oft*',
+  },
+  {
+    states: [14, 15, 16, 17].map((step) => `46:${step}`),
+    from: 'an*ft',
+    to: 'an**ft*',
+  },
+]
+function corpusText(doc, step, recorded) {
+  const change = commonMarkChanges.find(({ states }) =>
+    states.includes(`${doc}:${step}`),
+  )
+  if (!change) return recorded
+  assert.equal(
+    recorded.split(change.from).length,
+    2,
+    `${doc}:${step}: changed recorded span`,
+  )
+  return recorded.replace(change.from, change.to)
+}
 
 const read = (counter) => {
   const work = counter.read()
@@ -121,7 +161,7 @@ function corpusResults() {
           syntax,
         )
         const body = bodyOf(state.source, syntax)
-        const text = stateText(index, body)
+        const text = corpusText(doc.doc, state.step, stateText(index, body))
         results.push({
           doc: doc.doc,
           step: state.step,
@@ -197,6 +237,29 @@ const richQuirks = [
     states: [],
   },
 ]
+
+test('schema corpus: CommonMark corrections retain invalid labels and intraword stars', () => {
+  for (const [source, visible] of [
+    ['[ref\n\n]: ht', '[ref\n]: ht'],
+    ['[re\n\nf]: https://example.test', '[re\nf]: https://example.test'],
+    ['an**ft*', 'an**ft*'],
+    ['one **bold** an**oft*', 'one bold an**oft*'],
+  ]) {
+    assert.equal(
+      new Marked({ gfm: false }).parse(source).trim(),
+      micromark(source),
+    )
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'spec', revision: 0 }),
+      countSyntax(corpus.configs[0]),
+    )
+    try {
+      assert.deepEqual(read(counter), countText(visible), source)
+    } finally {
+      counter.dispose()
+    }
+  }
+})
 
 test('schema corpus: paragraph boundary edits retain markdown ownership', () => {
   const midDuplicate = 'a\n\n[x]: /y\n\n[x]: /z\n\nb'

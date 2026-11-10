@@ -46,8 +46,17 @@ export function quoteReader(
   read: TokenizerExtension['tokenizer'],
   original = read,
 ) {
-  if (read === original || quoteReaders.has(original)) quoteReaders.add(read)
-  return read
+  if (read !== original && !quoteReaders.has(original)) return read
+  const guarded: typeof read = function (...args) {
+    const top = this.lexer.state.top
+    try {
+      return read.apply(this, args)
+    } finally {
+      this.lexer.state.top = top
+    }
+  }
+  quoteReaders.add(guarded)
+  return guarded
 }
 
 export function extendQuote(

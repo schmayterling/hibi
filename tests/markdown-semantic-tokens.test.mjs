@@ -85,8 +85,9 @@ test('semantic token reads preserve definition ownership and eager versus deferr
   assert.equal(
     tokens.filter((token) => token.type === 'def' && token.tag === 'early')
       .length,
-    1,
+    2,
   )
+  assert.equal(f.refs.lookup('early').href, '/first')
   assert.ok(reads.every((read) => read.scope.current()))
   const selected = new Set(
     reads.filter((read) => read.nonSpace).map((read) => read.region.owner.slot),

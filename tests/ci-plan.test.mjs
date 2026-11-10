@@ -469,6 +469,12 @@ test('test workers follow the machine and tests that share a machine resource ru
       "import './electron.mjs'; navigator.clipboard.readText()",
     'tests/stub.test.mjs': "import './electron.mjs'; const clipboardData = 1",
     'tests/unit.test.mjs': 'const unit = 1',
+    // Starts the app through a test script it runs by path.
+    'tests/gate.test.mjs':
+      "import { spawnSync } from 'node:child_process'\nspawnSync(process.execPath, ['--test', 'tests/fixtures/gate.test.js'])\nconst gone = 'tests/fixtures/gone.js'",
+    'tests/fixtures/gate.test.js': "import '../electron.mjs'",
+    // Names a script without running it.
+    'tests/named.test.mjs': "const script = 'tests/fixtures/gate.test.js'",
   }
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(root, file)), { recursive: true })
@@ -485,9 +491,11 @@ test('test workers follow the machine and tests that share a machine resource ru
     'tests/shortcut.test.mjs',
   ])
   assert.deepEqual(plan.appTests, [
+    'tests/gate.test.mjs',
     'tests/plain.test.mjs',
     'tests/stub.test.mjs',
   ])
+  assert.ok(plan.unitTests.includes('tests/named.test.mjs'))
 })
 
 test('a red in any group leaves the others to run, fails the check, and names every red', (t) => {

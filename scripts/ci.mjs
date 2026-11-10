@@ -164,6 +164,13 @@ export function planChecks(
           if (!resolved) dynamic = true
           return resolved ? [resolved] : []
         })
+      // A test script it hands another process by path is its code too: an app
+      // that fixture starts makes this an app test.
+      if (/['"](?:node:)?child_process['"]/.test(source))
+        for (const [, path] of source.matchAll(
+          /['"`](tests\/[^'"`\s]+\.[cm]?js)['"`]/g,
+        ))
+          if (files.has(path)) local.push(path)
       modules.set(file, {
         local,
         dynamic,

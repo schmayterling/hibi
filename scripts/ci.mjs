@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
-import { join, posix, resolve } from 'node:path'
+import { join, posix, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const git = (root, ...args) =>
@@ -164,6 +164,13 @@ export function planChecks(
           if (!resolved) dynamic = true
           return resolved ? [resolved] : []
         })
+      // A test script it hands another process by path is its code too: an app
+      // that fixture starts makes this an app test.
+      if (/['"](?:node:)?child_process['"]/.test(source))
+        for (const [, path] of source.matchAll(
+          /['"`](tests\/[^'"`\s]+\.[cm]?js)['"`]/g,
+        ))
+          if (files.has(path)) local.push(path)
       modules.set(file, {
         local,
         dynamic,
@@ -362,23 +369,115 @@ export function runCI({ dev = false } = {}) {
   }
   if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
     npm('run', 'build:app')
+  const failuresFile = join(directory, 'failures.jsonl')
   // TAP prints each failure's details immediately; spec defers them to the end.
-  const runTests = (tests, concurrency) => {
-    if (tests.length)
-      run([
-        '--import',
-        './tests/file-limit.mjs',
-        '--test',
-        '--test-reporter=tap',
-        `--test-concurrency=${concurrency}`,
-        ...tests,
-      ])
+  // A group that can't start or report in full is a red of its own, green exit
+  // or not, and the groups after it still run.
+  const runTests = (batch, tests, concurrency) => {
+    if (!tests.length) return []
+    let result
+    try {
+      rmSync(failuresFile, { force: true })
+      result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          './tests/file-limit.mjs',
+          '--test',
+          '--test-reporter=tap',
+          '--test-reporter-destination=stdout',
+          `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
+          `--test-reporter-destination=${failuresFile}`,
+          `--test-concurrency=${concurrency}`,
+          ...tests,
+        ],
+        { stdio: 'inherit', env: process.env },
+      )
+    } catch (error) {
+      result = { error }
+    }
+    const failed = []
+    const problems = [
+      result.error && String(result.error.message ?? result.error),
+      result.signal && `killed by ${result.signal}`,
+    ]
+    try {
+      let lines = []
+      try {
+        lines = readFileSync(failuresFile, 'utf8').split('\n').filter(Boolean)
+      } catch {
+        /* A missing report didn't finish, as below. */
+      }
+      const records = lines.map((line) => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return undefined
+        }
+      })
+      const count = (value) => Number.isInteger(value) && value >= 0
+      const keys = (record, allowed) =>
+        Object.keys(record).every((key) => allowed.includes(key))
+      const last = records.at(-1)
+      const done =
+        last?.done === true &&
+        keys(last, ['done', 'failures', 'ran', 'files']) &&
+        count(last.failures) &&
+        count(last.ran) &&
+        count(last.files)
+          ? last
+          : undefined
+      const body = done ? records.slice(0, -1) : records
+      for (const record of body)
+        if (
+          record &&
+          typeof record === 'object' &&
+          keys(record, ['name', 'file', 'line', 'error']) &&
+          typeof record.name === 'string' &&
+          typeof record.error === 'string' &&
+          ['string', 'undefined'].includes(typeof record.file) &&
+          (record.line === undefined || count(record.line))
+        )
+          failed.push({
+            batch,
+            ...record,
+            file:
+              record.file && relative(root, record.file).replaceAll('\\', '/'),
+          })
+      problems.push(
+        !done && 'its report did not finish',
+        body.length > failed.length &&
+          `${body.length - failed.length} unreadable report lines`,
+        done &&
+          done.failures !== failed.length &&
+          `its report counted ${done.failures} failures but held ${failed.length}`,
+        // A batch where every file skipped or registered nothing proves nothing.
+        done?.ran === 0 && 'ran no tests',
+        done &&
+          done.files < tests.length &&
+          `heard from ${done.files} of its ${tests.length} files`,
+      )
+    } catch (error) {
+      problems.push(`its report could not be read: ${error?.message}`)
+    }
+    if (problems.some(Boolean) || (result.status !== 0 && !failed.length))
+      failed.push({
+        batch,
+        name:
+          failed.length || result.status === 0
+            ? 'did not finish'
+            : `exited ${result.status ?? result.signal ?? 'early'} with no failing test reported`,
+        error: [...problems.filter(Boolean), `${tests.length} test files`].join(
+          '; ',
+        ),
+      })
+    return failed
   }
-  runTests(unitTests, availableParallelism())
-  // A red here must not hide the reds of the groups after it.
-  const failures = []
-  for (const [tests, concurrency] of [
+  // A red in one group must not hide the reds of the groups after it.
+  const failures = [
+    ['unit', unitTests, availableParallelism()],
     [
+      'node',
       selected.filter(
         (test) =>
           !unitTests.includes(test) &&
@@ -387,16 +486,49 @@ export function runCI({ dev = false } = {}) {
       ),
       workers.node,
     ],
-    [appTests, workers.apps],
-    [aloneTests, 1],
-  ]) {
-    try {
-      runTests(tests, concurrency)
-    } catch (error) {
-      failures.push(error)
+    ['app', appTests, workers.apps],
+    ['alone', aloneTests, 1],
+  ].flatMap(([batch, tests, concurrency]) =>
+    runTests(batch, tests, concurrency),
+  )
+  const where = ({ file, line }) =>
+    file ? `${file}${line ? `:${line}` : ''}` : ''
+  if (failures.length) {
+    console.log(`\nci: ${failures.length} failing tests`)
+    for (const failure of failures)
+      console.log(
+        `  ${failure.batch}  ${where(failure)}  ${failure.name}: ${failure.error}`,
+      )
+    // Annotations put each red on the run page; the log alone buries them.
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const encode = (text, property) => {
+        const data = String(text)
+          .replaceAll('%', '%25')
+          .replaceAll('\r', '%0D')
+          .replaceAll('\n', '%0A')
+        return property
+          ? data.replaceAll(':', '%3A').replaceAll(',', '%2C')
+          : data
+      }
+      for (const { batch, file, line, name, error } of failures)
+        console.log(
+          `::error ${file ? `file=${encode(file, true)},${line ? `line=${line},` : ''}` : ''}title=${encode(`${batch}: ${name}`, true)}::${encode(error)}`,
+        )
     }
   }
-  if (failures.length) throw failures[0]
+  if (process.env.GITHUB_STEP_SUMMARY)
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `## checks\n\n- mode: ${plan.full ? 'full' : 'incremental'}\n- base: ${baseline ?? 'cold cache'}\n- rebuilt app: ${plan.build}\n- test files: ${selected.length}/${plan.allTests.length}\n- shard: ${shard}\n${
+        failures.length
+          ? `\n### ${failures.length} failing tests\n\n${failures.map((failure) => `- ${failure.batch} \`${where(failure)}\` ${failure.name}: ${failure.error}\n`).join('')}`
+          : ''
+      }`,
+    )
+  if (failures.length)
+    throw new Error(
+      `check failed: ${failures.length} failing tests in ${[...new Set(failures.map(({ batch }) => batch))].join(', ')}`,
+    )
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (
@@ -409,11 +541,6 @@ export function runCI({ dev = false } = {}) {
     )
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, `build=${plan.build}\n`)
-  if (process.env.GITHUB_STEP_SUMMARY)
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `## checks\n\n- mode: ${plan.full ? 'full' : 'incremental'}\n- base: ${baseline ?? 'cold cache'}\n- rebuilt app: ${plan.build}\n- test files: ${selected.length}/${plan.allTests.length}\n- shard: ${shard}\n`,
-    )
 }
 
 if (

@@ -202,14 +202,39 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   await page.getByRole('button', { name: /^side-by-side$/i }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, markdown)
+  const end = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await source.press(
     process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
   )
+  // The source keeps its first line a scroll margin inside its top padding,
+  // so the preview aligns that line rather than reaching zero.
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop < 10,
+    (before) => document.querySelector('.rich-pane').scrollTop < before / 2,
+    end,
   )
+  // No mirror caret is drawn in the heading's hidden marker.
+  await page.waitForFunction(() => {
+    const caret = document
+      .querySelector('.source-pane .editor-cursor')
+      ?.getBoundingClientRect()
+    const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root
+      .view
+    const start = view?.coordsAtPos(0)
+    return (
+      caret?.height &&
+      start &&
+      Math.abs((start.top + start.bottom) / 2 - caret.top - caret.height / 2) <
+        3
+    )
+  })
+  const top = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await scroll('.source-pane .cm-scroller', 0.5)
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop > 100,
+    (top) => document.querySelector('.rich-pane').scrollTop > top + 100,
+    top,
   )
 })

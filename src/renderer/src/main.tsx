@@ -73,7 +73,7 @@ import { addonRegistry } from './addon-registry'
 import { addonViews } from './addon-views'
 import { addons, useAddons, useEditorAddons } from './addons'
 import { useAutosave } from './autosave'
-import { CommandPalette, type PaletteCommand } from './CommandPalette'
+import type { PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import {
   documentFormats,
@@ -151,6 +151,8 @@ const History = lazy(() =>
     default: module.History,
   })),
 )
+let paletteModule: Promise<typeof import('./CommandPalette')> | undefined
+const loadPalette = () => (paletteModule ??= import('./CommandPalette'))
 const BacklinksSidebar = lazy(() =>
   import('./BacklinksSidebar').then((module) => ({
     default: module.BacklinksSidebar,
@@ -711,6 +713,23 @@ function App() {
     history.navigating = false
   }, [settingsOpen, settingsCategory])
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [CommandPalette, setCommandPalette] =
+    useState<typeof import('./CommandPalette').CommandPalette>()
+  useEffect(() => {
+    if (CommandPalette) return
+    let active = true
+    const load = () =>
+      void loadPalette().then((module) => {
+        if (active) setCommandPalette(() => module.CommandPalette)
+      })
+    // Off the startup path, but loaded once the window is idle so keys typed
+    // right after the shortcut reach the palette's search field.
+    const idle = paletteOpen ? load() : requestIdleCallback(load)
+    return () => {
+      active = false
+      if (idle) cancelIdleCallback(idle)
+    }
+  }, [paletteOpen, CommandPalette])
   const [introductionOpen, setIntroductionOpen] = useState<
     'automatic' | 'manual' | null
   >(null)
@@ -3280,7 +3299,7 @@ function App() {
         availableViews={availableViews}
         onMode={(view) => addonHost.app.runAction(view)}
       />
-      {paletteOpen && (
+      {paletteOpen && CommandPalette && (
         <CommandPalette
           platform={info?.platform ?? 'darwin'}
           commands={paletteCommands}

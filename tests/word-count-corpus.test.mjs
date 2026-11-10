@@ -1,3 +1,4 @@
+// ci: timeout 2400 s (its native test allows 30 minutes; took up to 533 s hosted)
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'

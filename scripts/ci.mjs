@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -37,6 +37,10 @@ const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
 // shortcuts. `// ci: alone (why)` marks any other test that a neighbour can break.
 const alone =
   /^\/\/ ci: alone\b|\bclipboard\.(?:read|write|clear|has)|\bnavigator\.clipboard\b|\bglobalShortcut\b|\bwebContents\.(?:paste|copy|cut)\(|['"`](?:Control|ControlOrMeta|Meta)\+[cvx]['"`]/m
+// Seconds a test file may run unless it asks for more. The slowest files took
+// 261 s on a busy Mac and up to 176 s on hosted runners (11/11): 900 s leaves
+// slower machines room and still names a hang well before a job times out.
+const fileTimeout = 900
 
 // Hosted runners with 4 cores have no room for a second app: at 2 workers tests ran
 // 1.5 times slower at the median, and reds went up. Node test files share better.
@@ -246,7 +250,7 @@ export function shardTests(selected, all, index, total) {
   return selected.filter((test) => assigned.has(test))
 }
 
-export function runCI({ dev = false } = {}) {
+export async function runCI({ dev = false } = {}) {
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
   // Each answers for different tests, so neither can stand in for the other.
@@ -373,26 +377,106 @@ export function runCI({ dev = false } = {}) {
   // TAP prints each failure's details immediately; spec defers them to the end.
   // A group that can't start or report in full is a red of its own, green exit
   // or not, and the groups after it still run.
-  const runTests = (batch, tests, concurrency) => {
+  // node:test can't stop a file stuck in a synchronous loop, so the run does: a
+  // file still running past its time is named, the run stops, and the files it
+  // hadn't finished start again without it. A file can ask for longer with
+  // `// ci: timeout <seconds> s (why)`.
+  const timeout = (test) =>
+    Number(
+      /^\/\/ ci: timeout (\d+) s\b/m.exec(
+        readFileSync(join(root, test), 'utf8'),
+      )?.[1] ?? fileTimeout,
+    )
+  const readReport = () => {
+    try {
+      return readFileSync(failuresFile, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return undefined
+          }
+        })
+    } catch {
+      return []
+    }
+  }
+  const runTests = async (batch, tests, concurrency) => {
     if (!tests.length) return []
+    const limits = new Map(
+      tests.map((test) => [resolve(root, test), timeout(test)]),
+    )
+    const running = new Map()
+    const overdue = []
     let result
     try {
       rmSync(failuresFile, { force: true })
-      result = spawnSync(
-        process.execPath,
-        [
-          '--import',
-          './tests/file-limit.mjs',
-          '--test',
-          '--test-reporter=tap',
-          '--test-reporter-destination=stdout',
-          `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
-          `--test-reporter-destination=${failuresFile}`,
-          `--test-concurrency=${concurrency}`,
-          ...tests,
-        ],
-        { stdio: 'inherit', env: process.env },
-      )
+      result = await new Promise((settle) => {
+        const child = spawn(
+          process.execPath,
+          [
+            '--import',
+            './tests/file-limit.mjs',
+            '--test',
+            '--test-reporter=tap',
+            '--test-reporter-destination=stdout',
+            `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
+            `--test-reporter-destination=${failuresFile}`,
+            `--test-concurrency=${concurrency}`,
+            ...tests,
+          ],
+          // Its own process group, so stopping it stops every file it started.
+          {
+            stdio: 'inherit',
+            env: process.env,
+            detached: process.platform !== 'win32',
+          },
+        )
+        const stop = () => {
+          try {
+            if (process.platform === 'win32')
+              spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
+            else process.kill(-child.pid, 'SIGKILL')
+          } catch {
+            /* It already exited. */
+          }
+        }
+        // An interrupted check takes its tests with it.
+        const interrupt = (signal) => {
+          stop()
+          process.kill(process.pid, signal)
+        }
+        process.once('SIGINT', interrupt)
+        process.once('SIGTERM', interrupt)
+        const watch = setInterval(() => {
+          for (const record of readReport()) {
+            if (
+              typeof record?.started === 'string' &&
+              !running.has(record.started)
+            )
+              running.set(record.started, Date.now())
+            if (typeof record?.finished === 'string')
+              running.delete(record.finished)
+          }
+          for (const [test, since] of running)
+            if (Date.now() - since > (limits.get(test) ?? fileTimeout) * 1000)
+              overdue.push(test)
+          if (overdue.length) {
+            clearInterval(watch)
+            stop()
+          }
+        }, 1000)
+        const done = (outcome) => {
+          clearInterval(watch)
+          process.off('SIGINT', interrupt)
+          process.off('SIGTERM', interrupt)
+          settle(outcome)
+        }
+        child.once('error', (error) => done({ error }))
+        child.once('close', (status, signal) => done({ status, signal }))
+      })
     } catch (error) {
       result = { error }
     }
@@ -401,20 +485,8 @@ export function runCI({ dev = false } = {}) {
       result.error && String(result.error.message ?? result.error),
       result.signal && `killed by ${result.signal}`,
     ]
+    const records = readReport()
     try {
-      let lines = []
-      try {
-        lines = readFileSync(failuresFile, 'utf8').split('\n').filter(Boolean)
-      } catch {
-        /* A missing report didn't finish, as below. */
-      }
-      const records = lines.map((line) => {
-        try {
-          return JSON.parse(line)
-        } catch {
-          return undefined
-        }
-      })
       const count = (value) => Number.isInteger(value) && value >= 0
       const keys = (record, allowed) =>
         Object.keys(record).every((key) => allowed.includes(key))
@@ -427,7 +499,14 @@ export function runCI({ dev = false } = {}) {
         count(last.files)
           ? last
           : undefined
-      const body = done ? records.slice(0, -1) : records
+      const progress = (record) =>
+        record &&
+        typeof record === 'object' &&
+        Object.keys(record).length === 1 &&
+        typeof (record.started ?? record.finished) === 'string'
+      const body = (done ? records.slice(0, -1) : records).filter(
+        (record) => !progress(record),
+      )
       for (const record of body)
         if (
           record &&
@@ -460,6 +539,31 @@ export function runCI({ dev = false } = {}) {
     } catch (error) {
       problems.push(`its report could not be read: ${error?.message}`)
     }
+    if (overdue.length) {
+      const name = (test) => relative(root, test).replaceAll('\\', '/')
+      const finished = new Set(records.map((record) => record?.finished))
+      const rest = tests.filter(
+        (test) =>
+          !finished.has(resolve(root, test)) &&
+          !overdue.includes(resolve(root, test)),
+      )
+      const others = [...running.keys()]
+        .filter((test) => !overdue.includes(test))
+        .map(name)
+      return [
+        // Files stopped beside it run again, so their partial results go.
+        ...failed.filter((failure) => !rest.includes(failure.file)),
+        ...overdue.map((test) => ({
+          batch,
+          name: `did not finish within ${limits.get(test)} s`,
+          file: name(test),
+          error: others.length
+            ? `stopped, with ${others.join(', ')} still running`
+            : 'stopped',
+        })),
+        ...(await runTests(batch, rest, concurrency)),
+      ]
+    }
     if (problems.some(Boolean) || (result.status !== 0 && !failed.length))
       failed.push({
         batch,
@@ -474,7 +578,8 @@ export function runCI({ dev = false } = {}) {
     return failed
   }
   // A red in one group must not hide the reds of the groups after it.
-  const failures = [
+  const failures = []
+  for (const [batch, tests, concurrency] of [
     ['unit', unitTests, availableParallelism()],
     [
       'node',
@@ -488,9 +593,8 @@ export function runCI({ dev = false } = {}) {
     ],
     ['app', appTests, workers.apps],
     ['alone', aloneTests, 1],
-  ].flatMap(([batch, tests, concurrency]) =>
-    runTests(batch, tests, concurrency),
-  )
+  ])
+    failures.push(...(await runTests(batch, tests, concurrency)))
   const where = ({ file, line }) =>
     file ? `${file}${line ? `:${line}` : ''}` : ''
   if (failures.length) {

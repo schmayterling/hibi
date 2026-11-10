@@ -619,22 +619,30 @@ test('a group that fails to start or report in full is a red of its own, and the
     `import process from 'node:child_process'
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
-const spawnSync = process.spawnSync
-process.spawnSync = (command, args, options) => {
+const spawn = process.spawn
+// Changes the report as the run ends, before the check hears it ended.
+const edit = (child, change) => {
+  const emit = child.emit.bind(child)
+  child.emit = (event, ...rest) => emit(event, ...(event === 'close' ? change(...rest) : rest))
+  return child
+}
+process.spawn = (command, args, options) => {
   const fault = globalThis.process.env.FAULT
-  if (!args.includes('tests/unit.test.mjs')) return spawnSync(command, args, options)
-  if (fault === 'spawn') return { error: new Error('spawnSync ENOMEM'), status: null, signal: null }
+  if (!args.includes('tests/unit.test.mjs')) return spawn(command, args, options)
+  if (fault === 'spawn') return spawn('/nonexistent/ci-fault', [], options)
   if (fault === 'throw') throw new Error('EPERM, operation not permitted')
-  const result = spawnSync(command, args, options)
   const report = args.find((arg) => arg.startsWith('--test-reporter-destination=') && !arg.endsWith('=stdout')).slice(28)
+  return edit(spawn(command, args, options), (status, signal) => {
+    const result = { status, signal }
+    const done = (outcome = result) => [outcome.status, outcome.signal]
   if (fault === 'missing') rmSync(report)
   if (fault === 'torn') appendFileSync(report, '{"name":')
   if (fault === 'cut') writeFileSync(report, '')
   if (fault === 'null') writeFileSync(report, 'null\\n')
   // Loses the failure line, keeps the count that names it.
-  if (fault === 'dropped') writeFileSync(report, readFileSync(report, 'utf8').split('\\n').slice(1).join('\\n'))
-  if (fault === 'killed') return { ...result, status: null, signal: 'SIGTERM' }
-  if (!['typed', 'twice', 'unknown', 'files', 'footer', 'key', 'error'].includes(fault)) return result
+  if (fault === 'dropped') writeFileSync(report, readFileSync(report, 'utf8').split('\\n').filter((line) => !line.includes('"name"')).join('\\n'))
+  if (fault === 'killed') return done({ status: null, signal: 'SIGTERM' })
+  if (!['typed', 'twice', 'unknown', 'files', 'footer', 'key', 'error'].includes(fault)) return done()
   const lines = readFileSync(report, 'utf8').split('\\n').filter(Boolean)
   const footer = JSON.parse(lines.at(-1))
   const write = (...rest) => writeFileSync(report, [...lines.slice(0, -1), ...rest].map((line) => typeof line === 'string' ? line : JSON.stringify(line)).join('\\n') + '\\n')
@@ -645,7 +653,8 @@ process.spawnSync = (command, args, options) => {
   if (fault === 'footer') write({ ...footer, extra: 1 })
   if (fault === 'key') write({ name: 'x', error: 'e', extra: 1 }, { ...footer, failures: 1 })
   if (fault === 'error') write({ name: 'x', error: 1 }, { ...footer, failures: 1 })
-  return result
+  return done()
+  })
 }
 syncBuiltinESMExports()
 `,
@@ -712,7 +721,7 @@ syncBuiltinESMExports()
   const cases = {
     spawn: [
       ['app'],
-      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: spawnSync ENOMEM; its report did not finish; 1 test files$/,
+      /^ci: 1 failing tests\n {2}unit {4}exited early with no failing test reported: spawn \/nonexistent\/ci-fault ENOENT; its report did not finish; 1 test files$/,
     ],
     throw: [
       ['app'],
@@ -883,4 +892,92 @@ test('the report counts tests by the file that ran them, on every supported node
       version,
     )
   }
+})
+
+test('a file that runs past its time is stopped and named, and every other file still runs', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-watchdog-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const ran = join(root, 'ran')
+  const stub = join(root, 'npm.cjs')
+  writeFileSync(stub, '')
+  // Named apart, so the check for a process left behind finds only this one.
+  const spin = `tests/spin-${process.pid}-${Date.now()}.test.mjs`
+  const testFile = (name, body, first = "import 'node:child_process'") =>
+    `${first}\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('${name}', async () => {\n  appendFileSync(process.env.RAN, '${name} ')\n  ${body}\n})\n`
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    'tests/electron.mjs': "export const later = () => import('playwright')",
+    // node:test can't time out a synchronous loop. This one gives up after a
+    // minute, so a broken check fails instead of hanging.
+    [spin]: `// ci: timeout 2 s (spins)\n${testFile('spin', 'for (const end = Date.now() + 60000; Date.now() < end; );')}`,
+    // Still running when the spin is stopped, so it runs again.
+    'tests/mate.test.mjs': testFile(
+      'mate',
+      "await new Promise((done) => setTimeout(done, 8000))\n  appendFileSync(process.env.RAN, 'mate-done ')",
+    ),
+    // Slow, but within the time it asks for.
+    'tests/slow.test.mjs': `// ci: timeout 4 s (sleeps)\n${testFile('slow', 'await new Promise((done) => setTimeout(done, 1500))')}`,
+    'tests/app.test.mjs': testFile('app', '', "import './electron.mjs'"),
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const started = Date.now()
+  const { status, stdout } = spawnSync(
+    process.execPath,
+    [resolve('scripts/ci.mjs')],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 120000,
+      env: {
+        ...env,
+        RAN: ran,
+        CI_BASE: '',
+        CI_CLEAN: '',
+        CI_FULL: 'true',
+        CI_SHARD: '0/1',
+        CI_WORKERS: '1',
+        GITHUB_ACTIONS: '',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
+        npm_execpath: stub,
+      },
+    },
+  )
+  assert.equal(status, 1)
+  // Stopped, not waited out: the spin alone would take a minute.
+  assert.ok(Date.now() - started < 45000, `took ${Date.now() - started} ms`)
+  assert.equal(existsSync(join(repo, '.cache/ci/success.json')), false)
+  const runs = readFileSync(ran, 'utf8').trim().split(' ')
+  for (const name of ['spin', 'mate-done', 'slow', 'app'])
+    assert.ok(runs.includes(name), `${name} ran: ${runs}`)
+  // Files that finished before the stop don't run again.
+  assert.equal(runs.filter((name) => name === 'slow').length, 1, String(runs))
+  // The spin alone is red; the mate it stopped passed on its second run.
+  assert.match(
+    stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    new RegExp(
+      `^ci: 1 failing tests\\n {2}node {2}${spin.replace(/\./g, '\\.')} {2}did not finish within 2 s: stopped${
+        // With two workers or more, the mate runs beside the spin.
+        testWorkers().node > 1
+          ? ', with tests/mate\\.test\\.mjs still running'
+          : ''
+      }$`,
+    ),
+  )
+  // Stopping the run stops the file it started, not only the runner.
+  if (process.platform !== 'win32')
+    assert.equal(spawnSync('pgrep', ['-f', spin]).status, 1)
 })

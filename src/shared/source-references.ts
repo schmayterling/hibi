@@ -75,6 +75,7 @@ export class SourceReferences {
   readonly #definitions = new Map<number, Map<string, Candidate>>()
   readonly #candidates = new Map<string, Candidates>()
   readonly #winners = new Map<string, Candidate>()
+  #labels = () => this.#winners.keys()
   #reading = false
   #ready = false
   #count = 0
@@ -215,6 +216,7 @@ export class SourceReferences {
         this.#candidates.delete(label)
       }
     }
+    if (changed.size) this.#labels = () => this.#winners.keys()
     this.#ready = true
   }
   update(owners: SourceOwners, read: Reader) {
@@ -288,7 +290,8 @@ export class SourceReferences {
       throw new Error('Reference scope belongs to a different owner snapshot.')
     const reads = new Map<string, Candidate | undefined>()
     let mixed = false,
-      retainedBytes = 0
+      retainedBytes = 0,
+      labels: (() => IterableIterator<string>) | undefined
     const resolve = (name: string) => {
       if (!this.#owners) throw new Error('Reference index is disposed.')
       if (!this.#ready) throw new Error('Reference index is not ready.')
@@ -311,6 +314,12 @@ export class SourceReferences {
       Object.create(null) as Record<string, ReferenceValue>,
       {
         get: (_target, name) => {
+          // Batch readers share a label index; observing it tracks set changes.
+          if (name === Symbol.iterator) {
+            mixed ||= !!labels && labels !== this.#labels
+            labels = this.#labels
+            return labels
+          }
           if (typeof name !== 'string') return undefined
           return resolve(name)?.value
         },
@@ -326,7 +335,13 @@ export class SourceReferences {
       resolve,
       retainedBytes: () => retainedBytes,
       current: () => {
-        if (!this.#owners || !this.#ready || mixed) return false
+        if (
+          !this.#owners ||
+          !this.#ready ||
+          mixed ||
+          (labels && labels !== this.#labels)
+        )
+          return false
         for (const [name, value] of reads)
           if (this.#winners.get(name) !== value) return false
         return true

@@ -351,3 +351,22 @@ test('ordinary body edits reuse definition owners and keep parser reads local', 
   assert.ok(work.parser.readUnits < 8192, JSON.stringify(work))
   assert.ok(work.regions < 16, JSON.stringify(work))
 })
+
+test('new footnote definitions invalidate negative regional references through undo', (t) => {
+  const source = 'text[^late]\n\nend'
+  const f = fixture(t, source)
+  assert.deepEqual(f.read(), f.expected())
+  const from = source.indexOf('end')
+  f.edit(from, source.length, '[^late]: note')
+  assert.deepEqual(f.read(), f.expected())
+  f.edit(from, from + '[^late]: note'.length, 'end', 'undo')
+  assert.deepEqual(f.read(), f.expected())
+})
+
+test('eager inline block readers use scoped footnote definitions', (t) => {
+  const f = fixture(t, '[^a]: note\n\n-# small [^a]', {
+    ...syntax,
+    textExtras: true,
+  })
+  assert.deepEqual(f.read(), f.expected())
+})

@@ -2,6 +2,10 @@ import { decodeHTMLStrict } from 'entities'
 import type { Marked, Token, TokenizerExtension, Tokens } from 'marked'
 import { customBodyFeatures } from '../../shared/formatted-custom-body.ts'
 import { BlockTokenizer } from '../../shared/marked-blocks.ts'
+import {
+  footnoteReference,
+  rememberFootnote,
+} from '../../shared/marked-footnote-reference.ts'
 import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
 import { inlineStart } from '../../shared/marked-inline-start.ts'
 import {
@@ -90,10 +94,10 @@ function countFootnotes(parser: Marked) {
       {
         name: 'footnoteRef',
         level: 'inline',
-        ...inlineStart('[^', function (source) {
-          const match = /^\[\^([^\]\s]+)\]/.exec(source)
-          if (match?.[1] && this.lexer.tokens.links[footnoteKey(match[1])])
-            return { type: 'footnoteRef', raw: match[0] }
+        ...inlineStart('[^', function (source, tokens) {
+          const match = footnoteReference(this.lexer, source, tokens)
+          if (match && this.lexer.tokens.links[footnoteKey(match.label)])
+            return { type: 'footnoteRef', raw: match.raw }
         }),
       },
     ],
@@ -109,16 +113,21 @@ function lex(source: string, syntax: ProjectionSyntax) {
   if (syntax.references)
     lexer.tokens.links = new Proxy(Object.create(null), {
       get: (local, name) =>
-        typeof name === 'string'
-          ? Object.hasOwn(local, name)
-            ? local[name]
-            : syntax.references?.[name]
-          : undefined,
+        name === Symbol.iterator && syntax.references
+          ? Reflect.get(syntax.references, name)
+          : typeof name === 'string'
+            ? Object.hasOwn(local, name)
+              ? local[name]
+              : syntax.references?.[name]
+            : undefined,
       set: (local, name, value) => {
         local[name] = value
         return true
       },
     })
+  for (const key of Object.keys(syntax.references ?? {}))
+    if (key.startsWith(footnoteKey('')))
+      rememberFootnote(lexer, key.slice(footnoteKey('').length))
   const tokens = lexer.lex(source)
   maskDisabled(tokens, syntax)
   return tokens

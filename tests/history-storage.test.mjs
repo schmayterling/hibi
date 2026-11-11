@@ -17,9 +17,11 @@ const bundle = build({
   external: ['electron'],
   format: 'cjs',
 })
-async function runtime(t) {
-  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-history-storage-'))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+// Passing an earlier runtime's root starts the next launch on the same data.
+async function runtime(t, previous) {
+  const root =
+    previous ?? (await fs.mkdtemp(join(tmpdir(), 'hibi-history-storage-')))
+  if (!previous) t.after(() => fs.rm(root, { recursive: true, force: true }))
   const file = join(root, 'note.md')
   const folder = join(
     root,
@@ -34,6 +36,14 @@ async function runtime(t) {
     bytesRead: 0,
     yields: 0,
     indexReadErrors: [],
+    // Returns an error code for a read that should fail.
+    failRead: () => undefined,
+    // Whole-file reads of version copies, and the most at once.
+    copyReads: 0,
+    copyReading: 0,
+    mostCopyReads: 0,
+    // Holds the next index read after it has read the text.
+    indexReadHold: null,
   }
   const mocks = {
     electron: { app: { getPath: () => root } },
@@ -44,7 +54,30 @@ async function runtime(t) {
           String(path) === join(folder, 'index.json') &&
           state.indexReadErrors.shift()
         if (code) throw Object.assign(new Error(`${code}: injected`), { code })
-        return fs.readFile(path, ...args)
+        const failed = state.failRead(String(path))
+        if (failed)
+          throw Object.assign(new Error(`${failed}: injected`), {
+            code: failed,
+          })
+        const copy =
+          String(path).startsWith(folder) && String(path).endsWith('.md')
+        if (copy) {
+          state.copyReads++
+          state.mostCopyReads = Math.max(
+            state.mostCopyReads,
+            ++state.copyReading,
+          )
+        }
+        const read = await fs.readFile(path, ...args).finally(() => {
+          if (copy) state.copyReading--
+        })
+        const hold =
+          String(path) === join(folder, 'index.json') && state.indexReadHold
+        if (hold) {
+          state.indexReadHold = null
+          await hold
+        }
+        return read
       },
       open: async (path, ...args) => {
         const handle = await fs.open(path, ...args)
@@ -496,29 +529,6 @@ test('damaged history indexes are set aside and rebuilt from the copies on disk'
   }
 })
 
-test('a rebuilt index leaves out copies it cannot read and keeps them on disk', {
-  skip: process.platform === 'win32',
-}, async (t) => {
-  const { api, file, folder } = await runtime(t)
-  await fs.mkdir(folder, { recursive: true })
-  const readable = randomUUID()
-  const locked = join(folder, `${randomUUID()}.md`)
-  await fs.writeFile(join(folder, `${readable}.md`), 'readable')
-  await fs.writeFile(locked, 'locked', { mode: 0o000 })
-  await fs.writeFile(join(folder, 'notes.md'), 'not a copy')
-  await fs.writeFile(join(folder, 'index.json'), '{not json')
-  assert.deepEqual(
-    (await api.listVersions(file)).map(({ id }) => id),
-    [readable],
-  )
-  await fs.chmod(locked, 0o600)
-  assert.equal(await fs.readFile(locked, 'utf8'), 'locked')
-  assert.equal(
-    await fs.readFile(join(folder, 'notes.md'), 'utf8'),
-    'not a copy',
-  )
-})
-
 test('repeated damage leaves every copy listed, none outside the index', async (t) => {
   const { api, file, folder } = await runtime(t)
   for (let i = 0; i < 5; i++) {
@@ -604,6 +614,282 @@ test('an index that cannot be read stays in place and the save is refused', {
   assert.equal((await api.listVersions(file)).length, 1)
 })
 
+test('rebuilt copies make room like autosaves, so later autosaves stay', async (t) => {
+  const { api, file, folder } = await runtime(t)
+  for (let i = 0; i < 99; i++)
+    await api.recordVersions(file, [`old ${i}`], true)
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  assert.equal((await api.listVersions(file)).length, 99)
+  const later = Date.now() + 1000
+  const realNow = Date.now
+  Date.now = () => realNow() + 1000
+  t.after(() => {
+    Date.now = realNow
+  })
+  for (let i = 0; i < 20; i++)
+    await api.recordVersions(file, [`new ${i}`], true)
+  const listed = await api.listVersions(file)
+  assert.equal(listed.length, 100)
+  assert.equal(listed.filter(({ savedAt }) => savedAt >= later).length, 20)
+  assert.ok(listed.every(({ automatic }) => automatic))
+})
+
+test('a rebuild racing a save lists the new copy and sets the damage aside once', async (t) => {
+  const { api, file, folder } = await runtime(t)
+  await api.recordVersions(file, ['before'])
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  await Promise.all([
+    api.listVersions(file),
+    api.recordVersions(file, ['during']),
+    api.listVersions(file),
+  ])
+  const texts = await Promise.all(
+    (await api.listVersions(file)).map(({ id }) =>
+      api.previewVersion(file, id),
+    ),
+  )
+  assert.deepEqual(texts.sort(), ['before', 'during'])
+  assert.equal(
+    (await fs.readdir(folder)).filter((n) =>
+      n.startsWith('index.json.corrupt-'),
+    ).length,
+    1,
+  )
+})
+
+test('a reader that saw the damage after a rebuild finished keeps the rebuilt index', {
+  timeout: 20000,
+}, async (t) => {
+  const { api, file, folder, state } = await runtime(t)
+  await api.recordVersions(file, ['before'])
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  let release
+  state.indexReadHold = new Promise((resolve) => {
+    release = resolve
+  })
+  // History read the damaged text and is held before acting on it.
+  const reading = api.listVersions(file)
+  while (state.indexReadHold) await new Promise((done) => setImmediate(done))
+  await api.recordVersions(file, ['asked for'])
+  release()
+  await reading
+  const listed = await api.listVersions(file)
+  const asked = await Promise.all(
+    listed.map(async ({ id, automatic }) => ({
+      text: await api.previewVersion(file, id),
+      automatic,
+    })),
+  )
+  assert.deepEqual(
+    asked.find(({ text }) => text === 'asked for'),
+    {
+      text: 'asked for',
+      automatic: undefined,
+    },
+  )
+  assert.equal(
+    (await fs.readdir(folder)).filter((n) =>
+      n.startsWith('index.json.corrupt-'),
+    ).length,
+    1,
+  )
+})
+
+const copies = async (folder) =>
+  (await fs.readdir(folder)).filter((name) => /^[0-9a-f-]{36}\.md$/.test(name))
+const texts = async (api, file) =>
+  Promise.all(
+    (await api.listVersions(file)).map(({ id }) =>
+      api.previewVersion(file, id),
+    ),
+  )
+
+test('a copy unreadable during a rebuild stops it, and stays for the next launch', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['version one'])
+  await first.api.recordVersions(file, ['version two'])
+  const [, one] = await first.api.listVersions(file)
+  await fs.writeFile(join(folder, 'index.json'), '{damaged')
+  for (const code of ['EMFILE', 'EACCES']) {
+    const second = await runtime(t, root)
+    let failed = false
+    second.state.failRead = (path) => {
+      if (failed || !path.endsWith(`${one.id}.md`)) return undefined
+      failed = true
+      return code
+    }
+    await assert.rejects(second.api.listVersions(file), { code })
+    assert.equal(
+      await fs.readFile(join(folder, 'index.json'), 'utf8'),
+      '{damaged',
+    )
+  }
+  const third = await runtime(t, root)
+  assert.deepEqual((await texts(third.api, file)).sort(), [
+    'version one',
+    'version two',
+  ])
+  const fourth = await runtime(t, root)
+  assert.deepEqual((await texts(fourth.api, file)).sort(), [
+    'version one',
+    'version two',
+  ])
+  assert.equal((await copies(folder)).length, 2)
+})
+
+test('a damaged index whose oldest entry is the broken one keeps that version', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  const realNow = Date.now
+  let now = realNow()
+  Date.now = () => (now += 1000)
+  t.after(() => {
+    Date.now = realNow
+  })
+  for (const text of ['oldest', 'middle', 'newest'])
+    await first.api.recordVersions(file, [text])
+  Date.now = realNow
+  const index = JSON.parse(
+    await fs.readFile(join(folder, 'index.json'), 'utf8'),
+  )
+  delete index[0].hash
+  await fs.writeFile(join(folder, 'index.json'), JSON.stringify(index))
+  const second = await runtime(t, root)
+  const listed = (await second.api.listVersions(file)).reverse()
+  assert.deepEqual(
+    await Promise.all(
+      listed.map(({ id }) => second.api.previewVersion(file, id)),
+    ),
+    ['oldest', 'middle', 'newest'],
+  )
+  // Entries it still reads keep their time and kind; the broken one is an autosave.
+  assert.deepEqual(
+    listed.slice(1).map(({ savedAt, automatic }) => ({ savedAt, automatic })),
+    index.slice(1).map(({ savedAt }) => ({ savedAt, automatic: undefined })),
+  )
+  assert.equal(listed[0].automatic, true)
+  const third = await runtime(t, root)
+  assert.equal((await texts(third.api, file)).length, 3)
+  assert.equal((await copies(folder)).length, 3)
+})
+
+test('an intact empty index lists every copy again as autosaves', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['a'])
+  await first.api.recordVersions(file, ['b'])
+  await fs.writeFile(join(folder, 'index.json'), '[]')
+  const second = await runtime(t, root)
+  const listed = await second.api.listVersions(file)
+  assert.deepEqual((await texts(second.api, file)).sort(), ['a', 'b'])
+  assert.ok(listed.every(({ automatic }) => automatic))
+  assert.equal((await copies(folder)).length, 2)
+})
+
+test('a stale index restored from a backup keeps the newer copies', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['before backup'])
+  const backup = await fs.readFile(join(folder, 'index.json'), 'utf8')
+  await first.api.recordVersions(file, ['after backup 1'])
+  await first.api.recordVersions(file, ['after backup 2'])
+  await fs.writeFile(join(folder, 'index.json'), backup)
+  const second = await runtime(t, root)
+  assert.deepEqual((await texts(second.api, file)).sort(), [
+    'after backup 1',
+    'after backup 2',
+    'before backup',
+  ])
+  assert.equal((await copies(folder)).length, 3)
+})
+
+test('a copy the budget dropped before a crash is listed again, and the budget decides by its usual rule', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  for (let i = 0; i < 100; i++)
+    await first.api.recordVersions(file, [`v${i}`], true)
+  // The index no longer lists this copy, but its unlink never ran.
+  const dropped = randomUUID()
+  const path = join(folder, `${dropped}.md`)
+  await fs.writeFile(path, 'dropped by the budget')
+  const old = new Date('2026-01-01T00:00:00Z')
+  await fs.utimes(path, old, old)
+  const second = await runtime(t, root)
+  const listed = await second.api.listVersions(file)
+  assert.equal(listed.length, 101)
+  assert.deepEqual(listed.at(-1), {
+    id: dropped,
+    savedAt: +old,
+    bytes: Buffer.byteLength('dropped by the budget'),
+    automatic: true,
+  })
+  await second.api.recordVersions(file, ['next'], true)
+  const after = await second.api.listVersions(file)
+  assert.equal(after.length, 100)
+  assert.equal((await copies(folder)).length, 100)
+  // Crowded recent autosaves thin out first; the earlier day stays reachable.
+  assert.equal(after.at(-1).id, dropped)
+})
+
+test('listing copies again is done once, however many launches follow', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['listed'])
+  await fs.writeFile(join(folder, `${randomUUID()}.md`), 'unlisted')
+  const second = await runtime(t, root)
+  assert.equal((await second.api.listVersions(file)).length, 2)
+  const index = join(folder, 'index.json')
+  const adopted = await fs.readFile(index, 'utf8')
+  const { mtimeMs } = await fs.stat(index)
+  const third = await runtime(t, root)
+  assert.equal((await third.api.listVersions(file)).length, 2)
+  assert.equal(await fs.readFile(index, 'utf8'), adopted)
+  assert.equal((await fs.stat(index)).mtimeMs, mtimeMs)
+})
+
+test('a copy this run writes is listed once, while copies found at open are listed again', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['listed'])
+  await fs.writeFile(join(folder, `${randomUUID()}.md`), 'unlisted')
+  const second = await runtime(t, root)
+  await Promise.all([
+    second.api.listVersions(file),
+    second.api.recordVersions(file, ['written now']),
+    second.api.listVersions(file),
+  ])
+  const ids = (await second.api.listVersions(file)).map(({ id }) => id)
+  assert.equal(new Set(ids).size, ids.length)
+  assert.deepEqual((await texts(second.api, file)).sort(), [
+    'listed',
+    'unlisted',
+    'written now',
+  ])
+  assert.equal((await copies(folder)).length, 3)
+})
+
+test('listing 2,000 copies found at open reads each once, a few at a time, and the next save prunes them', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['listed'])
+  for (let i = 0; i < 2000; i++)
+    await fs.writeFile(join(folder, `${randomUUID()}.md`), `unlisted ${i}`)
+  const second = await runtime(t, root)
+  assert.equal((await second.api.listVersions(file)).length, 2001)
+  // The listed copy is not read; each unlisted one is read once.
+  assert.equal(second.state.copyReads, 2000)
+  assert.ok(
+    second.state.mostCopyReads <= 32,
+    `${second.state.mostCopyReads} at once`,
+  )
+  second.state.copyReads = 0
+  await second.api.recordVersions(file, ['next'])
+  assert.equal(second.state.copyReads, 0)
+  assert.equal((await second.api.listVersions(file)).length, 100)
+  assert.equal((await copies(folder)).length, 100)
+})
+
 test('first history open removes only its owned abandoned temporary files, once', async (t) => {
   const { api, file, folder } = await runtime(t)
   await fs.mkdir(folder, { recursive: true })
@@ -620,4 +906,33 @@ test('first history open removes only its owned abandoned temporary files, once'
   await fs.writeFile(join(folder, own[0]), 'live write')
   await api.listVersions(file)
   assert.equal(await fs.readFile(join(folder, own[0]), 'utf8'), 'live write')
+})
+
+test('a save stopped by history says what failed, reading included', async (t) => {
+  const { api } = await runtime(t)
+  const failure = (code) =>
+    api.historyProtectionError(Object.assign(new Error(code), { code }))
+  const said = (reason) =>
+    `Hibi could not keep the previous version in history. ${reason} Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.`
+  assert.equal(
+    failure('ENOSPC').message,
+    said('The storage for Hibi’s app data is full.'),
+  )
+  assert.equal(
+    failure('EACCES').message,
+    said(
+      'Hibi does not have permission to use history in its app data folder, or that folder is read-only.',
+    ),
+  )
+  for (const code of ['EIO', 'EMFILE', undefined]) {
+    const error = failure(code)
+    assert.equal(
+      error.message,
+      said(
+        'Hibi could not read or write version history in its app data folder.',
+      ),
+    )
+    assert.equal(error.code, 'EHISTORY')
+    assert.equal(error.cause.code, code)
+  }
 })

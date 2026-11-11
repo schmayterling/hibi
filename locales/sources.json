@@ -2892,8 +2892,14 @@
   "d443e8296852": [
     "src/main/index.ts"
   ],
-  "1e7f6a0207ab": [
-    "src/main/document.ts"
+  "9089e34d7e53": [
+    "src/main/history.ts"
+  ],
+  "fde8f8ffefd5": [
+    "src/main/history.ts"
+  ],
+  "7b430fe51d11": [
+    "src/main/history.ts"
   ],
   "87c719d7d306": [
     "src/main/history.ts"

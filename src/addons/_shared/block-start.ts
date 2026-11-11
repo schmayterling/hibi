@@ -6,12 +6,14 @@ import { Lexer, type TokenizerThis } from 'marked'
  */
 export const blockStartLines = new WeakMap<
   object,
-  Pick<RegExp, 'test'> & { lazyItem: boolean }
+  Pick<RegExp, 'test'> & { lazyItem: boolean; line: RegExp }
 >()
 
 /** A new item, heading, fence or rule ends an unindented lazy item tail. */
 export const lazyItemEnd =
   /^ {0,3}(?:(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|#{1,6}(?:[ \t]|$)|`{3,}[^`]*$|~{3,}|([-*_])[ \t]*(?:\1[ \t]*){2,}$)/
+
+const noStarts: readonly object[] = []
 
 /** Calls, source units read, and the largest single read, for complexity checks. */
 export const blockStartCounters = { calls: 0, units: 0, max: 0 }
@@ -45,14 +47,26 @@ export function blockStart(
   enabled = () => true,
   lazyItem = false,
 ) {
-  const probes = new WeakMap<RegExp, RegExp>()
-  const probe = (paragraph: RegExp) => {
-    let regex = probes.get(paragraph)
+  const probes = new WeakMap<RegExp, WeakMap<object, RegExp>>()
+  // Other extensions' start lines also end the paragraph, so stop there too.
+  const probe = (paragraph: RegExp, starts: readonly object[]) => {
+    let forStarts = probes.get(paragraph)
+    if (!forStarts) {
+      forStarts = new WeakMap()
+      probes.set(paragraph, forStarts)
+    }
+    let regex = forStarts.get(starts)
     if (!regex) {
+      const others = starts
+        .map((other) => blockStartLines.get(other)?.line)
+        .filter((other) => other && other !== line)
+        .map((other) => `(?:${other!.source})`)
       regex = new RegExp(
-        `\\n(?:(${line.source})|\\n${interruptions(paragraph)})`,
+        `\\n(?:(${line.source})|\\n${interruptions(paragraph)}${
+          others.length ? `|${others.join('|')}` : ''
+        })`,
       )
-      probes.set(paragraph, regex)
+      forStarts.set(starts, regex)
     }
     return regex
   }
@@ -63,13 +77,16 @@ export function blockStart(
     if (lexer?.state.top === false) return -1
     // The same rule selection as Marked's lexer.
     const { block } = Lexer.rules
-    const match = probe(
+    const starts = lexer?.options.extensions?.startBlock ?? noStarts
+    const regex = probe(
       lexer?.options.pedantic
         ? block.pedantic.paragraph
         : lexer?.options.gfm
           ? block.gfm.paragraph
           : block.normal.paragraph,
-    ).exec(source)
+      starts,
+    )
+    const match = regex.exec(source)
     const units = match ? match.index + match[0].length : source.length
     blockStartCounters.units += units
     blockStartCounters.max = Math.max(blockStartCounters.max, units)
@@ -78,6 +95,7 @@ export function blockStart(
   const boundary = new RegExp(`^(?:${line.source})`, 'm')
   blockStartLines.set(start, {
     lazyItem,
+    line,
     test: (source) => enabled() && boundary.test(source),
   })
   return start

@@ -33,7 +33,7 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   const markdown = Array.from(
     { length: 90 },
     (_, index) =>
-      `## Section ${index}\n\n${'Words that wrap. '.repeat(40)}${
+      `## Section ${index}\n\n${'Words that wrap. '.repeat(index === 60 ? 900 : 40)}${
         index === 45 ? `\n\n\`\`\`\n${'wide '.repeat(200)}\n\`\`\`` : ''
       }`,
   ).join('\n\n')
@@ -553,6 +553,85 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
     for (const style of document.querySelectorAll('.preview-scroll-test'))
       style.remove()
   })
+  await realign()
+
+  // A key scrolling the focused preview, with no caret moving, is the
+  // reader's: layout changing after it leaves the preview there.
+  await realign()
+  await page.locator('.rich-pane').evaluate((pane) => {
+    pane.tabIndex = -1
+    pane.focus({ preventScroll: true })
+  })
+  const beforeKeys = await tops()
+  for (let press = 0; press < 2; press++) await page.keyboard.press('PageDown')
+  const afterKeys = await tops()
+  await restyle('.rich-pane .cm-content > * { padding-top: 4px }')
+  const afterKeysLayout = await tops()
+  assert.ok(
+    afterKeys.rich - beforeKeys.rich > 300 &&
+      Math.abs(afterKeysLayout.rich - afterKeys.rich) < 100 &&
+      afterKeysLayout.source === beforeKeys.source,
+    JSON.stringify({ beforeKeys, afterKeys, afterKeysLayout }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await source.focus()
+
+  // A scroll no script writes to the pane, as a descendant scrolled into
+  // view, still moves only the pane: the alignment ends, and layout after it
+  // leaves the preview there.
+  await realign()
+  const beforeInto = await tops()
+  await page.evaluate(() => {
+    const blocks = document.querySelectorAll('.rich-pane .cm-content > *')
+    blocks[blocks.length - 1].scrollIntoView({ block: 'start' })
+  })
+  const afterInto = await tops()
+  const intoSize = await page.evaluate(() =>
+    parseFloat(
+      getComputedStyle(document.querySelector('.rich-pane .cm-content'))
+        .fontSize,
+    ),
+  )
+  await restyle(`.rich-pane .cm-content { font-size: ${intoSize + 1}px }`)
+  const afterIntoLayout = await tops()
+  assert.ok(
+    afterInto.rich - beforeInto.rich > 200 &&
+      Math.abs(afterIntoLayout.rich - afterInto.rich) < 100 &&
+      afterIntoLayout.source === beforeInto.source,
+    JSON.stringify({ beforeInto, afterInto, afterIntoLayout }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+
+  // Away from the top: a caret in a paragraph taller than the pane, where
+  // the preview keeps the text at its top in place as the window narrows.
+  // That correction is the preview's own, and the alignment follows on.
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const at = view.state.doc.toString().indexOf('## Section 60') + 6000
+    view.dispatch({
+      selection: { anchor: at },
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  const wide = await app.evaluate(({ BrowserWindow }) => {
+    const [window] = BrowserWindow.getAllWindows()
+    const bounds = window.getBounds()
+    window.setBounds({ ...bounds, width: bounds.width - 160 })
+    return bounds
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await app.evaluate(({ BrowserWindow }, bounds) => {
+    BrowserWindow.getAllWindows()[0].setBounds(bounds)
+  }, wide)
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
   await realign()
 
   // Clicking the independently scrolled preview also reveals its line in source.

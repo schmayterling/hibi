@@ -17,6 +17,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -297,7 +298,10 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   const html = join(folder, 'bundle', 'index.html')
   await writeFile(
     html,
-    '<html><head><meta charset="utf-8"><style>@layer hibi-base, hibi-theme; :root {--accent: #123456}</style></head><body><script src="store.js"></script></body></html>',
+    harnessPage({
+      script: 'store.js',
+      head: '<style>@layer hibi-base, hibi-theme; :root {--accent: #123456}</style>',
+    }),
   )
   const next = app.waitForEvent('window')
   await app.evaluate(({ BrowserWindow }, path) => {

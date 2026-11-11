@@ -6,6 +6,7 @@ import { extname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 
 /** Measure the synchronous capture, including work hidden behind text iterators. */
 function selectionWork({ from, to, separator = '' }) {
@@ -146,7 +147,7 @@ test('formatted selection previews stay bounded in 50 mib code and prose notes',
   })
   await writeFile(
     join(bundle, 'index.html'),
-    '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    harnessPage({ css: 'harness.css' }),
   )
   server = createServer(async (request, response) => {
     try {

@@ -14,6 +14,7 @@ import {
   frozenSnapshot,
   overlayScrollbars,
 } from './frozen-oracle.mjs'
+import { harnessPage } from './harness-page.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const note = `# Formatted view parity
@@ -166,10 +167,7 @@ before(
       },
     })
     const html = join(bundle, 'index.html')
-    await writeFile(
-      html,
-      '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-    )
+    await writeFile(html, harnessPage({ css: 'harness.css' }))
     // Module workers need an HTTP origin, as in the boundary-worker fixture.
     server = createServer(async (request, response) => {
       try {

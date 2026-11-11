@@ -1,4 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import test from 'node:test'
+
+// Apps a file's before hooks launch belong to its after hooks.
+export const hookLaunch = new AsyncLocalStorage()
 
 // When --test-name-pattern skips every top-level test of a file, node:test runs
 // its `after` hooks without waiting for its `before` hooks. Teardown then finds
@@ -7,7 +11,9 @@ import test from 'node:test'
 const setups = []
 export function before(fn, options) {
   test.before((context) => {
-    const setup = Promise.resolve().then(() => fn(context))
+    const setup = Promise.resolve().then(() =>
+      hookLaunch.run(true, () => fn(context)),
+    )
     const settled = setup.catch(() => {})
     // A setup that node timed out must not hold teardown back.
     setups.push(

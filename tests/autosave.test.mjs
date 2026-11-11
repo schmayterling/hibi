@@ -448,6 +448,30 @@ async function openNote(t, text = 'original') {
   return { app, page, rich, pill, file, profile }
 }
 
+/**
+ * Runs the page clock, then waits for the attempts it started. A rest is ten
+ * times the attempt on the page's clock: time the test runs while an attempt
+ * is under way would make that note rest instead.
+ */
+async function attemptClock(page) {
+  await page.evaluate(() => {
+    const save = window.hibi.autosaveDocument
+    globalThis.autosaving = 0
+    window.hibi.autosaveDocument = async (...args) => {
+      globalThis.autosaving++
+      try {
+        return await save(...args)
+      } finally {
+        globalThis.autosaving--
+      }
+    }
+  })
+  return async (ms) => {
+    await page.clock.runFor(ms)
+    await waitForAsync(page, () => globalThis.autosaving === 0)
+  }
+}
+
 test('a note nobody set autosave for saves itself, and never over another program’s text', {
   timeout: 60000,
 }, async (t) => {
@@ -670,24 +694,7 @@ test('a resting note gets its turn while another note is typed in', {
   await waitForDocumentEditor(app, page)
   await page.getByRole('tab', { name: 'note.md' }).click()
   await waitForDocumentEditor(app, page)
-  // A rest is ten times the attempt on the page's clock: time the test runs
-  // while a quick note's attempt is under way would make it rest instead.
-  await page.evaluate(() => {
-    const save = window.hibi.autosaveDocument
-    globalThis.autosaving = 0
-    window.hibi.autosaveDocument = async (...args) => {
-      globalThis.autosaving++
-      try {
-        return await save(...args)
-      } finally {
-        globalThis.autosaving--
-      }
-    }
-  })
-  const runBetweenAttempts = async (ms) => {
-    await page.clock.runFor(ms)
-    await waitForAsync(page, () => globalThis.autosaving === 0)
-  }
+  const runBetweenAttempts = await attemptClock(page)
   await page.clock.install()
   await page.clock.pauseAt(Date.now() + 60000)
   await replaceRichText(page, rich, 'slow one')
@@ -723,6 +730,116 @@ test('a resting note gets its turn while another note is typed in', {
     if ((await readFile(file, 'utf8')) === 'slow two') return
   }
   assert.fail(`after 30 s: ${await readFile(file, 'utf8')}`)
+})
+
+test('a rested note due while the note before it saves goes next, though that note was typed in again', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, rich, file: quick, profile } = await openNote(t, 'quick')
+  const slow = join(profile, 'slow.md')
+  await writeFile(slow, 'slow')
+  const tabId = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).tabId)
+  const quickTab = await tabId()
+  await app.evaluate(({ dialog }, slow) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [slow],
+    })
+  }, slow)
+  await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'slow.md',
+  )
+  await waitForDocumentEditor(app, page)
+  const slowTab = await tabId()
+  // The slow note's first save takes a second of page time; quick saves can
+  // be held before they answer. Each written slow note is counted.
+  await app.evaluate(
+    ({ ipcMain }, { quickTab, slowTab }) => {
+      const save = ipcMain._invokeHandlers.get('document:autosave')
+      let first = true
+      globalThis.slowSaves = 0
+      ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+        if (args[1] === slowTab && first) {
+          first = false
+          await new Promise((release) => {
+            globalThis.releaseSlow = release
+          })
+        }
+        const result = await save(...args)
+        if (args[1] === slowTab && result?.status === 'saved')
+          globalThis.slowSaves++
+        if (args[1] === quickTab && globalThis.holdQuick)
+          await new Promise((release) => {
+            globalThis.releaseQuick = release
+          })
+        return result
+      })
+    },
+    { quickTab, slowTab },
+  )
+  const slowSaves = () => app.evaluate(() => globalThis.slowSaves)
+  const typed = async (text) => {
+    await replaceRichText(page, rich, text)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  }
+  const runBetweenAttempts = await attemptClock(page)
+  await page.clock.install()
+  await page.clock.pauseAt(Date.now() + 60000)
+  try {
+    await typed('slow one')
+    await page.clock.runFor(2000)
+    await waitForAsync(app, () => !!globalThis.releaseSlow)
+    await page.clock.runFor(1000)
+    await app.evaluate(() => globalThis.releaseSlow())
+    await waitForAsync(page, () => globalThis.autosaving === 0)
+    assert.equal(await slowSaves(), 1)
+    // Due ten seconds after its first save ended, when the quick note's save
+    // has just begun.
+    await typed('slow two')
+    await page.getByRole('tab', { name: 'note.md' }).click()
+    // The editor that shows the note waits on the page clock too.
+    await runBetweenAttempts(7999)
+    await waitForDocumentEditor(app, page)
+    assert.equal(
+      await slowSaves(),
+      1,
+      'the slow note saved before its rest ended',
+    )
+    await app.evaluate(() => {
+      globalThis.holdQuick = true
+    })
+    await typed('quick one')
+    await page.clock.runFor(2001)
+    await waitForAsync(app, () => !!globalThis.releaseQuick)
+    assert.equal(await slowSaves(), 1)
+    await typed('quick two')
+    await app.evaluate(() => {
+      globalThis.holdQuick = false
+      globalThis.releaseQuick()
+    })
+    await waitForAsync(page, () => globalThis.autosaving === 0)
+    await runBetweenAttempts(2000)
+    assert.equal(
+      await slowSaves(),
+      2,
+      'the slow note waited behind the note before it again',
+    )
+    assert.equal(await readFile(slow, 'utf8'), 'slow two')
+    assert.equal(await readFile(quick, 'utf8'), 'quick one')
+  } finally {
+    await app.evaluate(() => {
+      globalThis.holdQuick = false
+      globalThis.releaseQuick?.()
+      globalThis.releaseSlow?.()
+    })
+  }
 })
 
 test('an attempt that hung for an hour does not stop autosave for ten', {

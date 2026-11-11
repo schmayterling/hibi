@@ -565,6 +565,15 @@ test('a note whose save took long rests ten times as long before the next', {
   })
   await page.clock.install()
   await page.clock.pauseAt(Date.now() + 60000)
+  await page.evaluate(() => {
+    const save = window.hibi.autosaveDocument
+    window.autosaveRuns = []
+    window.hibi.autosaveDocument = (...args) => {
+      const run = save(...args)
+      window.autosaveRuns.push(run)
+      return run
+    }
+  })
   const saved = async (text) => {
     const deadline = performance.now() + 5000
     while (performance.now() < deadline) {
@@ -588,6 +597,9 @@ test('a note whose save took long rests ten times as long before the next', {
       page,
       async () => !(await window.hibi.getDocument()).dirty,
     )
+    // The rest starts when the renderer handles main's reply, which can come
+    // after the file is written: advancing the clock first would start it late.
+    await page.evaluate(() => Promise.all(window.autosaveRuns))
     await replaceRichText(page, rich, 'second')
     await waitForAsync(
       page,

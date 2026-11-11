@@ -203,6 +203,9 @@ const trailingBlankLines = /\n[^\S\n]*(?:\n[^\S\n]*)+$/
 const taskLine = /^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/
 const taskMarker = /^\[[ xX]\](?:[ \t\n]|$)/
 
+const tasksEnabled = (syntax: ProjectionSyntax) =>
+  syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
+
 function decodeEntities(text: string) {
   return text.replace(
     /&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]+);/g,
@@ -319,6 +322,9 @@ function orderedItem(
   const firstParagraph = tokens.findIndex(
     (token) => token.type === 'text' || token.type === 'paragraph',
   )
+  // The rich view reads a marker with no text as an empty task, as for bullets.
+  const emptyTask =
+    tasksEnabled(syntax) && !entry.task && taskMarker.test(entry.text)
   for (const [index, original] of tokens.entries()) {
     let token = original
     if (token.type === 'githubAlert')
@@ -338,7 +344,10 @@ function orderedItem(
         tokens: token.tokens.map((part, at, all) => {
           if (part.type !== 'text') return part
           let raw = part.raw
-          if (at === 0) raw = raw.trimStart()
+          if (at === 0) {
+            raw = raw.trimStart()
+            if (emptyTask) raw = raw.replace(/^\[[ xX]\]/, '').trimStart()
+          }
           if (at === all.length - 1) raw = raw.trimEnd()
           return { ...part, raw }
         }),
@@ -370,10 +379,8 @@ function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
   }
   let task: boolean | null = null
   let blank: string | null = null
-  const taskEnabled =
-    syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
   const taskEntry = (entry: Tokens.ListItem) =>
-    taskEnabled && (entry.task || taskMarker.test(entry.text))
+    tasksEnabled(syntax) && (entry.task || taskMarker.test(entry.text))
   for (let index = 0; index < token.items.length; index++) {
     const entry = token.items[index]!
     const isTask = taskEntry(entry)

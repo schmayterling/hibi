@@ -1296,6 +1296,31 @@ function quoteTab(
   }
   return 4 - (column % 4)
 }
+/** Source units normalized for quote columns, a deterministic complexity check. */
+export const quoteColumnCounters = { units: 0 }
+
+/** A block's source inside a quote with its tabs at their physical columns. */
+export function quoteColumns(
+  tokenizer: Tokenizer,
+  source: string,
+  limit: number,
+  length = source.length,
+) {
+  const state = quoteFrames.get(tokenizer)
+  if (!state?.scope.native) return
+  quoteColumnCounters.units += length
+  // The row comes from the whole source; only its first `length` units move.
+  const region = source.slice(0, length)
+  const { text, offsets } = quoteInput(
+    tokenizer,
+    region,
+    quoteOrigin(state, source),
+    limit,
+  )
+  if (!offsets.length) return
+  return { text, raw: (end: number) => quoteRaw(region, end, offsets) }
+}
+
 function quoteRaw(
   source: string,
   length: number,

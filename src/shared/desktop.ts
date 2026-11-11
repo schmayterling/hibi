@@ -347,6 +347,14 @@ export type DesktopApi = {
   ) => Promise<import('./undo-history').UndoHistory | null>
   /** Before tabs or the window close, sends the histories of saves not sent yet. */
   onUndoHistoryFlush: (callback: () => Promise<void>) => () => void
+  /** Synchronous first read, including migration from DOMStorage. */
+  getAutosavePreferences: (
+    legacy: string | null,
+  ) => import('./autosave-preferences').AutosavePreferences
+  /** Returns only after the setting is durably stored. */
+  setAutosavePreferences: (
+    next: import('./autosave-preferences').AutosavePreferences,
+  ) => void
   getKeepUndoHistory: () => Promise<boolean>
   setKeepUndoHistory: (keep: boolean) => Promise<void>
   clearUndoHistory: () => Promise<void>

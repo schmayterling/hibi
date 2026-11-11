@@ -1,33 +1,21 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  autosaveDelays,
+  type AutosavePreferences as Preferences,
+} from '../../shared/autosave-preferences'
 import type { DocumentState } from '../../shared/desktop'
 import { stored } from '../../ui/stored-preference'
 import type { ToastApi, ToastHandle } from '../../ui/toasts'
 import { documentRuntime } from './document-runtime'
 
-export const autosaveDelays = [1000, 2000, 5000, 10000, 30000] as const
-type Preferences = { enabled: boolean; delay: number }
+export { autosaveDelays }
+
 const key = 'hibi:autosave'
 const preferences = stored<Preferences>(
   key,
-  () => {
-    try {
-      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-      return {
-        // On unless turned off. A stored value that isn't one can't say the
-        // note may be written, so it stays off too.
-        enabled:
-          value.enabled === undefined &&
-          typeof value === 'object' &&
-          !Array.isArray(value)
-            ? true
-            : value.enabled === true,
-        delay: autosaveDelays.includes(value.delay) ? value.delay : 2000,
-      }
-    } catch {
-      return { enabled: false, delay: 2000 }
-    }
-  },
+  () => window.hibi.getAutosavePreferences(localStorage.getItem(key)),
   JSON.stringify,
+  (value) => window.hibi.setAutosavePreferences(value),
 )
 export const autosave = {
   snapshot: preferences.get,

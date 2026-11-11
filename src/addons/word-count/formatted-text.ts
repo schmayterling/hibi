@@ -316,10 +316,6 @@ function orderedItem(
     children(rest, syntax, out, true)
     return
   }
-  // Ordered markers stay literal, including their original whitespace.
-  let checkbox = entry.task
-    ? (/^[ \t]*\d+[.)][ \t]+(\[[ xX]\][ \t]+)/.exec(entry.raw)?.[1] ?? '')
-    : ''
   const firstParagraph = tokens.findIndex(
     (token) => token.type === 'text' || token.type === 'paragraph',
   )
@@ -350,13 +346,12 @@ function orderedItem(
     }
     if (token.type === 'checkbox') continue
     if (token.type === 'text' && 'tokens' in token && token.tokens) {
-      out.push('\n', checkbox)
+      out.push('\n')
       inline(token.tokens, out)
     } else if (token.type === 'paragraph') {
-      out.push('\n', checkbox)
+      out.push('\n')
       inline((token as Tokens.Paragraph).tokens, out)
     } else block(token, syntax, out)
-    checkbox = ''
   }
 }
 

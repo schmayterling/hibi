@@ -18,10 +18,7 @@ const expectedPageErrors = new Set()
  */
 export async function autosaveOff(app, page) {
   await page.evaluate(() =>
-    localStorage.setItem(
-      'hibi:autosave',
-      JSON.stringify({ enabled: false, delay: 2000 }),
-    ),
+    window.hibi.setAutosavePreferences({ enabled: false, delay: 2000 }),
   )
   await page.reload()
   await waitForFormattedEditor(app, page)

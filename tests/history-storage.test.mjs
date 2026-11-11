@@ -38,6 +38,10 @@ async function runtime(t, previous) {
     indexReadErrors: [],
     // Returns an error code for a read that should fail.
     failRead: () => undefined,
+    // Whole-file reads of version copies, and the most at once.
+    copyReads: 0,
+    copyReading: 0,
+    mostCopyReads: 0,
     // Holds the next index read after it has read the text.
     indexReadHold: null,
   }
@@ -55,7 +59,18 @@ async function runtime(t, previous) {
           throw Object.assign(new Error(`${failed}: injected`), {
             code: failed,
           })
-        const read = await fs.readFile(path, ...args)
+        const copy =
+          String(path).startsWith(folder) && String(path).endsWith('.md')
+        if (copy) {
+          state.copyReads++
+          state.mostCopyReads = Math.max(
+            state.mostCopyReads,
+            ++state.copyReading,
+          )
+        }
+        const read = await fs.readFile(path, ...args).finally(() => {
+          if (copy) state.copyReading--
+        })
         const hold =
           String(path) === join(folder, 'index.json') && state.indexReadHold
         if (hold) {
@@ -854,24 +869,23 @@ test('a copy this run writes is listed once, while copies found at open are list
   assert.equal((await copies(folder)).length, 3)
 })
 
-test('listing 2,000 copies found at open takes bounded time, and the next save prunes them', async (t) => {
+test('listing 2,000 copies found at open reads each once, a few at a time, and the next save prunes them', async (t) => {
   const first = await runtime(t)
   const { file, folder, root } = first
   await first.api.recordVersions(file, ['listed'])
   for (let i = 0; i < 2000; i++)
     await fs.writeFile(join(folder, `${randomUUID()}.md`), `unlisted ${i}`)
   const second = await runtime(t, root)
-  let started = performance.now()
   assert.equal((await second.api.listVersions(file)).length, 2001)
-  const opening = performance.now() - started
-  started = performance.now()
-  await second.api.recordVersions(file, ['next'])
-  const saving = performance.now() - started
-  t.diagnostic(
-    `open ${Math.round(opening)} ms, next save ${Math.round(saving)} ms`,
+  // The listed copy is not read; each unlisted one is read once.
+  assert.equal(second.state.copyReads, 2000)
+  assert.ok(
+    second.state.mostCopyReads <= 32,
+    `${second.state.mostCopyReads} at once`,
   )
-  assert.ok(opening < 5000, `open took ${opening} ms`)
-  assert.ok(saving < 5000, `next save took ${saving} ms`)
+  second.state.copyReads = 0
+  await second.api.recordVersions(file, ['next'])
+  assert.equal(second.state.copyReads, 0)
   assert.equal((await second.api.listVersions(file)).length, 100)
   assert.equal((await copies(folder)).length, 100)
 })

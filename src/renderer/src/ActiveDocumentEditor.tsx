@@ -1,3 +1,4 @@
+import './markdown-detectors.ts'
 import {
   useEffect,
   useLayoutEffect,

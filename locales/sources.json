@@ -3577,7 +3577,7 @@
     "src/addons/math/hibi-addon.json"
   ],
   "eed0e6220f2f": [
-    "src/addons/math/grammar.ts"
+    "src/addons/math/flavor-info.ts"
   ],
   "52a6b0babfd5": [
     "src/addons/math/PackageSettings.tsx"

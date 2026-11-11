@@ -1,12 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  stat,
-  unlink,
-} from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { type DocumentVersion, HISTORY_PREVIEW_BYTES } from '../shared/history'
@@ -51,28 +44,69 @@ async function versions(path: string): Promise<Version[]> {
   }
   await opening
   const index = join(folder, 'index.json')
+  let text: string
   try {
-    const data: unknown = JSON.parse(await readFile(index, 'utf8'))
-    if (
-      !Array.isArray(data) ||
-      data.some(
-        (v) =>
-          !v ||
-          !validId(v.id) ||
-          typeof v.savedAt !== 'number' ||
-          typeof v.bytes !== 'number' ||
-          typeof v.hash !== 'string',
-      )
-    )
-      throw new Error('Hibi could not read the saved version history.')
-    return data as Version[]
+    text = await readFile(index, 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    // Keep damaged metadata and all old copies; only the index starts afresh.
-    await rename(index, `${index}.corrupt-${Date.now()}-${randomUUID()}`)
-    await syncFolder(folder)
-    return []
+    // Other read errors may pass; they leave the index for the next try.
+    const { code } = error as NodeJS.ErrnoException
+    if (code === 'ENOENT') return []
+    throw Object.assign(
+      new Error('Hibi could not read the saved version history.', {
+        cause: error,
+      }),
+      { code },
+    )
   }
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return rebuild(folder, text)
+  }
+  if (
+    !Array.isArray(data) ||
+    data.some(
+      (v) =>
+        !v ||
+        !validId(v.id) ||
+        typeof v.savedAt !== 'number' ||
+        typeof v.bytes !== 'number' ||
+        typeof v.hash !== 'string',
+    )
+  )
+    return rebuild(folder, text)
+  return data as Version[]
+}
+/**
+ * Keeps damaged metadata aside and lists again every copy still on disk, by
+ * its own bytes and time, so none is left outside the index and its budget.
+ */
+async function rebuild(folder: string, damaged: string): Promise<Version[]> {
+  const index = join(folder, 'index.json')
+  const found: Version[] = []
+  for (const name of await readdir(folder)) {
+    const id = name.slice(0, -3)
+    if (!name.endsWith('.md') || !validId(id)) continue
+    try {
+      const file = join(folder, name)
+      const [body, info] = await Promise.all([readFile(file), stat(file)])
+      if (!info.isFile()) continue
+      found.push({
+        id,
+        hash: createHash('sha256').update(body).digest('hex'),
+        savedAt: Math.round(info.mtimeMs),
+        bytes: body.byteLength,
+      })
+    } catch {
+      // A copy that cannot be read stays on disk, out of the list.
+    }
+  }
+  found.sort((a, b) => a.savedAt - b.savedAt)
+  await writeText(`${index}.corrupt-${Date.now()}-${randomUUID()}`, damaged)
+  await writeText(index, JSON.stringify(found))
+  await syncFolder(folder)
+  return found
 }
 const validId = (id: unknown): id is string =>
   typeof id === 'string' &&

@@ -56,6 +56,31 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
       .getByRole('main', { name: /^settings$/i })
       .waitFor({ state: 'hidden' })
   }
+  // Each view's own measure, which isolates a failing extension, before any
+  // alignment hooks the panes.
+  const hooks = () =>
+    page.evaluate(() => {
+      const rich = document.querySelector('.rich-pane')
+      const scroller = document.querySelector('.source-pane .cm-scroller')
+      const views = [rich, scroller].map(
+        (pane) => pane.querySelector('.cm-content').cmTile.root.view,
+      )
+      window.ownMeasures ??= views.map((view) => view.measure)
+      return {
+        panes: [rich, scroller].map((pane) =>
+          ['scrollTop', 'scroll', 'scrollTo', 'scrollBy'].filter((name) =>
+            Object.hasOwn(pane, name),
+          ),
+        ),
+        measures: views.map(
+          (view, index) =>
+            Object.hasOwn(view, 'measure') &&
+            view.measure === window.ownMeasures[index],
+        ),
+        anchors: [rich, scroller].map((pane) => pane.style.overflowAnchor),
+      }
+    })
+  const unhooked = await hooks()
   await settings()
   assert.equal(await toggle.isChecked(), true)
   await toggle.uncheck()
@@ -94,6 +119,9 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   const fromPreview = await scroll('.rich-pane', 0.6)
   assert.ok(Math.abs(fromPreview.after.rich - fromPreview.before.rich) > 100)
   assert.ok(Math.abs(fromPreview.after.source - fromPreview.before.source) < 2)
+  // Ended by a wheel, the alignment leaves the panes and views as it found
+  // them, hibi's own measure included.
+  assert.deepEqual(await hooks(), unhooked)
 
   // Only scrolling is unlinked. Moving the caret still aligns the preview.
   await source.press(
@@ -666,6 +694,44 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
     BrowserWindow.getAllWindows()[0].setBounds(bounds)
   }, wide)
   await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await realign()
+
+  // The same on the source: a script scrolling the source a little while
+  // layout grows ends the alignment, so later layout takes no pane anywhere.
+  await realign()
+  const beforeSource = await tops()
+  const sourceScripted = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const pane = document.querySelector('.source-pane .cm-scroller')
+        const style = document.createElement('style')
+        style.className = 'preview-scroll-test'
+        document.head.append(style)
+        let frame = 0
+        let wanted = 0
+        const tick = () => {
+          frame++
+          style.textContent = `.rich-pane .cm-content::before { content: ''; display: block; height: ${frame}px }`
+          if (frame >= 10 && frame < 20) {
+            pane.scrollTop += 20
+            wanted += 20
+          }
+          if (frame < 40) requestAnimationFrame(tick)
+          else resolve(wanted)
+        }
+        requestAnimationFrame(tick)
+      }),
+  )
+  const afterSource = await tops()
+  assert.ok(
+    afterSource.source - beforeSource.source >= sourceScripted - 3 &&
+      Math.abs(afterSource.rich - beforeSource.rich) < 100,
+    JSON.stringify({ beforeSource, sourceScripted, afterSource }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
   await realign()
 
   // Clicking the independently scrolled preview also reveals its line in source.

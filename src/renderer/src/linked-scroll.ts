@@ -143,6 +143,19 @@ export function linkScroll(
   // scroll command moving no caret, an addon's measure. The browser keeps no
   // place of its own meanwhile.
   const placedAt = new Map<HTMLElement, number>()
+  /** Whether a pane is no longer where hibi's own corrections left it. */
+  const strayed = () =>
+    [first, second].some((pane) => {
+      const top = pane.scrollTop
+      const at = placedAt.get(pane) ?? top
+      if (Math.abs(top - at) < 1) return false
+      // Content shrinking under a pane at its end pulls the end into view.
+      if (top < at && top >= pane.scrollHeight - pane.clientHeight - 1) {
+        placedAt.set(pane, top)
+        return false
+      }
+      return true
+    })
   let unguard: (() => void) | null = null
   const guard = () => {
     if (syncScrolling || unguard) return
@@ -194,16 +207,7 @@ export function linkScroll(
       }
       // Capturing, before the pane's view measures in its own listener.
       const moved = (event: Event) => {
-        if (event.target !== pane) return
-        const top = get.call(pane)
-        const at = placedAt.get(pane) ?? top
-        if (Math.abs(top - at) < 1) return
-        // Content shrinking under a pane at its end pulls the end into view.
-        if (top < at && top >= pane.scrollHeight - pane.clientHeight - 1) {
-          placedAt.set(pane, top)
-          return
-        }
-        disarm()
+        if (event.target === pane && strayed()) disarm()
       }
       pane.addEventListener('scroll', moved, { capture: true, passive: true })
       const anchor = pane.style.overflowAnchor
@@ -219,6 +223,9 @@ export function linkScroll(
         string,
         (...args: unknown[]) => unknown
       >
+      // A scroll command that moves no caret runs at the view's next measure:
+      // what that measure scrolls is the command's, not the view's own.
+      let commanded = false
       for (const name of ['measure', 'focus'] as const) {
         // ponytail: measure is the view's own entry to its measure pass, not
         // public API; the source-anchor test fails if the view stops calling it.
@@ -227,6 +234,10 @@ export function linkScroll(
         patch(view, name, {
           writable: true,
           value(this: EditorView, ...args: unknown[]) {
+            if (name === 'measure' && commanded) {
+              commanded = false
+              return foreignScroll(() => method.apply(this, args))
+            }
             return ownScroll(() => method.apply(this, args))
           },
         })
@@ -254,7 +265,6 @@ export function linkScroll(
             return request.call(this, wrapped)
           },
         })
-      // A scroll command that moves no caret is a scroll, not a correction.
       const update = methods.update
       if (update)
         patch(view, 'update', {
@@ -268,7 +278,7 @@ export function linkScroll(
                     transaction.selection.eq(transaction.startState.selection)),
               )
             )
-              disarm()
+              commanded = true
             return update.call(this, transactions)
           },
         })
@@ -289,6 +299,7 @@ export function linkScroll(
   const moved = (a: number, b: number) => Math.abs(a - b) > 0.25
   /** Realigns after layout under the aligned lines. */
   const check = () => {
+    if (aligning && strayed()) return disarm()
     const was = placed
     if (!aligning || !was) return
     const now = measure()
@@ -319,6 +330,12 @@ export function linkScroll(
       0,
       Math.min(top, target.scrollHeight - target.clientHeight),
     )
+    // Unlinked, only an alignment that still holds writes: its own lookups
+    // can end it, and a pane moved since by anyone else ends it.
+    if (!syncScrolling && (!aligning || strayed())) {
+      if (aligning) disarm()
+      return
+    }
     if (Math.abs(target.scrollTop - clamped) < 1) return record()
     ownScroll(() => {
       target.scrollTop = clamped

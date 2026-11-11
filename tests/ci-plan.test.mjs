@@ -15,6 +15,66 @@ import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
 
+// A check a test runs carries that test's own tag after its inherited ones, so
+// whatever it leaves running is found when the test ends, stopped, and fails
+// the test: the rule this check keeps for every file, kept by its own tests.
+// Windows can't show another process's environment, so there it can't look.
+const owns = (t) => {
+  const probe = `ci-plan-${process.pid}-${Math.random().toString(36).slice(2)}`
+  const left = () => {
+    if (process.platform === 'darwin')
+      return spawnSync(
+        'python3',
+        ['-I', resolve('scripts/ci-owned.py'), probe, '-1'],
+        { encoding: 'utf8' },
+      )
+        .stdout.split('\n')
+        .filter(Boolean)
+        .map((line) => line.split('\t'))
+    if (process.platform !== 'linux') return []
+    return readdirSync('/proc')
+      .filter((pid) => /^\d+$/.test(pid))
+      .flatMap((pid) => {
+        try {
+          const owned = readFileSync(`/proc/${pid}/environ`, 'utf8')
+            .split('\0')
+            .some(
+              (entry) =>
+                entry.startsWith('HIBI_CI_FILE=') &&
+                entry.slice(13).split(':').includes(probe),
+            )
+          return owned
+            ? [[pid, readFileSync(`/proc/${pid}/comm`, 'utf8').trim()]]
+            : []
+        } catch {
+          return []
+        }
+      })
+  }
+  t.after(async () => {
+    // What's on its way out isn't left behind.
+    let found = left()
+    for (let look = 0; found.length && look < 20; look++) {
+      await new Promise((done) => setTimeout(done, 100))
+      found = left()
+    }
+    for (const [pid] of found)
+      try {
+        process.kill(Number(pid), 'SIGKILL')
+      } catch {
+        /* Gone already. */
+      }
+    assert.deepEqual(
+      found.map(([pid, name]) => `${name} ${pid}`),
+      [],
+      `${t.name} left processes running`,
+    )
+  })
+  return {
+    HIBI_CI_FILE: [process.env.HIBI_CI_FILE, probe].filter(Boolean).join(':'),
+  }
+}
+
 test('incremental checks select dependencies and fall back safely for cold, clean, config, and missing builds', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-plan-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -302,6 +362,7 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
       stdio: 'pipe',
       env: {
         ...env,
+        ...owns(t),
         RAN: ran,
         CI_BASE: '',
         CI_CLEAN: '',
@@ -417,6 +478,7 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
       stdio: 'pipe',
       env: {
         ...process.env,
+        ...owns(t),
         NODE_TEST_CONTEXT: undefined,
         CALLS: calls,
         CI_BASE: base,
@@ -554,6 +616,7 @@ test('a red in any group leaves the others to run, fails the check, and names ev
         stdio: 'pipe',
         env: {
           ...env,
+          ...owns(t),
           RED: red,
           RAN: ran,
           CI_BASE: '',
@@ -690,6 +753,7 @@ syncBuiltinESMExports()
         encoding: 'utf8',
         env: {
           ...env,
+          ...owns(t),
           FAULT: fault,
           SHAPE: shape,
           RED: red,
@@ -1008,6 +1072,7 @@ setTimeout(() => {
       timeout: 120000,
       env: {
         ...env,
+        ...owns(t),
         // A red exits 1 even where a rejection only warns.
         NODE_OPTIONS: '--unhandled-rejections=warn',
         HELD: held,
@@ -1112,6 +1177,7 @@ test('an interrupted check stops its files and starts no more', async (t) => {
     stdio: 'ignore',
     env: {
       ...env,
+      ...owns(t),
       RAN: ran,
       CI_BASE: '',
       CI_CLEAN: '',
@@ -1184,6 +1250,7 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
       timeout: 60000,
       env: {
         ...env,
+        ...owns(t),
         PATH: `${bin}:${process.env.PATH}`,
         CI_BASE: '',
         CI_CLEAN: '',
@@ -1213,6 +1280,7 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
     timeout: 60000,
     env: {
       ...env,
+      ...owns(t),
       PATH: `${bin}:${process.env.PATH}`,
       CI_BASE: '',
       CI_CLEAN: '',
@@ -1301,6 +1369,7 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
       timeout: 120000,
       env: {
         ...env,
+        ...owns(t),
         CHECK: resolve('scripts/ci.mjs'),
         HELD: held,
         NESTED: nested,
@@ -1465,6 +1534,7 @@ const onWindows = async (
       stdio: ['ignore', 'pipe', 'ignore'],
       env: {
         ...env,
+        ...owns(t),
         PATH: `${bin}:${process.env.PATH}`,
         ROOT: root,
         NOTES: notes,

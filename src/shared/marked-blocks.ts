@@ -358,7 +358,10 @@ export function continuationTokens<T>(
   }
   if (ends.size) lazyUnderlines.set(tokenizer, { text, ends })
   else lazyUnderlines.delete(tokenizer)
-  blockLinesOf.set(tokenizer, sourceLines(text, owner.lines, owner.row))
+  // No parent: a nested definition's first line always loses this marker or
+  // its indent, and unindented definition lines end the body, so no origin
+  // lookup walks past these lines.
+  blockLinesOf.set(tokenizer, sourceLines(text))
   const top = lexer.state.top
   lexer.state.top = true
   try {

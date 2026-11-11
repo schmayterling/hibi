@@ -9,9 +9,8 @@ const state = {
   release() {},
 }
 globalThis.autosavePreferenceFault = state
-// The app reads its own arguments from the second on, as if no -r came first;
-// otherwise it takes this file and the checkout as files to open.
-process.argv.splice(process.argv.indexOf(__filename) - 1, 2)
+// Without this the app takes this file and the checkout as files to open.
+require('./preload-argv.cjs')(process.argv, __filename)
 fs.open = async (path, ...args) => {
   const setting =
     basename(String(path)).startsWith('.autosave.json.') && args[0] === 'wx'

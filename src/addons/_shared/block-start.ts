@@ -47,15 +47,22 @@ export function blockStart(
   enabled = () => true,
   lazyItem = false,
 ) {
-  const probes = new WeakMap<RegExp, WeakMap<object, RegExp>>()
+  const probes = new WeakMap<
+    RegExp,
+    WeakMap<object, { length: number; regex: RegExp }>
+  >()
   // Other extensions' start lines also end the paragraph, so stop there too.
+  // Starts registered without blockStart are not stop points: they cost only
+  // speed, since Marked still takes the earliest start.
   const probe = (paragraph: RegExp, starts: readonly object[]) => {
     let forStarts = probes.get(paragraph)
     if (!forStarts) {
       forStarts = new WeakMap()
       probes.set(paragraph, forStarts)
     }
-    let regex = forStarts.get(starts)
+    // Marked's use() appends later extensions to the same array.
+    const cached = forStarts.get(starts)
+    let regex = cached?.length === starts.length ? cached.regex : undefined
     if (!regex) {
       const others = starts
         .map((other) => blockStartLines.get(other)?.line)
@@ -66,7 +73,7 @@ export function blockStart(
           others.length ? `|${others.join('|')}` : ''
         })`,
       )
-      forStarts.set(starts, regex)
+      forStarts.set(starts, { length: starts.length, regex })
     }
     return regex
   }

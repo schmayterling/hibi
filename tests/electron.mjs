@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
 import './file-limit.mjs'
+import { hookLaunch } from './electron-hooks.mjs'
 
 export { after, before } from './electron-hooks.mjs'
 
@@ -51,9 +52,39 @@ if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
   test.after(reportLeftover)
   // A file's own after hooks run later still, and can bring a throw of their own.
   process.on('exit', reportLeftover)
+  test.afterEach(orphanPendingLaunches)
+  test.after(closeOrphanedLaunches)
 }
 
-export async function snapshotElectronProcesses(pid) {
+// A test that times out keeps running after node:test has moved on. An app it
+// was still launching then would keep the file from ever exiting. A file runs
+// its top-level tests one at a time, so a launch still pending when one ends is
+// that test's or its subtests', and nothing will close it. A subtest ending
+// says nothing: its parent may still be waiting on a launch.
+const orphanable = new Set()
+let hooksRan = false
+function orphanPendingLaunches(t) {
+  if (t.fullName !== t.name) return
+  for (const launch of orphanable) launch.orphaned = true
+}
+async function closeOrphanedLaunches() {
+  hooksRan = true
+  await Promise.all(
+    [...orphanable].map(async (launch) => {
+      let timer
+      const settled = await Promise.race([
+        launch.closed.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 30000, false)
+        }),
+      ])
+      clearTimeout(timer)
+      if (!settled && launch.child) stopElectronTree(launch.child)
+    }),
+  )
+}
+
+export async function snapshotElectronProcesses(pid, profile) {
   if (process.platform === 'win32') return
   const options = {
     encoding: 'utf8',
@@ -125,6 +156,27 @@ export async function snapshotElectronProcesses(pid) {
         .join('\n')
         .slice(0, 2000)}`,
     )
+    // A store still being written names what shutdown waits for.
+    if (profile)
+      console.error(
+        `electron-shutdown-profile-files:\n${
+          [
+            ...new Set(
+              files.stdout
+                .split('\n')
+                .filter(
+                  (line) => /\bREG\b/.test(line) && line.includes(profile),
+                )
+                .map((line) => {
+                  const [command, id] = line.trim().split(/\s+/)
+                  return `${command} ${id} ${line.slice(line.indexOf(profile) + profile.length + 1)}`
+                }),
+            ),
+          ]
+            .slice(0, 25)
+            .join('\n') || 'none open'
+        }`,
+      )
   } catch (error) {
     console.error(
       `electron-shutdown-snapshot unavailable: ${String(error.message).slice(0, 240)}`,
@@ -314,7 +366,26 @@ export const electron = {
    * Autosave starts off, so an edited note stays unsaved however slow the run.
    * A test about autosave, or about what it saves, launches with `autosave: true`.
    */
-  async launch({ diagnostics = true, autosave = false, ...options }) {
+  launch(options) {
+    const launch = {}
+    const launching = electron.launchApp(options, launch)
+    if (hookLaunch.getStore()) return launching
+    orphanable.add(launch)
+    launch.closed = launching
+      .then(
+        async (application) => {
+          if (launch.orphaned || hooksRan)
+            await application.close().catch(() => {})
+        },
+        () => {},
+      )
+      .finally(() => orphanable.delete(launch))
+    return launching
+  },
+  async launchApp(
+    { diagnostics = true, autosave = false, ...options },
+    launch,
+  ) {
     const application = await _electron.launch({
       ...options,
       env: {
@@ -340,6 +411,7 @@ export const electron = {
     })
     // Playwright disposes the process handle once the app has exited.
     const launched = application.process()
+    launch.child = launched
     const observeStartup = (page) => {
       if (page.hibiStartupTrace) return
       const requests = new Map()
@@ -494,11 +566,20 @@ export const electron = {
             // waits up to 10 s for the network service alone.
             onQuit = () => {
               clearTimeout(timer)
-              timer = setTimeout(() => {
+              timer = setTimeout(async () => {
                 console.error(
                   'electron-shutdown-after-quit: still running 15 s after quit; stopping it',
                 )
                 stopped = true
+                // Say what is still running, and in which store, before it goes.
+                await snapshotElectronProcesses(
+                  child.pid,
+                  child.spawnargs
+                    ?.find((arg) => arg.startsWith('--user-data-dir='))
+                    ?.slice('--user-data-dir='.length)
+                    .replace(/^\/private(?=\/)/, ''),
+                ).catch(() => {})
+                if (child.exitCode !== null || child.signalCode !== null) return
                 timer = setTimeout(() => {
                   reject(
                     new Error(
@@ -551,7 +632,8 @@ export const electron = {
         app.once('quit', () => console.error('electron-main-quit')),
       )
     }
-    if (showTestWindows) {
+    // Names the quit phase a slow shutdown stopped in.
+    if (diagnostics || showTestWindows) {
       // The inspector may already be closed; keep only validated stdout events.
       let detachQuitTrace
       try {
@@ -813,6 +895,8 @@ export const electron = {
           write('armed')
         } catch {}
       })
+    }
+    if (showTestWindows) {
       await application.evaluate(showElectronTestWindows)
       const reportSlowStart = async () => {
         try {

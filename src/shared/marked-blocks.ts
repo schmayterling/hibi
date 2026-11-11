@@ -1594,17 +1594,22 @@ function installQuoteState(
   }
 }
 
-// Marked's task pass, with its queue search resumed where the last one ended:
-// entries above the cursor failed the test and stay unchanged, and the entry it
-// stripped may still start with a marker, so each search starts on it.
+/** Queue entries passed over to find task text, a deterministic complexity check. */
+export const taskQueueCounters = { steps: 0 }
+
+// Marked's task pass, except that each item strips the marker from its own
+// queued text: Marked strips the last queued text that starts with a marker,
+// which can belong to a later item's quote. Items queue their text in order,
+// so one forward cursor from the list's first entry finds each one.
 function readTasks(
   lexer: Lexer,
   list: Tokens.List,
   tasks: boolean[],
   rules: Tokenizer['rules']['other'],
+  start: number,
 ) {
   const queue = lexer.inlineQueue
-  let cursor = queue.length - 1
+  let cursor = start
   list.items.forEach((item, index) => {
     const first = item.tokens[0]
     if (
@@ -1616,14 +1621,12 @@ function readTasks(
     item.text = item.text.replace(rules.listReplaceTask, '')
     first.raw = first.raw.replace(rules.listReplaceTask, '')
     first.text = first.text.replace(rules.listReplaceTask, '')
-    for (; cursor >= 0; cursor--)
-      if (rules.listIsTask.test(queue[cursor]!.src)) {
-        queue[cursor]!.src = queue[cursor]!.src.replace(
-          rules.listReplaceTask,
-          '',
-        )
-        break
-      }
+    while (cursor < queue.length && queue[cursor]!.tokens !== first.tokens) {
+      taskQueueCounters.steps++
+      cursor++
+    }
+    const own = queue[cursor]
+    if (own) own.src = own.src.replace(rules.listReplaceTask, '')
     const marker = rules.listTaskCheckbox.exec(item.raw)
     if (!marker) return
     const box: Tokens.Checkbox = {
@@ -1801,8 +1804,9 @@ export class BlockTokenizer extends Tokenizer {
         this.rules = listRules
         lexer.blockTokens = nested
         const firstColumn = columns.length
+        const queued = lexer.inlineQueue.length
         const group = read.call(this, source.slice(from))
-        if (group) readTasks(lexer, group, tasks, rules.other)
+        if (group) readTasks(lexer, group, tasks, rules.other, queued)
         tasks.length = 0
         if (!group) break
         const bound = leafListEnd(

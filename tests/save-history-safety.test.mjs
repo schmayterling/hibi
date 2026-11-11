@@ -408,7 +408,7 @@ for (const mode of ['manual', 'autosave', 'quit']) {
     const folder = join(profile, 'history', sha(file))
     await mkdir(folder, { recursive: true })
     const oldVersion = join(folder, `${randomUUID()}.md`)
-    await writeFile(oldVersion, 'older unindexed text')
+    await writeFile(oldVersion, 'older copy the index lost')
     await writeFile(join(folder, 'index.json'), '{not json')
     await edit('new text')
     await app.evaluate(({ dialog }) => {
@@ -448,7 +448,10 @@ for (const mode of ['manual', 'autosave', 'quit']) {
       if (mode === 'autosave') assert.equal(result.status, 'saved')
     }
     assert.equal(await readFile(file, 'utf8'), 'new text')
-    assert.equal(await readFile(oldVersion, 'utf8'), 'older unindexed text')
+    assert.equal(
+      await readFile(oldVersion, 'utf8'),
+      'older copy the index lost',
+    )
     const names = await readdir(folder)
     const quarantined = names.filter((name) =>
       name.startsWith('index.json.corrupt-'),
@@ -465,7 +468,8 @@ for (const mode of ['manual', 'autosave', 'quit']) {
           readFile(join(folder, `${version.id}.md`), 'utf8'),
         ),
       ),
-      ['original', 'new text'],
+      // The copy the damaged index lost is listed again, oldest first.
+      ['older copy the index lost', 'original', 'new text'],
     )
   })
 }

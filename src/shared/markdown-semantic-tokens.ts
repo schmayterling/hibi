@@ -203,6 +203,8 @@ export class MarkdownSemanticLexer {
           Object.create(null) as Record<string, ReferenceValue>,
           {
             get: (local, name) => {
+              if (name === Symbol.iterator)
+                return Reflect.get(scope.links, name)
               if (typeof name !== 'string') return undefined
               if (Object.hasOwn(local, name)) return local[name]
               const winner = scope.resolve(name)

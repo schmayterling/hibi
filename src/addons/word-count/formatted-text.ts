@@ -203,6 +203,14 @@ const trailingBlankLines = /\n[^\S\n]*(?:\n[^\S\n]*)+$/
 const taskLine = /^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/
 const taskMarker = /^\[[ xX]\](?:[ \t\n]|$)/
 
+const tasksEnabled = (syntax: ProjectionSyntax) =>
+  syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
+/** An ordered item's marker with no text, opening its first paragraph: the rich view's empty task. */
+const emptyTask = (entry: Tokens.ListItem, syntax: ProjectionSyntax) =>
+  tasksEnabled(syntax) &&
+  taskMarker.test(entry.text) &&
+  (entry.tokens[0]?.type === 'text' || entry.tokens[0]?.type === 'paragraph')
+
 function decodeEntities(text: string) {
   return text.replace(
     /&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]+);/g,
@@ -319,6 +327,7 @@ function orderedItem(
   const firstParagraph = tokens.findIndex(
     (token) => token.type === 'text' || token.type === 'paragraph',
   )
+  const empty = emptyTask(entry, syntax)
   for (const [index, original] of tokens.entries()) {
     let token = original
     if (token.type === 'githubAlert')
@@ -333,12 +342,18 @@ function orderedItem(
       }
     // the native ordered tokenizer trims its main paragraph before inline lexing.
     if (index === firstParagraph && 'tokens' in token && token.tokens) {
+      let parts = token.tokens
+      // An empty task's marker lexes as a link when the note defines it.
+      if (empty && parts[0]?.type === 'link') parts = parts.slice(1)
       token = {
         ...token,
-        tokens: token.tokens.map((part, at, all) => {
+        tokens: parts.map((part, at, all) => {
           if (part.type !== 'text') return part
           let raw = part.raw
-          if (at === 0) raw = raw.trimStart()
+          if (at === 0) {
+            raw = raw.trimStart()
+            if (empty) raw = raw.replace(/^\[[ xX]\]/, '').trimStart()
+          }
           if (at === all.length - 1) raw = raw.trimEnd()
           return { ...part, raw }
         }),
@@ -370,10 +385,8 @@ function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
   }
   let task: boolean | null = null
   let blank: string | null = null
-  const taskEnabled =
-    syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
   const taskEntry = (entry: Tokens.ListItem) =>
-    taskEnabled && (entry.task || taskMarker.test(entry.text))
+    tasksEnabled(syntax) && (entry.task || taskMarker.test(entry.text))
   for (let index = 0; index < token.items.length; index++) {
     const entry = token.items[index]!
     const isTask = taskEntry(entry)

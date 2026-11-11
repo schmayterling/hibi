@@ -67,7 +67,7 @@ async function versions(path: string): Promise<Version[]> {
   if (text === null) return []
   return parse(text) ?? rebuild(folder, text)
 }
-/** Before this run writes anything, removes what an earlier run left behind. */
+/** Before this run writes anything, tidies what an earlier run left behind. */
 async function open(folder: string) {
   const files = await readdir(folder).catch(() => [])
   await Promise.all(
@@ -77,21 +77,56 @@ async function open(folder: string) {
       )
       .map((file) => unlink(join(folder, file)).catch(() => {})),
   )
-  // An intact index lists every copy a save meant to keep. Any other copy was
-  // dropped by the budget, or written for an index a crash never wrote, so
-  // nothing could reach it; it went with its unlink or its save's cleanup.
+  // Copies an intact index does not list (an older or restored index, or a
+  // crash before a pruned copy's unlink) are listed again as autosaves, so the
+  // usual budget decides what goes. Nothing here deletes a copy.
   const text = await readIndex(folder).catch(() => null)
   const entries = text === null ? null : parse(text)
   if (!entries) return
   const listed = new Set(entries.map(({ id }) => id))
-  await Promise.all(
-    files
-      .filter((file) => isCopy(file) && !listed.has(file.slice(0, -3)))
-      .map((file) => unlink(join(folder, file)).catch(() => {})),
-  )
+  // A copy that cannot be read now is tried again at the next launch.
+  const adopted = (
+    await inBatches(
+      files.filter((name) => isCopy(name) && !listed.has(name.slice(0, -3))),
+      (name) => copyVersion(folder, name).catch(() => null),
+    )
+  ).filter((version) => version !== null)
+  if (!adopted.length) return
+  const next = [...entries, ...adopted].sort((a, b) => a.savedAt - b.savedAt)
+  try {
+    await writeText(join(folder, 'index.json'), JSON.stringify(next))
+    await syncFolder(folder)
+  } catch {
+    // The index stays as it was; the next launch tries again.
+  }
+}
+/** Reads a few copies at once: many in a row are slow, all at once run out of files. */
+async function inBatches<T, R>(items: T[], each: (item: T) => Promise<R>) {
+  const results: R[] = []
+  for (let at = 0; at < items.length; at += 32)
+    results.push(...(await Promise.all(items.slice(at, at + 32).map(each))))
+  return results
 }
 const isCopy = (file: string) =>
   file.endsWith('.md') && validId(file.slice(0, -3))
+/** A copy's entry from its own bytes and time; null when it is not a file. */
+async function copyVersion(
+  folder: string,
+  name: string,
+  entry?: Version,
+): Promise<Version | null> {
+  const file = join(folder, name)
+  const [body, info] = await Promise.all([readFile(file), stat(file)])
+  if (!info.isFile()) return null
+  return {
+    id: name.slice(0, -3),
+    hash: createHash('sha256').update(body).digest('hex'),
+    savedAt: entry?.savedAt ?? Math.round(info.mtimeMs),
+    bytes: body.byteLength,
+    // Nobody knows which save kept a copy without an entry: it makes room first.
+    ...(!entry || entry.automatic ? { automatic: true as const } : {}),
+  }
+}
 /** One rebuild at a time per note, so a second cannot overwrite a save made after the first. */
 function rebuild(folder: string, damaged: string): Promise<Version[]> {
   let running = rebuilding.get(folder)
@@ -102,11 +137,11 @@ function rebuild(folder: string, damaged: string): Promise<Version[]> {
   return running
 }
 /**
- * Keeps damaged metadata aside and lists again the copies still on disk, so
+ * Keeps damaged metadata aside and lists again every copy still on disk, so
  * none is left outside the index and its budget. Entries the damaged index
- * still reads keep their time and kind; copies older than all of them were
- * dropped by the budget and stay out. Other copies count as autosaves, as
- * nobody knows which save kept them.
+ * still reads keep their time and kind. If a copy cannot be read, nothing is
+ * written: the damaged index stays for the next try rather than one that
+ * leaves the copy out.
  */
 async function relist(folder: string, damaged: string): Promise<Version[]> {
   const current = await readIndex(folder)
@@ -121,34 +156,20 @@ async function relist(folder: string, damaged: string): Promise<Version[]> {
     // Text that does not parse names nothing: every copy is listed again.
   }
   const byId = new Map(known.map((version) => [version.id, version]))
-  const oldest = known.length
-    ? Math.min(...known.map(({ savedAt }) => savedAt))
-    : -Infinity
-  const found: Version[] = []
-  for (const name of await readdir(folder)) {
-    if (!isCopy(name)) continue
-    const id = name.slice(0, -3)
-    try {
-      const file = join(folder, name)
-      const [body, info] = await Promise.all([readFile(file), stat(file)])
-      if (!info.isFile()) continue
-      const entry = byId.get(id)
-      const savedAt = entry?.savedAt ?? Math.round(info.mtimeMs)
-      if (!entry && savedAt < oldest) continue
-      found.push({
-        id,
-        hash: createHash('sha256').update(body).digest('hex'),
-        savedAt,
-        bytes: body.byteLength,
-        ...(entry
-          ? entry.automatic
-            ? { automatic: true }
-            : {}
-          : { automatic: true }),
-      })
-    } catch {
-      // A copy that cannot be read stays on disk, out of the list.
-    }
+  let found: Version[]
+  try {
+    found = (
+      await inBatches((await readdir(folder)).filter(isCopy), (name) =>
+        copyVersion(folder, name, byId.get(name.slice(0, -3))),
+      )
+    ).filter((version) => version !== null)
+  } catch (error) {
+    throw Object.assign(
+      new Error('Hibi could not read the saved version history.', {
+        cause: error,
+      }),
+      { code: (error as NodeJS.ErrnoException).code },
+    )
   }
   found.sort((a, b) => a.savedAt - b.savedAt)
   await writeText(`${index}.corrupt-${Date.now()}-${randomUUID()}`, damaged)

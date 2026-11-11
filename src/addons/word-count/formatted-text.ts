@@ -203,9 +203,11 @@ const trailingBlankLines = /\n[^\S\n]*(?:\n[^\S\n]*)+$/
 const taskLine = /^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/
 const taskMarker = /^\[[ xX]\](?:[ \t\n]|$)/
 
+/** A setext `-` underline that the rich view reads as an empty list item. */
+const loneDash = /\n[ \t]*-[ \t]*\n?$/
 const tasksEnabled = (syntax: ProjectionSyntax) =>
   syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
-/** An ordered item's marker with no text, opening its first paragraph: the rich view's empty task. */
+/** A marker with no text that opens the item's first paragraph: the rich view's empty task. */
 const emptyTask = (entry: Tokens.ListItem, syntax: ProjectionSyntax) =>
   tasksEnabled(syntax) &&
   taskMarker.test(entry.text) &&
@@ -386,7 +388,14 @@ function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
   let task: boolean | null = null
   let blank: string | null = null
   const taskEntry = (entry: Tokens.ListItem) =>
-    tasksEnabled(syntax) && (entry.task || taskMarker.test(entry.text))
+    tasksEnabled(syntax) &&
+    (entry.task ||
+      emptyTask(entry, syntax) ||
+      // The rich view reads a lone `-` under a marker as an empty item, not a
+      // setext underline, so the marker stays a task.
+      (taskMarker.test(entry.text) &&
+        entry.tokens[0]?.type === 'heading' &&
+        loneDash.test(entry.tokens[0].raw)))
   for (let index = 0; index < token.items.length; index++) {
     const entry = token.items[index]!
     const isTask = taskEntry(entry)
@@ -532,6 +541,15 @@ function children(
   const last = runs.findLastIndex((token) => token.type !== 'space')
   for (const [index, token] of runs.entries()) {
     if (token.type !== 'space') {
+      // The rich view starts a paragraph after a heading in a tight item; it
+      // reads a lone `-` underline as an empty list item instead.
+      const previous = runs[index - 1]
+      if (
+        token.type === 'text' &&
+        previous?.type === 'heading' &&
+        !loneDash.test(previous.raw)
+      )
+        out.push('\n')
       block(token, syntax, out)
       continue
     }

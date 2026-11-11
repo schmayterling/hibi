@@ -205,6 +205,11 @@ const taskMarker = /^\[[ xX]\](?:[ \t\n]|$)/
 
 const tasksEnabled = (syntax: ProjectionSyntax) =>
   syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
+/** A marker with no text that opens the item's first paragraph: the rich view's empty task. */
+const emptyTask = (entry: Tokens.ListItem, syntax: ProjectionSyntax) =>
+  tasksEnabled(syntax) &&
+  taskMarker.test(entry.text) &&
+  (entry.tokens[0]?.type === 'text' || entry.tokens[0]?.type === 'paragraph')
 
 function decodeEntities(text: string) {
   return text.replace(
@@ -322,9 +327,7 @@ function orderedItem(
   const firstParagraph = tokens.findIndex(
     (token) => token.type === 'text' || token.type === 'paragraph',
   )
-  // The rich view reads a marker with no text as an empty task, as for bullets.
-  const emptyTask =
-    tasksEnabled(syntax) && !entry.task && taskMarker.test(entry.text)
+  const empty = emptyTask(entry, syntax)
   for (const [index, original] of tokens.entries()) {
     let token = original
     if (token.type === 'githubAlert')
@@ -341,7 +344,7 @@ function orderedItem(
     if (index === firstParagraph && 'tokens' in token && token.tokens) {
       let parts = token.tokens
       // An empty task's marker lexes as a link when the note defines it.
-      if (emptyTask && parts[0]?.type === 'link') parts = parts.slice(1)
+      if (empty && parts[0]?.type === 'link') parts = parts.slice(1)
       token = {
         ...token,
         tokens: parts.map((part, at, all) => {
@@ -349,7 +352,7 @@ function orderedItem(
           let raw = part.raw
           if (at === 0) {
             raw = raw.trimStart()
-            if (emptyTask) raw = raw.replace(/^\[[ xX]\]/, '').trimStart()
+            if (empty) raw = raw.replace(/^\[[ xX]\]/, '').trimStart()
           }
           if (at === all.length - 1) raw = raw.trimEnd()
           return { ...part, raw }
@@ -383,7 +386,7 @@ function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
   let task: boolean | null = null
   let blank: string | null = null
   const taskEntry = (entry: Tokens.ListItem) =>
-    tasksEnabled(syntax) && (entry.task || taskMarker.test(entry.text))
+    tasksEnabled(syntax) && (entry.task || emptyTask(entry, syntax))
   for (let index = 0; index < token.items.length; index++) {
     const entry = token.items[index]!
     const isTask = taskEntry(entry)

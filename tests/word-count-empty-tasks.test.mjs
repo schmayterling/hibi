@@ -75,6 +75,7 @@ const cases = [
   ['1. [x]', 1, 0],
   ['1. [x] a', 1, 1],
   ['1. [x] [x] a', 1, 2],
+  ['1. [x] [x] a\n\n2. [ ] b', 2, 3],
   ['1) [ ]', 1, 0],
   ['1) [ ] a', 1, 1],
   ['> 1. [x]', 1, 0],
@@ -148,6 +149,41 @@ test('word count keeps bracketed text that is not a task marker, as the rich vie
     assert.deepEqual(
       countText(richText(source, syntax).slice(1)),
       counts,
+      JSON.stringify(source),
+    )
+  }
+})
+
+test('word count reads a marker line that is a setext heading as the heading, as the rich view does', () => {
+  for (const [source, words] of [
+    ['[l]: /w\n\n1. [x]\n   ===\n\n   [l] text', 3],
+    ['[l]: /w\n\n1. [ ]\n   ===\n   [l] after', 2],
+    ['[l]: /w\n\n1. [x]\n   ---\n\n   [l] text and more', 5],
+    ['1. [x]\n   ===\n\n   [x] y z', 4],
+    ['[l]: /w\n\n- [x]\n  ===\n\n  [l] text', 3],
+    ['- [x]\n  ===\n\n  [x] y z', 4],
+    ['- [x]\n  ---', 1],
+  ]) {
+    let heading = -1,
+      marker = Infinity
+    formattedMarkdownParser([
+      ...contributions.flatMap((item) => item.syntax ?? []),
+      obsidianSyntax,
+    ])
+      .parse(source)
+      .iterate({
+        enter: (node) => {
+          if (node.name.startsWith('SetextHeading')) heading = node.to
+          if (node.name === 'TaskMarker') marker = Math.min(marker, node.from)
+        },
+      })
+    assert.ok(
+      heading >= 0 && marker > heading,
+      `rich view ${JSON.stringify(source)}`,
+    )
+    assert.equal(
+      countText(richText(source, syntax).slice(1)).words,
+      words,
       JSON.stringify(source),
     )
   }

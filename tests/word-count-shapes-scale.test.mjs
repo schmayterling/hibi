@@ -1,3 +1,4 @@
+// ci: timeout 1800 s (five shapes with 180 s of CPU each; wall time stretches under load)
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { countText } from '../src/addons/word-count/count.ts'

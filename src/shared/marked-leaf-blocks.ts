@@ -11,7 +11,14 @@ type BlockToken = { type: string; raw: string }
 // Symbol keys survive tokenizer wrappers that copy results.
 const leaf = Symbol('leaf block')
 const quote = Symbol('quote text')
-type Custom = Tokens.Generic & { [leaf]?: true; [quote]?: string }
+const lazy = Symbol('lazy reader')
+type Custom = Tokens.Generic & {
+  [leaf]?: true
+  [quote]?: string
+  [lazy]?: (source: string) => Token | undefined
+}
+// The last lazily continued block each lexer presented to a container read.
+const lazyBlocks = new WeakMap<Lexer, Custom>()
 const quoteReaders = new WeakSet<TokenizerExtension['tokenizer']>()
 const active = new WeakMap<Lexer, Map<Token, { type: string; text: unknown }>>()
 
@@ -27,9 +34,26 @@ function nativeIdentity<T extends Token>(token: T, lexer: Lexer): T {
     types.set(token, { type: token.type, text: custom.text })
     token.type = custom[leaf] ? 'code' : 'blockquote'
     if (custom[quote] !== undefined) custom.text = custom[quote]
+  } else if (custom[lazy]) {
+    // Quotes re-read a trailing list with their lazy lines appended.
+    types.set(token, { type: token.type, text: custom.text })
+    token.type = 'list'
+    lazyBlocks.set(lexer, custom)
   }
   return token
 }
+
+/** A custom block whose last paragraph continues lazily, re-read from `read`. */
+export function lazyBlock<T extends BlockToken>(
+  token: T,
+  read: (source: string) => T | undefined,
+): T {
+  return Object.assign(token, { [lazy]: read })
+}
+
+/** A container's re-read of the last lazy custom block with lines appended. */
+export const lazyContinuation = (lexer: Lexer, source: string) =>
+  lazyBlocks.get(lexer)?.[lazy]?.(source)
 
 /** Preserve the quote text Marked needs when it re-reads a nested continuation. */
 export function quoteBlock<T extends BlockToken>(
@@ -132,13 +156,14 @@ export function withLeafBlocks<T>(tokenizer: Tokenizer, read: () => T): T {
       if ((token as Custom)[quote] !== undefined) (token as Custom).text = text
     }
     active.delete(lexer)
+    lazyBlocks.delete(lexer)
   }
 }
 
 function endsWithLeaf(token: Token): boolean {
   if ((token as Custom)[leaf]) return true
   const last =
-    token.type === 'list'
+    token.type === 'list' && 'items' in token
       ? (token as Tokens.List).items
           .at(-1)
           ?.tokens.findLast((child) => child.type !== 'space')

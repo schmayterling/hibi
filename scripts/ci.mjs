@@ -439,8 +439,12 @@ export async function runCI({ dev = false } = {}) {
   // its file's. ponytail: a process started and orphaned between two looks is
   // missed, and so is a real child started over 1 s after its parent was last
   // seen; a process that takes a freed id and starts a child within 1 s, then
-  // exits before a look, can be claimed. A native helper holding each runner
-  // in a job object would close all three.
+  // exits before a look, can be claimed. When a look fails, the file is
+  // stopped by taskkill /T, which walks the tree once: a process started while
+  // it walks, as a test file is if the limit runs out while the runner is still
+  // starting it, is missed and runs on with no parent. That stop is already a
+  // could-not-verify-cleanup red; with looks working, the next look learns it.
+  // A native helper holding each runner in a job object would close all four.
   const windowsLook = () =>
     capture('powershell.exe', [
       '-NoProfile',

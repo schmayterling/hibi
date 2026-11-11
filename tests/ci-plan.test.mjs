@@ -1510,7 +1510,13 @@ const windowsLook = `const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 const start = Date.now()
 fs.appendFileSync(process.env.LOOKS, 'look\\n')
-if (process.env.LOOK_FAILS) process.exit(1)
+if (process.env.LOOK_FAILS) {
+  // Not before the file has noted that it's running: what's stopped then is a
+  // whole tree, not one still being started.
+  for (const end = Date.now() + 30000; Date.now() < end && !fs.readFileSync(process.env.NOTES, 'utf8'); )
+    execFileSync('sleep', ['0.05'])
+  process.exit(1)
+}
 if (process.env.LOOK_GARBLED) {
   console.log('x\ty\tz\tw')
   process.exit(0)
@@ -1689,13 +1695,19 @@ const onWindows = async (
 // A test file that can note what it started, in the shape onWindows reads.
 const noting = (body, first = '') =>
   `${first}\nimport { spawn } from 'node:child_process'\nimport { appendFileSync, existsSync } from 'node:fs'\nimport test from 'node:test'\nconst note = (key, value) => appendFileSync(process.env.NOTES, JSON.stringify({ key, value }) + '\\n')\nconst hold = () => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\ntest('file', async () => {\n${body}\n})\n`
-const gone = (pid) => {
-  try {
-    process.kill(pid, 0)
-    return false
-  } catch {
-    return true
-  }
+// A killed process stays listed until its parent collects it: that one is
+// dead too.
+const state = (pid) =>
+  spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+    encoding: 'utf8',
+  }).stdout.trim()
+const gone = (pid) => !state(pid) || state(pid).startsWith('Z')
+// A kill can land just before the check ends and the process take a moment to
+// go: waits for that, briefly, and fails with what's still running.
+const stopped = async (pid, label) => {
+  for (let wait = 0; wait < 60 && !gone(pid); wait++)
+    await new Promise((done) => setTimeout(done, 50))
+  assert.ok(gone(pid), `${label} (${state(pid)})`)
 }
 const off = process.platform === 'win32' ? 'runs natively there' : false
 
@@ -1720,7 +1732,7 @@ test('on Windows, a file owns its process tree, and what it had to stop is named
     run.reds,
     /^ci: 2 failing tests\n {2}node {2}tests\/leak\.test\.mjs {2}did not stop what it started: left node \d+ running\n {2}node {2}tests\/spin\.test\.mjs {2}did not finish within 2 s: stopped with everything it started$/,
   )
-  for (const key of ['leak', 'held']) assert.ok(gone(run.note(key)), key)
+  for (const key of ['leak', 'held']) await stopped(run.note(key), key)
 })
 
 test('on Windows, a leak is learned while its file runs, with no other file to look', {
@@ -1735,7 +1747,7 @@ test('on Windows, a leak is learned while its file runs, with no other file to l
     run.reds,
     /^ci: 1 failing tests\n {2}node {2}tests\/leak\.test\.mjs {2}did not stop what it started: left node \d+ running$/,
   )
-  assert.ok(gone(run.note('leak')))
+  await stopped(run.note('leak'), 'leak')
 })
 
 test("on Windows, a process that took a used id is not the file's, nor its child", {
@@ -1913,7 +1925,7 @@ test('on Windows, a look that fails still stops a file past its time', {
   )
   assert.ok(run.ms < 30000, `the check waited ${run.ms} ms`)
   // Not only the runner: the process running the file stops too.
-  assert.ok(gone(run.note('worker')), 'the spinning file kept running')
+  await stopped(run.note('worker'), 'the spinning file kept running')
   assert.match(
     run.reds,
     /^ci: 2 failing tests\n {2}node {2}tests\/spin\.test\.mjs {2}did not finish within 2 s: stopped, but what it started could not be checked\n {2}node {2}tests\/spin\.test\.mjs {2}did not stop what it started: could not verify cleanup: powershell\.exe exited 1$/,
@@ -1943,5 +1955,5 @@ test('on Windows, an unreadable look is a red, and a late child of a live parent
     late.reds,
     /^ci: 1 failing tests\n {2}node {2}tests\/late\.test\.mjs {2}did not stop what it started: left node \d+, node \d+ running$/,
   )
-  for (const key of ['parent', 'child']) assert.ok(gone(late.note(key)), key)
+  for (const key of ['parent', 'child']) await stopped(late.note(key), key)
 })

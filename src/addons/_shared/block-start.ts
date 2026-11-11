@@ -51,7 +51,10 @@ export function blockStart(
   // Other extensions' start lines also end the paragraph, so stop there too.
   const probe = (paragraph: RegExp, starts: readonly object[]) => {
     let forStarts = probes.get(paragraph)
-    if (!forStarts) probes.set(paragraph, (forStarts = new WeakMap()))
+    if (!forStarts) {
+      forStarts = new WeakMap()
+      probes.set(paragraph, forStarts)
+    }
     let regex = forStarts.get(starts)
     if (!regex) {
       const others = starts

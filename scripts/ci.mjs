@@ -639,12 +639,12 @@ export async function runCI({ dev = false } = {}) {
     }
   }
   const running = new Set()
-  let cancelled = false
-  // An interrupted check takes its tests with it: no file starts after this.
-  const interrupt = async (signal) => {
-    cancelled = true
-    await Promise.all([...running].map((stop) => stop()))
-    process.kill(process.pid, signal)
+  let cancelled
+  // An interrupted check takes its tests with it: no file starts after this,
+  // and the reds so far are named before it ends by the same signal.
+  const interrupt = (signal) => {
+    cancelled = signal
+    for (const stop of running) stop()
   }
   const count = (value) => Number.isInteger(value) && value >= 0
   const keys = (record, allowed) =>
@@ -867,6 +867,7 @@ export async function runCI({ dev = false } = {}) {
     const failed = results.flatMap((result) => result.failed)
     // A group where every file skipped or registered nothing proves nothing.
     if (
+      !cancelled &&
       tests.length &&
       !failed.length &&
       results.every((result) => result.ran === 0)
@@ -924,6 +925,7 @@ export async function runCI({ dev = false } = {}) {
         )
     }
   }
+  if (cancelled) process.kill(process.pid, cancelled)
   if (process.env.GITHUB_STEP_SUMMARY)
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,

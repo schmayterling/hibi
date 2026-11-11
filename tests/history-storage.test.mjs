@@ -17,9 +17,11 @@ const bundle = build({
   external: ['electron'],
   format: 'cjs',
 })
-async function runtime(t) {
-  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-history-storage-'))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+// Passing an earlier runtime's root starts the next launch on the same data.
+async function runtime(t, previous) {
+  const root =
+    previous ?? (await fs.mkdtemp(join(tmpdir(), 'hibi-history-storage-')))
+  if (!previous) t.after(() => fs.rm(root, { recursive: true, force: true }))
   const file = join(root, 'note.md')
   const folder = join(
     root,
@@ -604,6 +606,121 @@ test('an index that cannot be read stays in place and the save is refused', {
   assert.equal((await api.listVersions(file)).length, 1)
 })
 
+test('rebuilt copies make room like autosaves, so later autosaves stay', async (t) => {
+  const { api, file, folder } = await runtime(t)
+  for (let i = 0; i < 99; i++)
+    await api.recordVersions(file, [`old ${i}`], true)
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  assert.equal((await api.listVersions(file)).length, 99)
+  const later = Date.now() + 1000
+  const realNow = Date.now
+  Date.now = () => realNow() + 1000
+  t.after(() => {
+    Date.now = realNow
+  })
+  for (let i = 0; i < 20; i++)
+    await api.recordVersions(file, [`new ${i}`], true)
+  const listed = await api.listVersions(file)
+  assert.equal(listed.length, 100)
+  assert.equal(listed.filter(({ savedAt }) => savedAt >= later).length, 20)
+  assert.ok(listed.every(({ automatic }) => automatic))
+})
+
+test('a copy the budget dropped before a crash is removed at the next open, not relisted', async (t) => {
+  const first = await runtime(t)
+  const { file, folder, root } = first
+  await first.api.recordVersions(file, ['kept one'])
+  await first.api.recordVersions(file, ['kept two'])
+  // The index no longer lists this copy, but its unlink never ran.
+  const dropped = join(folder, `${randomUUID()}.md`)
+  await fs.writeFile(dropped, 'dropped by the budget')
+  const next = await runtime(t, root)
+  assert.equal((await next.api.listVersions(file)).length, 2)
+  await assert.rejects(fs.stat(dropped), { code: 'ENOENT' })
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  const rebuilt = await next.api.listVersions(file)
+  assert.equal(rebuilt.length, 2)
+  for (const { id } of rebuilt)
+    assert.match(await next.api.previewVersion(file, id), /^kept /)
+})
+
+test('a damaged index that still parses keeps its readable entries and drops copies older than them', async (t) => {
+  const { api, file, folder } = await runtime(t)
+  await fs.mkdir(folder, { recursive: true })
+  const copy = async (text, date) => {
+    const id = randomUUID()
+    const path = join(folder, `${id}.md`)
+    await fs.writeFile(path, text)
+    await fs.utimes(path, new Date(date), new Date(date))
+    return { id, path }
+  }
+  const pruned = await copy('pruned', '2026-01-01T00:00:00Z')
+  const kept = await copy('kept', '2026-02-01T00:00:00Z')
+  const asked = await copy('asked', '2026-03-01T00:00:00Z')
+  const lost = await copy('entry lost', '2026-04-01T00:00:00Z')
+  const entry = (id, text, savedAt, automatic) => ({
+    id,
+    hash: createHash('sha256').update(text).digest('hex'),
+    savedAt,
+    bytes: Buffer.byteLength(text),
+    ...(automatic ? { automatic: true } : {}),
+  })
+  await fs.writeFile(
+    join(folder, 'index.json'),
+    JSON.stringify([
+      entry(kept.id, 'kept', Date.parse('2026-02-01T00:00:00Z'), true),
+      { id: 'bad' },
+      entry(asked.id, 'asked', Date.parse('2026-03-01T00:00:00Z'), false),
+    ]),
+  )
+  const listed = (await api.listVersions(file)).reverse()
+  assert.deepEqual(
+    listed.map(({ id, savedAt, automatic }) => ({ id, savedAt, automatic })),
+    [
+      {
+        id: kept.id,
+        savedAt: Date.parse('2026-02-01T00:00:00Z'),
+        automatic: true,
+      },
+      {
+        id: asked.id,
+        savedAt: Date.parse('2026-03-01T00:00:00Z'),
+        automatic: undefined,
+      },
+      {
+        id: lost.id,
+        savedAt: Date.parse('2026-04-01T00:00:00Z'),
+        automatic: true,
+      },
+    ],
+  )
+  // Left out, not deleted: only an intact index removes copies.
+  assert.equal(await fs.readFile(pruned.path, 'utf8'), 'pruned')
+})
+
+test('a rebuild racing a save lists the new copy and sets the damage aside once', async (t) => {
+  const { api, file, folder } = await runtime(t)
+  await api.recordVersions(file, ['before'])
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  await Promise.all([
+    api.listVersions(file),
+    api.recordVersions(file, ['during']),
+    api.listVersions(file),
+  ])
+  const texts = await Promise.all(
+    (await api.listVersions(file)).map(({ id }) =>
+      api.previewVersion(file, id),
+    ),
+  )
+  assert.deepEqual(texts.sort(), ['before', 'during'])
+  assert.equal(
+    (await fs.readdir(folder)).filter((n) =>
+      n.startsWith('index.json.corrupt-'),
+    ).length,
+    1,
+  )
+})
+
 test('first history open removes only its owned abandoned temporary files, once', async (t) => {
   const { api, file, folder } = await runtime(t)
   await fs.mkdir(folder, { recursive: true })
@@ -620,4 +737,33 @@ test('first history open removes only its owned abandoned temporary files, once'
   await fs.writeFile(join(folder, own[0]), 'live write')
   await api.listVersions(file)
   assert.equal(await fs.readFile(join(folder, own[0]), 'utf8'), 'live write')
+})
+
+test('a save stopped by history says what failed, reading included', async (t) => {
+  const { api } = await runtime(t)
+  const failure = (code) =>
+    api.historyProtectionError(Object.assign(new Error(code), { code }))
+  const said = (reason) =>
+    `Hibi could not keep the previous version in history. ${reason} Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.`
+  assert.equal(
+    failure('ENOSPC').message,
+    said('The storage for Hibi’s app data is full.'),
+  )
+  assert.equal(
+    failure('EACCES').message,
+    said(
+      'Hibi does not have permission to use history in its app data folder, or that folder is read-only.',
+    ),
+  )
+  for (const code of ['EIO', 'EMFILE', undefined]) {
+    const error = failure(code)
+    assert.equal(
+      error.message,
+      said(
+        'Hibi could not read or write version history in its app data folder.',
+      ),
+    )
+    assert.equal(error.code, 'EHISTORY')
+    assert.equal(error.cause.code, code)
+  }
 })

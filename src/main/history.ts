@@ -21,36 +21,15 @@ const directory = (path: string) =>
     createHash('sha256').update(path).digest('hex'),
   )
 const opened = new Map<string, Promise<void>>()
-async function versions(path: string): Promise<Version[]> {
-  const folder = directory(path)
-  let opening = opened.get(folder)
-  if (!opening) {
-    opening = readdir(folder)
-      .catch(() => [])
-      .then((files) =>
-        Promise.all(
-          files
-            .filter((file) =>
-              /^\.(?:index\.json|[0-9a-f-]{36}\.md)\.[0-9a-f-]{36}\.tmp$/.test(
-                file,
-              ),
-            )
-            .map((file) => unlink(join(folder, file)).catch(() => {})),
-        ),
-      )
-      .then(() => {})
-    // Later callers wait too, so cleanup cannot race a new copy in this run.
-    opened.set(folder, opening)
-  }
-  await opening
-  const index = join(folder, 'index.json')
-  let text: string
+const rebuilding = new Map<string, Promise<Version[]>>()
+/** The index's text, or null when there is none; other read errors reach the caller. */
+async function readIndex(folder: string): Promise<string | null> {
   try {
-    text = await readFile(index, 'utf8')
+    return await readFile(join(folder, 'index.json'), 'utf8')
   } catch (error) {
     // Other read errors may pass; they leave the index for the next try.
     const { code } = error as NodeJS.ErrnoException
-    if (code === 'ENOENT') return []
+    if (code === 'ENOENT') return null
     throw Object.assign(
       new Error('Hibi could not read the saved version history.', {
         cause: error,
@@ -58,45 +37,114 @@ async function versions(path: string): Promise<Version[]> {
       { code },
     )
   }
-  let data: unknown
+}
+const readable = (v: unknown): v is Version =>
+  !!v &&
+  typeof v === 'object' &&
+  validId((v as Version).id) &&
+  typeof (v as Version).savedAt === 'number' &&
+  typeof (v as Version).bytes === 'number' &&
+  typeof (v as Version).hash === 'string'
+/** Entries of an intact index, or null when it is damaged. */
+function parse(text: string): Version[] | null {
   try {
-    data = JSON.parse(text)
+    const data: unknown = JSON.parse(text)
+    return Array.isArray(data) && data.every(readable) ? data : null
   } catch {
-    return rebuild(folder, text)
+    return null
   }
-  if (
-    !Array.isArray(data) ||
-    data.some(
-      (v) =>
-        !v ||
-        !validId(v.id) ||
-        typeof v.savedAt !== 'number' ||
-        typeof v.bytes !== 'number' ||
-        typeof v.hash !== 'string',
-    )
+}
+async function versions(path: string): Promise<Version[]> {
+  const folder = directory(path)
+  let opening = opened.get(folder)
+  if (!opening) {
+    opening = open(folder)
+    // Later callers wait too, so cleanup cannot race a new copy in this run.
+    opened.set(folder, opening)
+  }
+  await opening
+  const text = await readIndex(folder)
+  if (text === null) return []
+  return parse(text) ?? rebuild(folder, text)
+}
+/** Before this run writes anything, removes what an earlier run left behind. */
+async function open(folder: string) {
+  const files = await readdir(folder).catch(() => [])
+  await Promise.all(
+    files
+      .filter((file) =>
+        /^\.(?:index\.json|[0-9a-f-]{36}\.md)\.[0-9a-f-]{36}\.tmp$/.test(file),
+      )
+      .map((file) => unlink(join(folder, file)).catch(() => {})),
   )
-    return rebuild(folder, text)
-  return data as Version[]
+  // An intact index lists every copy a save meant to keep. Any other copy was
+  // dropped by the budget, or written for an index a crash never wrote, so
+  // nothing could reach it; it went with its unlink or its save's cleanup.
+  const text = await readIndex(folder).catch(() => null)
+  const entries = text === null ? null : parse(text)
+  if (!entries) return
+  const listed = new Set(entries.map(({ id }) => id))
+  await Promise.all(
+    files
+      .filter((file) => isCopy(file) && !listed.has(file.slice(0, -3)))
+      .map((file) => unlink(join(folder, file)).catch(() => {})),
+  )
+}
+const isCopy = (file: string) =>
+  file.endsWith('.md') && validId(file.slice(0, -3))
+/** One rebuild at a time per note, so a second cannot overwrite a save made after the first. */
+function rebuild(folder: string, damaged: string): Promise<Version[]> {
+  let running = rebuilding.get(folder)
+  if (!running) {
+    running = relist(folder, damaged).finally(() => rebuilding.delete(folder))
+    rebuilding.set(folder, running)
+  }
+  return running
 }
 /**
- * Keeps damaged metadata aside and lists again every copy still on disk, by
- * its own bytes and time, so none is left outside the index and its budget.
+ * Keeps damaged metadata aside and lists again the copies still on disk, so
+ * none is left outside the index and its budget. Entries the damaged index
+ * still reads keep their time and kind; copies older than all of them were
+ * dropped by the budget and stay out. Other copies count as autosaves, as
+ * nobody knows which save kept them.
  */
-async function rebuild(folder: string, damaged: string): Promise<Version[]> {
+async function relist(folder: string, damaged: string): Promise<Version[]> {
+  const current = await readIndex(folder)
+  // An earlier rebuild already replaced this index.
+  if (current !== damaged) return current === null ? [] : (parse(current) ?? [])
   const index = join(folder, 'index.json')
+  let known: Version[] = []
+  try {
+    const data: unknown = JSON.parse(damaged)
+    if (Array.isArray(data)) known = data.filter(readable)
+  } catch {
+    // Text that does not parse names nothing: every copy is listed again.
+  }
+  const byId = new Map(known.map((version) => [version.id, version]))
+  const oldest = known.length
+    ? Math.min(...known.map(({ savedAt }) => savedAt))
+    : -Infinity
   const found: Version[] = []
   for (const name of await readdir(folder)) {
+    if (!isCopy(name)) continue
     const id = name.slice(0, -3)
-    if (!name.endsWith('.md') || !validId(id)) continue
     try {
       const file = join(folder, name)
       const [body, info] = await Promise.all([readFile(file), stat(file)])
       if (!info.isFile()) continue
+      const entry = byId.get(id)
+      const savedAt = entry?.savedAt ?? Math.round(info.mtimeMs)
+      if (!entry && savedAt < oldest) continue
       found.push({
         id,
         hash: createHash('sha256').update(body).digest('hex'),
-        savedAt: Math.round(info.mtimeMs),
+        savedAt,
         bytes: body.byteLength,
+        ...(entry
+          ? entry.automatic
+            ? { automatic: true }
+            : {}
+          : { automatic: true }),
       })
     } catch {
       // A copy that cannot be read stays on disk, out of the list.
@@ -112,6 +160,26 @@ const validId = (id: unknown): id is string =>
   typeof id === 'string' &&
   id.length === 36 &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
+/** Why a save stopped to keep the previous version: what failed, and what to do. */
+export function historyProtectionError(error: unknown): Error {
+  const { code } = error as NodeJS.ErrnoException
+  const failure =
+    code === 'ENOSPC' || code === 'EDQUOT'
+      ? new Error(
+          'Hibi could not keep the previous version in history. The storage for Hibi’s app data is full. Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.',
+          { cause: error },
+        )
+      : code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
+        ? new Error(
+            'Hibi could not keep the previous version in history. Hibi does not have permission to use history in its app data folder, or that folder is read-only. Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.',
+            { cause: error },
+          )
+        : new Error(
+            'Hibi could not keep the previous version in history. Hibi could not read or write version history in its app data folder. Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.',
+            { cause: error },
+          )
+  return Object.assign(failure, { code: 'EHISTORY' })
+}
 export async function listVersions(
   path: string | null,
 ): Promise<DocumentVersion[]> {

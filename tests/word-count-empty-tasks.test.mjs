@@ -93,6 +93,10 @@ const cases = [
   ['1. \\[x]', 0, 1],
   ['1. `[x]`', 0, 1],
   ['1. [[x]](u)', 0, 2],
+  // Continuation lines stay task text, whatever they would be on their own.
+  ['1. [x]\n   [y]: /u', 1, 2],
+  ['   1. [x]\n     - n', 1, 1],
+  ['   10. [ ]\n      - nested', 1, 1],
   // A reference definition makes the marker a link; it is still a checkbox.
   ['[x]: /u\n\n1. [x]', 1, 0],
   ['[x]: /u\n\n- [x]', 1, 0],

@@ -337,24 +337,20 @@ function orderedItem(
           ),
         }),
       }
-    // Like a bullet task, the text after the marker read on its own: the
-    // marker may have lexed as a link to a reference definition.
-    if (index === firstParagraph && emptyTask && 'tokens' in token)
-      token = {
-        ...token,
-        tokens: lex(
-          String(token.text).replace(/^\[[ xX]\]/, ''),
-          syntax,
-        ).flatMap((block) => ('tokens' in block && block.tokens) || []),
-      }
     // the native ordered tokenizer trims its main paragraph before inline lexing.
     if (index === firstParagraph && 'tokens' in token && token.tokens) {
+      let parts = token.tokens
+      // An empty task's marker lexes as a link when the note defines it.
+      if (emptyTask && parts[0]?.type === 'link') parts = parts.slice(1)
       token = {
         ...token,
-        tokens: token.tokens.map((part, at, all) => {
+        tokens: parts.map((part, at, all) => {
           if (part.type !== 'text') return part
           let raw = part.raw
-          if (at === 0) raw = raw.trimStart()
+          if (at === 0) {
+            raw = raw.trimStart()
+            if (emptyTask) raw = raw.replace(/^\[[ xX]\]/, '').trimStart()
+          }
           if (at === all.length - 1) raw = raw.trimEnd()
           return { ...part, raw }
         }),

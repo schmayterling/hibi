@@ -41,6 +41,8 @@ export function markedGithubFootnote(
   const readDefinition = definition.tokenizer
   // The dependency keeps the first definition it reads for each label, even
   // one read by a container pass that was later discarded.
+  // Reset with the dependency's own state in preprocess, so Marked.lexer()
+  // retains it between documents exactly as the dependency does.
   let stored = new Map<string, Tokens.Generic>()
   const read: typeof readDefinition = function (source, tokens) {
     const token = readDefinition.call(this, source, tokens)

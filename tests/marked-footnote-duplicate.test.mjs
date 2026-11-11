@@ -42,3 +42,27 @@ test('footnote duplicates outside re-read containers keep the first body', () =>
       source,
     )
 })
+
+test('footnote definitions nested under their own label keep the nested body and an acyclic tree', () => {
+  for (const source of [
+    '[^1]: f\n\n    [^1]: g\n\nx[^1]',
+    '> [^1]: f\n>\n>     [^1]: g\n\nx[^1]',
+  ]) {
+    let tokens
+    const capture = {
+      hooks: {
+        processAllTokens(list) {
+          tokens = list
+          return list
+        },
+      },
+    }
+    const html = new Marked(
+      blockMarkdown,
+      markedGithubFootnote(),
+      capture,
+    ).parse(source)
+    assert.equal(body(html), oracle(source), source)
+    assert.doesNotThrow(() => JSON.stringify(tokens), source)
+  }
+})

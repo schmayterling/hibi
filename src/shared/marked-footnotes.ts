@@ -1,6 +1,10 @@
 import { Lexer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote as githubFootnotes } from 'marked-github-footnote'
-import { BlockTokenizer, blockContainers } from './marked-blocks.ts'
+import {
+  BlockTokenizer,
+  blockContainers,
+  continuationTokens,
+} from './marked-blocks.ts'
 import { leafBlock } from './marked-leaf-blocks.ts'
 
 /** Bound definitions with Marked's list grammar before the footnote renderer stores them. */
@@ -41,7 +45,22 @@ export function markedGithubFootnote(
     if (!item || item.raw.length < prefix.length)
       return read.call(this, source, tokens)
     const end = marker[0].length + item.raw.length - prefix.length
-    const token = read.call(this, source.slice(0, end), tokens)
+    const physical = source.slice(0, end)
+    const lexer = this.lexer,
+      blockTokens = lexer.blockTokens
+    // The dependency dedents before parsing; retain which lines were lazy.
+    lexer.blockTokens = (...args) => {
+      lexer.blockTokens = blockTokens
+      return continuationTokens(lexer, physical, args[0], () =>
+        Reflect.apply(lexer.blockTokens, lexer, args),
+      )
+    }
+    let token: ReturnType<typeof read>
+    try {
+      token = read.call(this, physical, tokens)
+    } finally {
+      lexer.blockTokens = blockTokens
+    }
     const last = token?.tokens?.at(-1)
     return token && last && !['paragraph', 'text'].includes(last.type)
       ? leafBlock(token)

@@ -274,6 +274,52 @@ function withTextMerges<T>(
 
 const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
 const scanningQuotes = new WeakSet<Tokenizer>()
+/** Underlines kept verbatim by dedenting are lazy, so cannot form headings. */
+function lazySetextEnds(source: string, text: string, physical = 0) {
+  const ends = new Set<number>()
+  if (/\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)/.test(text))
+    for (let at = 0, row = 0; at <= text.length; row++) {
+      const lf = text.indexOf('\n', at),
+        end = lf < 0 ? text.length : lf
+      const next = source.indexOf('\n', physical)
+      const line = text.slice(at, end)
+      const written = source.slice(physical, next < 0 ? undefined : next)
+      if (
+        row &&
+        /^ {0,3}(?:=+|-+)[ \t]*$/.test(line) &&
+        (line === written || (lf < 0 && line === written.trimEnd()))
+      )
+        ends.add(text.length - at)
+      if (lf < 0) break
+      at = lf + 1
+      physical = next < 0 ? source.length : next + 1
+    }
+  return ends
+}
+
+/** Parse a dedented footnote body with its physical lazy-line ownership. */
+export function continuationTokens<T>(
+  lexer: Lexer,
+  physical: string,
+  text: string,
+  read: () => T,
+) {
+  const tokenizer = lexer.options.tokenizer!,
+    previous = lazyUnderlines.get(tokenizer),
+    ends = lazySetextEnds(physical, text)
+  if (ends.size) lazyUnderlines.set(tokenizer, { text, ends })
+  else lazyUnderlines.delete(tokenizer)
+  const top = lexer.state.top
+  lexer.state.top = true
+  try {
+    return withQuoteScan(tokenizer, read)
+  } finally {
+    lexer.state.top = top
+    if (previous) lazyUnderlines.set(tokenizer, previous)
+    else lazyUnderlines.delete(tokenizer)
+  }
+}
+
 // Tokenizers whose quotes keep Marked's own tab handling.
 const untabbedQuotes = new WeakSet<Tokenizer>()
 // Each lexer makes a rules object: the long native quotes share one, so the
@@ -1506,26 +1552,9 @@ export class BlockTokenizer extends Tokenizer {
       }
       const previous = lazyUnderlines.get(this),
         text = args[0],
-        ends = new Set<number>()
-      if (nativeSetext && /\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)/.test(text)) {
-        let physical = itemsAt[current]!
-        for (let at = 0, row = 0; at <= text.length; row++) {
-          const lf = text.indexOf('\n', at),
-            end = lf < 0 ? text.length : lf
-          const next = source.indexOf('\n', physical)
-          const line = text.slice(at, end)
-          const written = source.slice(physical, next < 0 ? undefined : next)
-          if (
-            row &&
-            /^ {0,3}(?:=+|-+)[ \t]*$/.test(line) &&
-            (line === written || (lf < 0 && line === written.trimEnd()))
-          )
-            ends.add(text.length - at)
-          if (lf < 0) break
-          at = lf + 1
-          physical = next < 0 ? source.length : next + 1
-        }
-      }
+        ends = nativeSetext
+          ? lazySetextEnds(source, text, itemsAt[current]!)
+          : new Set<number>()
       if (ends.size) lazyUnderlines.set(this, { text, ends })
       else lazyUnderlines.delete(this)
       try {

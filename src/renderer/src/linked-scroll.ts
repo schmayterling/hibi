@@ -1,5 +1,6 @@
 import type { EditorView } from '@codemirror/view'
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
+import { inOwnScroll, ownScroll } from './own-scroll'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown caret alignment stays active even when linked scrolling is disabled. */
@@ -133,7 +134,75 @@ export function linkScroll(
   const record = () => {
     if (!syncScrolling && aligning) placed = measure()
   }
+  // A script scrolling a pane ends the alignment where it writes. Hibi's own
+  // corrections write inside ownScroll, as do the panes' views measuring and
+  // focusing, which keep their place; the browser's anchoring writes nothing.
+  let unguard: (() => void) | null = null
+  const guard = () => {
+    if (syncScrolling || unguard) return
+    const scrollTop = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'scrollTop',
+    )
+    if (!scrollTop?.get || !scrollTop.set) return
+    const { get, set } = scrollTop
+    const foreign = () => {
+      if (!inOwnScroll()) disarm()
+    }
+    const undo: (() => void)[] = []
+    for (const pane of [first, second]) {
+      Object.defineProperty(pane, 'scrollTop', {
+        configurable: true,
+        get() {
+          return get.call(this)
+        },
+        set(value: number) {
+          foreign()
+          set.call(this, value)
+        },
+      })
+      for (const name of ['scroll', 'scrollTo', 'scrollBy'] as const) {
+        const method = Element.prototype[name] as (...args: unknown[]) => void
+        Object.defineProperty(pane, name, {
+          configurable: true,
+          value(this: Element, ...args: unknown[]) {
+            foreign()
+            method.apply(this, args)
+          },
+        })
+      }
+      undo.push(() => {
+        for (const name of ['scrollTop', 'scroll', 'scrollTo', 'scrollBy'])
+          delete (pane as unknown as Record<string, unknown>)[name]
+      })
+      const content = pane.querySelector('.cm-content')
+      const view = content && sourceView(content)
+      if (!view) continue
+      for (const name of ['measure', 'focus'] as const) {
+        // ponytail: measure is the view's own entry to its measure pass, not
+        // public API; the source-anchor test fails if the view stops calling it.
+        const method = (
+          view as unknown as Record<string, (...args: unknown[]) => void>
+        )[name]
+        if (!method) continue
+        Object.defineProperty(view, name, {
+          configurable: true,
+          value(this: EditorView, ...args: unknown[]) {
+            return ownScroll(() => method.apply(this, args))
+          },
+        })
+        undo.push(() => {
+          delete (view as unknown as Record<string, unknown>)[name]
+        })
+      }
+    }
+    unguard = () => {
+      unguard = null
+      for (const step of undo) step()
+    }
+  }
   const disarm = () => {
+    unguard?.()
     aligning = false
     placed = null
     cancelAnimationFrame(frame)
@@ -175,7 +244,9 @@ export function linkScroll(
       Math.min(top, target.scrollHeight - target.clientHeight),
     )
     if (Math.abs(target.scrollTop - clamped) < 1) return record()
-    target.scrollTop = clamped
+    ownScroll(() => {
+      target.scrollTop = clamped
+    })
     if (markdown && refinements++ < 3) frame = requestAnimationFrame(sync)
   }
   const schedule = () => {
@@ -212,6 +283,7 @@ export function linkScroll(
       event instanceof Event && ['pointerup', 'focusin'].includes(event.type)
     if (!changed && !deliberate) return
     aligning = true
+    guard()
     placed = null
     schedule()
   }
@@ -276,6 +348,7 @@ export function linkScroll(
   sourcePane?.addEventListener('transitionend', settled)
   settled()
   return () => {
+    unguard?.()
     cancelAnimationFrame(frame)
     observer.disconnect()
     drawn.disconnect()

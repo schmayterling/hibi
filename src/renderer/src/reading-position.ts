@@ -1,6 +1,7 @@
 import { Annotation, Facet, type Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
+import { ownScroll } from './own-scroll.ts'
 import { isViewDead } from './view-death.ts'
 
 /**
@@ -449,7 +450,9 @@ function restore(view: EditorView, position: Reading) {
   // Measuring can execute a pending scroll command; its destination takes precedence.
   if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
   if (Math.abs(now - position.top) >= 0.5)
-    position.pane.scrollTop += now - position.top
+    ownScroll(() => {
+      position.pane.scrollTop += now - position.top
+    })
   hold(view, position)
   return true
 }
@@ -560,7 +563,9 @@ export const keepRead = [
     if (position && range.head === position.pos) {
       const now = drawnTop(view, position.pos)
       if (now === null) return false
-      position.pane.scrollTop += now - paneTop(position.pane) - position.top
+      ownScroll(() => {
+        position.pane.scrollTop += now - paneTop(position.pane) - position.top
+      })
       const keep = kept.get(view)
       if (keep) keep.scroll = keep.pane.scrollTop
       hold(view, position)

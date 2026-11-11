@@ -136,8 +136,8 @@ export function linkScroll(
   // it: the panes' views measuring and focusing, reading-position keeping its
   // place, and this alignment's writes. A pane anywhere else was scrolled by
   // someone else: a script writing to it, a descendant scrolled into view, a
-  // scroll command moving no caret, an addon's measure. The browser keeps no
-  // place of its own meanwhile.
+  // scroll command moving no caret, an addon's measure. (The browser keeps
+  // no place of its own: CodeMirror's scrollers turn its anchoring off.)
   const placedAt = new Map<HTMLElement, number>()
   /** Whether a pane is no longer where hibi's own corrections left it. */
   const strayed = () =>
@@ -205,11 +205,6 @@ export function linkScroll(
           },
         })
       }
-      const anchor = pane.style.overflowAnchor
-      pane.style.overflowAnchor = 'none'
-      undo.push(() => {
-        pane.style.overflowAnchor = anchor
-      })
       const content = pane.querySelector('.cm-content')
       const view = content && sourceView(content)
       if (!view) continue

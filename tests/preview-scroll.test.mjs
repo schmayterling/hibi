@@ -776,6 +776,32 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   assert.ok(asked.rich - asked.start >= 997, JSON.stringify(asked))
   await clearDoors()
 
+  // A pane scrolled natively and then corrected by its own view in the same
+  // moment: the correction doesn't make the scroll the view's.
+  const beforeNative = await tops()
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const pane = view.scrollDOM
+    const bottom = pane.getBoundingClientRect().bottom
+    const below = [...view.contentDOM.querySelectorAll('.cm-line')].find(
+      (line) => line.getBoundingClientRect().top >= bottom,
+    )
+    below.scrollIntoView({ block: 'nearest' })
+    const style = document.createElement('style')
+    style.className = 'preview-scroll-test'
+    style.textContent = '.source-pane .cm-line { padding-top: 2px }'
+    document.head.append(style)
+    view.requestMeasure()
+    view.coordsAtPos(view.state.selection.main.head)
+  })
+  const afterNative = await tops()
+  assert.ok(
+    afterNative.source - beforeNative.source > 5 &&
+      Math.abs(afterNative.rich - beforeNative.rich) < 3,
+    JSON.stringify({ beforeNative, afterNative }),
+  )
+  await clearDoors()
+
   // While the alignment holds, the browser keeps no place of its own in the
   // preview: content growing above moves the lines, the alignment follows,
   // and it still follows later layout.

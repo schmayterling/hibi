@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
-  autosaveOff,
   electron,
   openInDocumentEditor,
   stopElectronTree,
@@ -30,7 +29,11 @@ const waitWhileRunning = (app, child, check) =>
   waitForAsync(app, check).catch((error) => {
     if (child.exitCode !== 0) throw error
   })
-async function note(t, { recovered = false, clock = recovered } = {}) {
+// Test apps start with autosave off; recovered notes and autosave UI cases turn it on.
+async function note(
+  t,
+  { recovered = false, clock = recovered, autosave = recovered } = {},
+) {
   const profile = await realpath(
     await mkdtemp(join(tmpdir(), 'hibi-save-safety-')),
   )
@@ -63,7 +66,7 @@ async function note(t, { recovered = false, clock = recovered } = {}) {
     )
   }
   let app = await electron.launch({
-    autosave: true,
+    autosave,
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   const child = app.process()
@@ -102,7 +105,6 @@ async function note(t, { recovered = false, clock = recovered } = {}) {
   if (clock) await page.clock.install()
   await waitForFormattedEditor(app, page)
   if (!recovered) {
-    await autosaveOff(app, page)
     await clickMenu(app, 'Open…')
   }
   await waitForAsync(
@@ -128,12 +130,11 @@ async function note(t, { recovered = false, clock = recovered } = {}) {
   }
   const restart = async () => {
     app = await electron.launch({
-      autosave: true,
+      autosave,
       args: [resolve('.'), `--user-data-dir=${profile}`],
     })
     const page = await app.firstWindow()
     await waitForFormattedEditor(app, page)
-    await autosaveOff(app, page)
     await app.evaluate(({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -554,7 +555,10 @@ test('unwritable history keeps autosave refusing with one lasting notice', {
   skip: process.platform === 'win32',
   timeout: 60000,
 }, async (t) => {
-  const { app, page, profile, file, edit } = await note(t, { clock: true })
+  const { app, page, profile, file, edit } = await note(t, {
+    clock: true,
+    autosave: true,
+  })
   const folder = join(profile, 'history', sha(file))
   await mkdir(folder, { recursive: true })
   await chmod(folder, 0o500)

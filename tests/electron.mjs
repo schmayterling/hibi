@@ -58,11 +58,13 @@ if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
 
 // A test that times out keeps running after node:test has moved on. An app it
 // was still launching then would keep the file from ever exiting. A file runs
-// its tests one at a time, so a launch still pending when a test ends is that
-// test's, and nothing will close it.
+// its top-level tests one at a time, so a launch still pending when one ends is
+// that test's or its subtests', and nothing will close it. A subtest ending
+// says nothing: its parent may still be waiting on a launch.
 const orphanable = new Set()
 let hooksRan = false
-function orphanPendingLaunches() {
+function orphanPendingLaunches(t) {
+  if (t.fullName !== t.name) return
   for (const launch of orphanable) launch.orphaned = true
 }
 async function closeOrphanedLaunches() {

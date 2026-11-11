@@ -26,6 +26,26 @@ if (scenario === 'hook') {
     await app.close()
   })
   test('skipped by the name pattern', () => {})
+} else if (scenario === 'subtest') {
+  // A subtest ending says nothing about a launch its parent still waits on.
+  const ready = async (app) => {
+    await (await app.firstWindow()).locator('.titlebar').waitFor()
+    await app.evaluate(() => {})
+  }
+  test('a parent awaits its launch after a subtest', async (t) => {
+    const launching = launch()
+    await t.test('a quick subtest', () => {})
+    const app = await launching
+    await ready(app)
+    await app.close()
+    console.log('the parent kept its app after one subtest')
+  })
+  test('a parent awaits its launch with a subtest', async (t) => {
+    const [app] = await Promise.all([launch(), t.test('alongside', () => {})])
+    await ready(app)
+    await app.close()
+    console.log('the parent kept its app alongside a subtest')
+  })
 } else {
   // The timeout lands while the app is still starting.
   test('a test that times out during a launch', { timeout: 200 }, async (t) => {

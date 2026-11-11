@@ -72,6 +72,16 @@ test('a launch a timed-out test left behind closes while a later test runs', {
   assert.deepEqual(left, [])
 })
 
+test('a launch its test still awaits stays open when a subtest ends', {
+  timeout: 120000,
+}, async (t) => {
+  const { code, output, left } = await run(t, 'subtest')
+  assert.equal(code, 0, output)
+  assert.match(output, /the parent kept its app after one subtest/)
+  assert.match(output, /the parent kept its app alongside a subtest/)
+  assert.deepEqual(left, [])
+})
+
 test("an app a before hook launches is still the file's after hook's to close", {
   timeout: 120000,
 }, async (t) => {

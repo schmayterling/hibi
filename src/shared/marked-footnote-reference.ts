@@ -7,7 +7,8 @@ const runs = new WeakMap<Token[], { remaining: number; matches: Set<number> }>()
 
 /**
  * GFM's footnote label match: collapsed whitespace, then full case folding
- * (`ß`, `ẞ` and `SS` match, as do `σ`, `ς` and `Σ`).
+ * (`ß`, `ẞ` and `SS` match, as do `σ`, `ς` and `Σ`). Lowercased last, as the
+ * footnote dependency keys its labels, so ASCII keys read as before.
  */
 export const footnoteLabel = (label: string) =>
   label
@@ -15,6 +16,7 @@ export const footnoteLabel = (label: string) =>
     .trim()
     .toLowerCase()
     .toUpperCase()
+    .toLowerCase()
 
 function addLabel(node: Label, label: string) {
   const key = footnoteLabel(label)

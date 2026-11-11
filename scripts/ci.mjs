@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import {
   appendFileSync,
   existsSync,
@@ -7,9 +8,10 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, posix, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const git = (root, ...args) =>
   execFileSync('git', args, {
@@ -37,6 +39,10 @@ const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
 // shortcuts. `// ci: alone (why)` marks any other test that a neighbour can break.
 const alone =
   /^\/\/ ci: alone\b|\bclipboard\.(?:read|write|clear|has)|\bnavigator\.clipboard\b|\bglobalShortcut\b|\bwebContents\.(?:paste|copy|cut)\(|['"`](?:Control|ControlOrMeta|Meta)\+[cvx]['"`]/m
+// Seconds a test file may run unless it asks for more. The slowest files took
+// 261 s on a busy Mac and up to 176 s on hosted runners (11/11): 900 s leaves
+// slower machines room and still names a hang well before a job times out.
+const fileTimeout = 900
 
 // Hosted runners with 4 cores have no room for a second app: at 2 workers tests ran
 // 1.5 times slower at the median, and reds went up. Node test files share better.
@@ -246,7 +252,7 @@ export function shardTests(selected, all, index, total) {
   return selected.filter((test) => assigned.has(test))
 }
 
-export function runCI({ dev = false } = {}) {
+export async function runCI({ dev = false } = {}) {
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
   // Each answers for different tests, so neither can stand in for the other.
@@ -369,42 +375,399 @@ export function runCI({ dev = false } = {}) {
   }
   if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
     npm('run', 'build:app')
-  const failuresFile = join(directory, 'failures.jsonl')
-  // TAP prints each failure's details immediately; spec defers them to the end.
-  // A group that can't start or report in full is a red of its own, green exit
-  // or not, and the groups after it still run.
-  const runTests = (batch, tests, concurrency) => {
-    if (!tests.length) return []
-    let result
+  // node:test can't stop a file stuck in a synchronous loop, so each test file
+  // runs in a runner of its own: one still running past its time is stopped,
+  // with every process it started, and named, while the files beside it run on.
+  // A file can ask for longer in the comments it opens with:
+  // `// ci: timeout <seconds> s (why)`.
+  const limit = (test) => {
+    const opening = /^(?:[ \t]*(?:\/\/[^\n]*)?\r?\n)*/.exec(
+      readFileSync(join(root, test), 'utf8'),
+    )[0]
+    const asked = /^\/\/ ci: timeout (\S+) s\b/m.exec(opening)?.[1]
+    if (asked === undefined) return fileTimeout
+    const seconds = /^\d{1,5}$/.test(asked) ? Number(asked) : 0
+    if (seconds < 1 || seconds > 86400)
+      throw new Error(`ci: timeout ${asked} s is not 1 to 86400 seconds`)
+    return seconds
+  }
+  // Every process a file starts inherits its runner's tag, through forks, new
+  // sessions and parents that exit: what carries the tag is the file's. Looked
+  // for only when a file ends or is stopped. A process that clears its own
+  // environment and leaves the runner's process group escapes this.
+  const pause = (ms) => new Promise((done) => setTimeout(done, ms))
+  // PowerShell alone can take seconds to start.
+  const lookLimit = process.platform === 'win32' ? 20 : 5
+  const within = (promise, what) => {
+    let timer
+    return Promise.race([
+      promise,
+      new Promise((_, fail) => {
+        timer = setTimeout(
+          () => fail(new Error(`${what} took over ${lookLimit} s`)),
+          lookLimit * 1000,
+        )
+      }),
+    ]).finally(() => clearTimeout(timer))
+  }
+  const capture = (command, args) =>
+    within(
+      new Promise((settle, fail) => {
+        const child = spawn(command, args, {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+        let output = ''
+        child.stdout.on('data', (chunk) => {
+          output += chunk
+        })
+        const timer = setTimeout(() => child.kill('SIGKILL'), lookLimit * 1000)
+        child.once('error', (error) => {
+          clearTimeout(timer)
+          fail(error)
+        })
+        child.once('close', (status, signal) => {
+          clearTimeout(timer)
+          if (status === 0) settle(output)
+          else fail(new Error(`${command} exited ${status ?? signal}`))
+        })
+      }),
+      command,
+    )
+  // Windows can't show another process's environment. There a file owns the
+  // processes its runner started and theirs, learned by parent id from a look
+  // every 2 s while files run, so a child whose parent has since exited stays
+  // its file's. ponytail: a process started and orphaned between two looks is
+  // missed, and so is a real child started over 1 s after its parent was last
+  // seen; a process that takes a freed id and starts a child within 1 s, then
+  // exits before a look, can be claimed. A native helper holding each runner
+  // in a job object would close all three.
+  const windowsLook = () =>
+    capture('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      // A process with no start time, as the idle one can be, is left out.
+      'Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())`t$($_.Name)" }',
+    ]).then((output) =>
+      output
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => {
+          const [pid, parent, created, ...name] = line.split('\t')
+          const row = {
+            pid: Number(pid),
+            parent: Number(parent),
+            created: Number(created),
+            name: name.join('\t'),
+          }
+          if (![row.pid, row.parent, row.created].every(Number.isSafeInteger))
+            throw new Error(
+              `powershell.exe gave an unreadable line: ${line.slice(0, 80)}`,
+            )
+          return row
+        })
+        .filter((row) => row.pid !== process.pid),
+    )
+  const lineages = new Map()
+  // One process, or a process that took a used one's id: start times tell.
+  const same = (row, known) =>
+    known && Math.abs(row.created - known.created) < 2000
+  // `now` is when the look started: the rows are at least that fresh.
+  const learn = (rows, now) => {
+    for (const { runner, since, known } of lineages.values()) {
+      // A known id now on a process with another start time was freed and
+      // taken: that process isn't the file's, nor are its children.
+      for (const row of rows) {
+        const entry = known.get(row.pid)
+        if (entry && same(row, entry)) entry.seen = now
+        else if (entry) known.delete(row.pid)
+      }
+      for (let grew = true; grew; ) {
+        grew = false
+        for (const row of rows) {
+          if (row.created < since || known.has(row.pid)) continue
+          // A child starts after its parent, and while it was alive: a process
+          // started after its parent's id was last seen isn't its child.
+          const parent = known.get(row.parent)
+          if (
+            row.pid === runner ||
+            (parent &&
+              row.created >= parent.created - 2000 &&
+              row.created <= parent.seen + 1000)
+          ) {
+            known.set(row.pid, { ...row, seen: now })
+            grew = true
+          }
+        }
+      }
+    }
+  }
+  let windowsLooks
+  const follow = (runner, since) => {
+    lineages.set(runner, { runner, since, known: new Map() })
+    look()
+    windowsLooks ??= setInterval(look, 2000)
+  }
+  let looking = false
+  const look = async () => {
+    if (looking) return
+    looking = true
     try {
-      rmSync(failuresFile, { force: true })
-      result = spawnSync(
-        process.execPath,
-        [
-          '--import',
-          './tests/file-limit.mjs',
-          '--test',
-          '--test-reporter=tap',
-          '--test-reporter-destination=stdout',
-          `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
-          `--test-reporter-destination=${failuresFile}`,
-          `--test-concurrency=${concurrency}`,
-          ...tests,
-        ],
-        { stdio: 'inherit', env: process.env },
+      const now = Date.now()
+      learn(await windowsLook(), now)
+    } catch {
+      /* Looked at again in 2 s. */
+    } finally {
+      looking = false
+    }
+  }
+  const unfollow = (runner) => {
+    lineages.delete(runner)
+    if (!lineages.size) {
+      clearInterval(windowsLooks)
+      windowsLooks = undefined
+    }
+  }
+  // What a file owns: every process whose environment holds its tag, read as
+  // a real entry (not a word in a command line or another variable), and every
+  // member of its runner's process group, tagged or not. Tags chain, so a check
+  // run inside a test file still finds what its runners start.
+  const owned = (tag, runner) => {
+    if (process.platform === 'win32') {
+      const now = Date.now()
+      return windowsLook().then((rows) => {
+        learn(rows, now)
+        const known = lineages.get(runner)?.known ?? new Map()
+        return rows
+          .filter((row) => same(row, known.get(row.pid)))
+          .map(({ pid, name }) => ({ pid, name }))
+      })
+    }
+    const ownedBy = (entry) =>
+      entry.startsWith('HIBI_CI_FILE=') &&
+      entry.slice('HIBI_CI_FILE='.length).split(':').includes(tag)
+    if (process.platform === 'linux')
+      return within(
+        (async () => {
+          const found = []
+          for (const entry of await readdir('/proc'))
+            if (/^\d+$/.test(entry) && Number(entry) !== process.pid)
+              try {
+                const [environment, stat] = await Promise.all([
+                  readFile(`/proc/${entry}/environ`, 'utf8'),
+                  readFile(`/proc/${entry}/stat`, 'utf8'),
+                ])
+                // The group follows the name, which can hold anything but ')'.
+                const group = Number(
+                  stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2],
+                )
+                if (group === runner || environment.split('\0').some(ownedBy))
+                  found.push({
+                    pid: Number(entry),
+                    name: stat.slice(
+                      stat.indexOf('(') + 1,
+                      stat.lastIndexOf(')'),
+                    ),
+                  })
+              } catch {
+                /* Gone, or not ours to read. */
+              }
+          return found
+        })(),
+        '/proc',
       )
+    // macOS shows another process's environment only as text after its command
+    // line; the kernel's own copy keeps each entry apart.
+    return capture('python3', [
+      // Isolated: no PYTHONPATH or user site packages in the scan.
+      '-I',
+      fileURLToPath(new URL('./ci-owned.py', import.meta.url)),
+      tag,
+      String(runner),
+    ]).then((output) =>
+      output
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const [pid, ...name] = line.split('\t')
+          if (!/^[1-9]\d*$/.test(pid))
+            throw new Error(
+              `python3 gave an unreadable line: ${line.slice(0, 80)}`,
+            )
+          return { pid: Number(pid), name: name.join('\t') }
+        }),
+    )
+  }
+  const signal = (pid, name) => {
+    try {
+      process.kill(pid, name)
+    } catch {
+      /* Already gone. */
+    }
+  }
+  // Kills what the file owns until two looks in a row find nothing. A process born mid-kill carries the tag too, so the next
+  // look finds it. Resolves to what was left after a clean exit, what outlived
+  // the kill, and any reason it couldn't tell.
+  const cleanUp = async (tag, runner, exited) => {
+    let left = []
+    let found = []
+    try {
+      // A process on its way out after a clean exit isn't left behind.
+      for (let look = 0; look < 20; look++) {
+        found = await owned(tag, runner)
+        if (!found.length || !exited) break
+        await pause(100)
+      }
+      if (exited) left = found
+      for (let quiet = 0, round = 0; quiet < 2 && round < 50; round++) {
+        if (round) found = await owned(tag, runner)
+        quiet = found.length ? 0 : quiet + 1
+        for (const { pid } of found) signal(pid, 'SIGKILL')
+        if (found.length) await pause(50)
+      }
+      return { left, outlived: found }
+    } catch (error) {
+      // Nothing to go by: the runner and what's below it go the blunt way.
+      // taskkill /T walks the tree from a live root, so it goes first.
+      if (process.platform === 'win32')
+        await capture('taskkill', ['/pid', String(runner), '/T', '/F']).catch(
+          () => {},
+        )
+      signal(-runner, 'SIGKILL')
+      signal(runner, 'SIGKILL')
+      return { left, outlived: [], error: error.message }
+    }
+  }
+  const running = new Set()
+  let cancelled = false
+  // An interrupted check takes its tests with it: no file starts after this.
+  const interrupt = async (signal) => {
+    cancelled = true
+    await Promise.all([...running].map((stop) => stop()))
+    process.kill(process.pid, signal)
+  }
+  const count = (value) => Number.isInteger(value) && value >= 0
+  const keys = (record, allowed) =>
+    Object.keys(record).every((key) => allowed.includes(key))
+  const runFile = async (batch, test, report) => {
+    const failed = []
+    const problems = []
+    let result
+    let seconds
+    let started = false
+    let overdue = false
+    let cleanup = { left: [], outlived: [] }
+    try {
+      // Before anything that can fail: another file's report must not stand in.
+      rmSync(report, { force: true })
+      seconds = limit(test)
+      const tag = randomUUID()
+      // A little early: process start times come from the wall clock.
+      const since = Date.now() - 2000
+      result = await new Promise((settle) => {
+        const child = spawn(
+          process.execPath,
+          [
+            '--import',
+            './tests/file-limit.mjs',
+            '--test',
+            '--test-reporter=tap',
+            '--test-reporter-destination=stdout',
+            `--test-reporter=${new URL('./ci-failures.mjs', import.meta.url).href}`,
+            `--test-reporter-destination=${report}`,
+            test,
+          ],
+          // A group of its own, so stopping it stops what it started. Its own
+          // limit gives this check the first word.
+          {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {
+              ...process.env,
+              CI_FILE_LIMIT_MS: String((seconds + 60) * 1000),
+              HIBI_CI_FILE: [process.env.HIBI_CI_FILE, tag]
+                .filter(Boolean)
+                .join(':'),
+            },
+            detached: process.platform !== 'win32',
+          },
+        )
+        child.once('spawn', () => {
+          started = true
+        })
+        // Files run side by side, so each prints its output whole when it ends.
+        let output = ''
+        child.stdout?.on('data', (chunk) => {
+          output += chunk
+        })
+        child.stderr?.on('data', (chunk) => {
+          output += chunk
+        })
+        if (child.pid && process.platform === 'win32') follow(child.pid, since)
+        let stopping
+        const stop = () => {
+          stopping ??= child.pid
+            ? cleanUp(tag, child.pid, false)
+            : Promise.resolve(cleanup)
+          return stopping
+        }
+        running.add(stop)
+        // Timers keep the machine's monotonic time: clock changes don't move
+        // them, and time asleep doesn't count.
+        const timer = setTimeout(() => {
+          overdue = true
+          stop()
+        }, seconds * 1000)
+        let ended = false
+        const end = async (outcome) => {
+          if (ended) return
+          ended = true
+          clearTimeout(timer)
+          try {
+            // Whatever made the runner end, what it started goes too.
+            if (stopping) cleanup = await stopping
+            else if (child.pid) cleanup = await cleanUp(tag, child.pid, true)
+          } finally {
+            unfollow(child.pid)
+            running.delete(stop)
+            process.stdout.write(output)
+            settle(outcome)
+          }
+        }
+        child.once('error', (error) => end({ error }))
+        child.once('close', (status, signal) => end({ status, signal }))
+      })
     } catch (error) {
       result = { error }
     }
-    const failed = []
-    const problems = [
-      result.error && String(result.error.message ?? result.error),
-      result.signal && `killed by ${result.signal}`,
-    ]
+    if (overdue)
+      failed.push({
+        batch,
+        name: `did not finish within ${seconds} s`,
+        file: test,
+        error: cleanup.error
+          ? 'stopped, but what it started could not be checked'
+          : 'stopped with everything it started',
+      })
+    const named = (found) =>
+      found.map(({ pid, name }) => `${name} ${pid}`).join(', ')
+    const leftovers = [
+      cleanup.left.length && `left ${named(cleanup.left)} running`,
+      cleanup.outlived.length &&
+        `${named(cleanup.outlived)} kept running after it was stopped`,
+      cleanup.error && `could not verify cleanup: ${cleanup.error}`,
+    ].filter(Boolean)
+    if (!overdue)
+      problems.push(
+        result.error && String(result.error.message ?? result.error),
+        result.signal && `killed by ${result.signal}`,
+      )
+    let ran = 0
     try {
       let lines = []
       try {
-        lines = readFileSync(failuresFile, 'utf8').split('\n').filter(Boolean)
+        // Only a runner that started wrote it.
+        if (started)
+          lines = readFileSync(report, 'utf8').split('\n').filter(Boolean)
       } catch {
         /* A missing report didn't finish, as below. */
       }
@@ -415,9 +778,6 @@ export function runCI({ dev = false } = {}) {
           return undefined
         }
       })
-      const count = (value) => Number.isInteger(value) && value >= 0
-      const keys = (record, allowed) =>
-        Object.keys(record).every((key) => allowed.includes(key))
       const last = records.at(-1)
       const done =
         last?.done === true &&
@@ -428,6 +788,7 @@ export function runCI({ dev = false } = {}) {
           ? last
           : undefined
       const body = done ? records.slice(0, -1) : records
+      const listed = []
       for (const record of body)
         if (
           record &&
@@ -438,43 +799,89 @@ export function runCI({ dev = false } = {}) {
           ['string', 'undefined'].includes(typeof record.file) &&
           (record.line === undefined || count(record.line))
         )
-          failed.push({
+          listed.push({
             batch,
             ...record,
             file:
               record.file && relative(root, record.file).replaceAll('\\', '/'),
           })
-      problems.push(
-        !done && 'its report did not finish',
-        body.length > failed.length &&
-          `${body.length - failed.length} unreadable report lines`,
-        done &&
-          done.failures !== failed.length &&
-          `its report counted ${done.failures} failures but held ${failed.length}`,
-        // A batch where every file skipped or registered nothing proves nothing.
-        done?.ran === 0 && 'ran no tests',
-        done &&
-          done.files < tests.length &&
-          `heard from ${done.files} of its ${tests.length} files`,
-      )
+      failed.unshift(...listed)
+      ran = done?.ran ?? 0
+      // A stopped file's report is cut short: its reds so far are all it has.
+      if (started && !overdue)
+        problems.push(
+          !done && 'its report did not finish',
+          body.length > listed.length &&
+            `${body.length - listed.length} unreadable report lines`,
+          done &&
+            done.failures !== listed.length &&
+            `its report counted ${done.failures} failures but held ${listed.length}`,
+          done?.files === 0 && 'its runner heard nothing from it',
+        )
     } catch (error) {
       problems.push(`its report could not be read: ${error?.message}`)
     }
-    if (problems.some(Boolean) || (result.status !== 0 && !failed.length))
+    if (
+      problems.some(Boolean) ||
+      (!overdue && result.status !== 0 && !failed.length)
+    )
       failed.push({
         batch,
         name:
           failed.length || result.status === 0
             ? 'did not finish'
-            : `exited ${result.status ?? result.signal ?? 'early'} with no failing test reported`,
-        error: [...problems.filter(Boolean), `${tests.length} test files`].join(
-          '; ',
-        ),
+            : result.status === undefined
+              ? 'could not start'
+              : `exited ${result.status ?? result.signal} with no failing test reported`,
+        file: test,
+        error: problems.filter(Boolean).join('; ') || 'no report',
+      })
+    if (leftovers.length)
+      failed.push({
+        batch,
+        name: 'did not stop what it started',
+        file: test,
+        error: leftovers.join('; '),
+      })
+    return { failed, ran }
+  }
+  // A red in one file or group must not hide the reds of the others.
+  const runTests = async (batch, tests, concurrency) => {
+    const results = []
+    let next = 0
+    await Promise.all(
+      Array.from(
+        { length: Math.min(concurrency, tests.length) },
+        async (_, slot) => {
+          while (!cancelled && next < tests.length) {
+            const index = next++
+            results[index] = await runFile(
+              batch,
+              tests[index],
+              join(directory, `report-${slot}.jsonl`),
+            )
+          }
+        },
+      ),
+    )
+    const failed = results.flatMap((result) => result.failed)
+    // A group where every file skipped or registered nothing proves nothing.
+    if (
+      tests.length &&
+      !failed.length &&
+      results.every((result) => result.ran === 0)
+    )
+      failed.push({
+        batch,
+        name: 'did not finish',
+        error: `ran no tests; ${tests.length} test files`,
       })
     return failed
   }
-  // A red in one group must not hide the reds of the groups after it.
-  const failures = [
+  const failures = []
+  process.once('SIGINT', interrupt)
+  process.once('SIGTERM', interrupt)
+  for (const [batch, tests, concurrency] of [
     ['unit', unitTests, availableParallelism()],
     [
       'node',
@@ -488,9 +895,10 @@ export function runCI({ dev = false } = {}) {
     ],
     ['app', appTests, workers.apps],
     ['alone', aloneTests, 1],
-  ].flatMap(([batch, tests, concurrency]) =>
-    runTests(batch, tests, concurrency),
-  )
+  ])
+    failures.push(...(await runTests(batch, tests, concurrency)))
+  process.off('SIGINT', interrupt)
+  process.off('SIGTERM', interrupt)
   const where = ({ file, line }) =>
     file ? `${file}${line ? `:${line}` : ''}` : ''
   if (failures.length) {
@@ -547,4 +955,4 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 )
-  runCI()
+  await runCI()

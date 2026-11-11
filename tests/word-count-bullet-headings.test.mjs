@@ -113,3 +113,22 @@ test('word count of bullet headings agrees between single-pass and incremental c
     }
   }
 })
+
+test('word count keeps a bullet task whose next line is a lone dash, as the rich view does', () => {
+  for (const [source, count] of [
+    ['- [x]\n  -', 0],
+    ['- [x]\n  - ', 0],
+    ['> - [x]\n>   - ', 0],
+    ['- [x]\n  -\n  b', 1],
+    ['- [ ]\n  -\t', 0],
+  ]) {
+    const { marker } = view(source)
+    assert.ok(marker < Infinity, `rich view ${JSON.stringify(source)}`)
+    assert.equal(words(source), count, JSON.stringify(source))
+    assert.doesNotMatch(
+      richText(source, syntax),
+      /\[[ xX]\]/,
+      JSON.stringify(source),
+    )
+  }
+})

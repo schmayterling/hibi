@@ -201,10 +201,7 @@ test('formatted edits and autosave preserve exact Obsidian syntax and entities',
   const { app, page, rich, file, cdp, expected, caret } =
     await openFormattedPreservation(t, original)
   await page.evaluate(() => {
-    localStorage.setItem(
-      'hibi:autosave',
-      JSON.stringify({ enabled: true, delay: 1000 }),
-    )
+    window.hibi.setAutosavePreferences({ enabled: true, delay: 1000 })
     localStorage.setItem('markdown-markers', 'false')
   })
   await page.reload()

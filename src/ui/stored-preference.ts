@@ -15,6 +15,7 @@ export function stored<T>(
   key: string,
   read: () => T,
   write: (value: T) => string,
+  persist?: (value: T) => void,
 ) {
   let value = read()
   const listeners = new Set<() => void>()
@@ -28,8 +29,13 @@ export function stored<T>(
   return {
     get: () => value,
     set(next: T) {
+      persist?.(next)
+      try {
+        localStorage.setItem(key, write(next))
+      } catch (error) {
+        if (!persist) throw error
+      }
       value = next
-      localStorage.setItem(key, write(next))
       publish()
     },
     subscribe(listener: () => void) {

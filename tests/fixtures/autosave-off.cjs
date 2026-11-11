@@ -26,6 +26,5 @@ function pinAutosaveOff() {
   })
 }
 
-// The app reads its own arguments from the second on, as if no -r came first.
-process.argv.splice(process.argv.indexOf(__filename) - 1, 2)
+require('./preload-argv.cjs')(process.argv, __filename)
 pinAutosaveOff()

@@ -197,3 +197,43 @@ test('a save with no edits during the write reads saved', async () => {
   assert.equal(await fs.readFile(file, 'utf8'), away)
   assert.equal(await settled(), false)
 })
+
+test('addon target save respects untouched recovery but saves after an edit; user save can accept it', async () => {
+  const file = await note('original')
+  const { createHash } = await import('node:crypto')
+  const restore = () =>
+    document.openRecovered(
+      window,
+      {
+        path: file,
+        named: true,
+        name: 'note.md',
+        savedHash: createHash('sha256').update('original').digest('hex'),
+      },
+      async function* () {
+        yield 'recovered text'
+      },
+    )
+  await restore()
+  const saveTarget = () => {
+    const state = document.getDocument()
+    return document.saveTargetDocument(
+      window,
+      state.tabId,
+      state.revision,
+      state.contentVersion,
+      () => true,
+    )
+  }
+  assert.equal((await saveTarget()).status, 'stale')
+  assert.equal(await fs.readFile(file, 'utf8'), 'original')
+  assert.equal(document.getDocument().dirty, true)
+  edit('reviewed recovery')
+  assert.equal((await saveTarget()).status, 'saved')
+  assert.equal(await fs.readFile(file, 'utf8'), 'reviewed recovery')
+  await fs.writeFile(file, 'original')
+  await document.loadDocument(window, file)
+  await restore()
+  await document.saveDocument(window)
+  assert.equal(await fs.readFile(file, 'utf8'), 'recovered text')
+})

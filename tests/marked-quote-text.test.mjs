@@ -29,7 +29,8 @@ for (const long of [false, true])
         const quote = readNativeQuote(input)
         assert.equal(
           quote.text,
-          quote.raw.replace(/^ {0,3}>[ \t]?/gm, ''),
+          // Here >\t spans columns 1–4; one space belongs to the marker.
+          quote.raw.replace(/^>\t/gm, '>   ').replace(/^ {0,3}>[ \t]?/gm, ''),
           input,
         )
       }

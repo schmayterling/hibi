@@ -155,9 +155,12 @@ test('other fences keep their native code tokens', () => {
   ])
     assert.deepEqual(
       lex(source),
-      new Marked()
-        .lexer(source)
-        .map(({ type, raw, text }) => ({ type, raw, text })),
+      // Marked #4110 expands literal fenced tabs; CommonMark §2.2 preserves them.
+      source.startsWith('>')
+        ? [{ type: 'blockquote', raw: source, text: '```\n\tx\n```' }]
+        : new Marked()
+            .lexer(source)
+            .map(({ type, raw, text }) => ({ type, raw, text })),
       source,
     )
   // Closing fences with tabs and tilde fences' bodies change only per CommonMark.

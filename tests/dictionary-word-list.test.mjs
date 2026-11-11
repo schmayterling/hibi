@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { after, before, electron } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 
 const short = (index) => `w${String(index).padStart(4, '0')}`
 // Valid 64-character words wrap, so their rows are taller than one-line rows.
@@ -57,7 +58,7 @@ before(
     })
     await writeFile(
       join(root, 'index.html'),
-      '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+      harnessPage({ css: 'harness.css' }),
     )
     await writeFile(
       join(root, 'main.cjs'),

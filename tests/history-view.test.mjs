@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
-  autosaveOff,
   electron,
   openInDocumentEditor,
   waitForAsync,
@@ -334,7 +333,6 @@ test('the history view leaves out an autosave within 3 minutes of a point it lis
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await waitForFormattedEditor(app, page)
-  await autosaveOff(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   await openInDocumentEditor(app, page, async () => {
     await pressShortcut(app, `${mod}+o`)
@@ -405,7 +403,6 @@ test('the history view lists as a point a text no saved version holds: after Sav
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await waitForFormattedEditor(app, page)
-  await autosaveOff(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   const shows = (text) =>
     waitForAsync(
@@ -654,7 +651,6 @@ test('going to a step or restoring a point shows the change in the editor, and a
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await waitForFormattedEditor(app, page)
-  await autosaveOff(app, page)
   await page.waitForFunction(() => !!window.readonlyCodeMirror)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   const markdown = () =>
@@ -831,7 +827,6 @@ test('restoring a saved version shows the change in the editor, one chosen while
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   await waitForFormattedEditor(app, page)
-  await autosaveOff(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   const markdown = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)

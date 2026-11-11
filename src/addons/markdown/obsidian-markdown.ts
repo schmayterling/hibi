@@ -1,4 +1,4 @@
-import type { MarkedExtension, Token } from 'marked'
+import type { MarkedExtension } from 'marked'
 import { inlineStart } from '../../shared/marked-inline-start.ts'
 import { highlightToken, wikiToken } from '../../shared/marked-obsidian.ts'
 
@@ -11,17 +11,14 @@ const escapeHtml = (value: string) =>
       ] ?? character,
   )
 
-function token(source: string, embed: boolean, tokens: Token[]) {
-  const value = wikiToken(source, embed, tokens)
-  return value && { ...value, aliased: value.raw.includes('|') }
-}
-
 export const obsidianMarkdown: MarkedExtension = {
   extensions: [
     {
       name: 'obsidianEmbed',
       level: 'inline',
-      ...inlineStart('![[', (source, tokens) => token(source, true, tokens)),
+      ...inlineStart('![[', (source, tokens) =>
+        wikiToken(source, true, tokens),
+      ),
       renderer(value) {
         return `<span class="obsidian-embed">${escapeHtml(value.raw)}</span>`
       },
@@ -29,7 +26,9 @@ export const obsidianMarkdown: MarkedExtension = {
     {
       name: 'obsidianWikiLink',
       level: 'inline',
-      ...inlineStart('[[', (source, tokens) => token(source, false, tokens)),
+      ...inlineStart('[[', (source, tokens) =>
+        wikiToken(source, false, tokens),
+      ),
       renderer(value) {
         return `<span class="obsidian-wiki-link">${escapeHtml(value.text)}</span>`
       },

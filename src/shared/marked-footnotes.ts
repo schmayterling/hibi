@@ -136,10 +136,13 @@ export function markedGithubFootnote(
   // In a quote, tabs keep the columns they have in the note, as for code.
   definition.tokenizer = function (source, tokens) {
     const tokenizer = this.lexer.options.tokenizer
-    const columns =
+    // A definition ends before the next definition line: normalize only that.
+    const next =
       tokenizer &&
       /^ {0,3}\[\^[^\]\s]+\]:/.test(source) &&
-      quoteColumns(tokenizer, source, 8)
+      /\n {0,3}\[\^[^\]\s]+\]:|$/.exec(source)!
+    const columns =
+      tokenizer && next && quoteColumns(tokenizer, source, 8, next.index)
     if (!columns) return readHere.call(this, source, tokens)
     const token = readHere.call(this, columns.text, tokens)
     if (token) token.raw = columns.raw(token.raw.length)

@@ -80,3 +80,20 @@ test('footnote quote columns read only definition sources', () => {
     )
   }
 })
+
+test('footnote quote columns read each definition once when one quote holds many', () => {
+  const shapes = [
+    (i) => `> para ${i} words\n>\n> [^${i}]: f${i}\n>\tg${i}\n>\n`,
+    (i) => `> [^${i}]: f${i} words\n>\tg${i} more\n`,
+  ]
+  for (const unit of shapes)
+    for (const count of [1000, 2000]) {
+      const source = Array.from({ length: count }, (_, i) => unit(i)).join('')
+      quoteColumnCounters.units = 0
+      new Marked(blockMarkdown, markedGithubFootnote()).lexer(source)
+      assert.ok(
+        quoteColumnCounters.units <= source.length,
+        `${quoteColumnCounters.units} units for ${source.length}`,
+      )
+    }
+})

@@ -1,4 +1,11 @@
-import { Lexer, type TokenizerExtension } from 'marked'
+import {
+  type Hooks,
+  Lexer,
+  type Token,
+  type TokenizerExtension,
+  type Tokens,
+  type TokensList,
+} from 'marked'
 import { markedGithubFootnote as githubFootnotes } from 'marked-github-footnote'
 import {
   BlockTokenizer,
@@ -32,9 +39,18 @@ export function markedGithubFootnote(
     (item) => item.name === 'footnoteDef',
   ) as TokenizerExtension
   const readDefinition = definition.tokenizer
+  // The dependency keeps the first definition it reads for each label, even
+  // one read by a container pass that was later discarded.
+  // Reset with the dependency's own state in preprocess, so Marked.lexer()
+  // retains it between documents exactly as the dependency does.
+  let stored = new Map<string, Tokens.Generic>()
   const read: typeof readDefinition = function (source, tokens) {
     const token = readDefinition.call(this, source, tokens)
-    if (token) rememberFootnote(this.lexer, String(token.label))
+    if (token) {
+      rememberFootnote(this.lexer, String(token.label))
+      const key = String(token.label).toLowerCase()
+      if (!stored.has(key)) stored.set(key, token)
+    }
     return token
   }
   definition.tokenizer = function (source, tokens) {
@@ -87,5 +103,42 @@ export function markedGithubFootnote(
       ? leafBlock(token)
       : token
   }
-  return { ...extension, tokenizer: blockContainers }
+  const hooks = extension.hooks!
+  return {
+    ...extension,
+    hooks: {
+      ...hooks,
+      preprocess(this: Hooks, markdown: string) {
+        stored = new Map()
+        return hooks.preprocess!.call(this, markdown)
+      },
+      processAllTokens(this: Hooks, tokens: Token[] | TokensList) {
+        // A discarded definition gets the content of the first one the document
+        // kept, in the dependency's order: nested definitions are read first.
+        const children = this.options.extensions?.childTokens
+        const first = new Map<string, Token>()
+        const visit = (list: unknown) => {
+          if (!Array.isArray(list)) return
+          for (const token of list as Tokens.Generic[]) {
+            for (const key of [
+              'tokens',
+              'items',
+              ...(children?.[token.type] ?? []),
+            ])
+              visit(token[key])
+            if (token.type !== 'footnoteDef') continue
+            const key = String(token.label).toLowerCase()
+            if (!first.has(key)) first.set(key, token)
+          }
+        }
+        if (stored.size) visit(tokens)
+        for (const [key, token] of stored) {
+          const final = first.get(key)
+          if (final && final !== token) Object.assign(token, final)
+        }
+        return hooks.processAllTokens!.call(this, tokens)
+      },
+    },
+    tokenizer: blockContainers,
+  }
 }

@@ -83,8 +83,14 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
     )
 
   const fromSource = await scroll('.source-pane .cm-scroller', 0.25)
-  assert.ok(Math.abs(fromSource.after.source - fromSource.before.source) > 100)
-  assert.ok(Math.abs(fromSource.after.rich - fromSource.before.rich) < 2)
+  assert.ok(
+    Math.abs(fromSource.after.source - fromSource.before.source) > 100,
+    JSON.stringify(fromSource),
+  )
+  assert.ok(
+    Math.abs(fromSource.after.rich - fromSource.before.rich) < 2,
+    JSON.stringify(fromSource),
+  )
   const fromPreview = await scroll('.rich-pane', 0.6)
   assert.ok(Math.abs(fromPreview.after.rich - fromPreview.before.rich) > 100)
   assert.ok(Math.abs(fromPreview.after.source - fromPreview.before.source) < 2)
@@ -581,25 +587,27 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
 
   // A scroll no script writes to the pane, as a descendant scrolled into
   // view, still moves only the pane: the alignment ends, and layout after it
-  // leaves the preview there.
+  // doesn't take the preview back to the caret.
   await realign()
   const beforeInto = await tops()
+  // The first block below the pane: a short scroll, so the aligned line
+  // stays drawn and later layout moves it.
   await page.evaluate(() => {
-    const blocks = document.querySelectorAll('.rich-pane .cm-content > *')
-    blocks[blocks.length - 1].scrollIntoView({ block: 'start' })
+    const pane = document.querySelector('.rich-pane')
+    const bottom = pane.getBoundingClientRect().bottom
+    const below = [...pane.querySelectorAll('.cm-content > *')].find(
+      (block) => block.getBoundingClientRect().top >= bottom,
+    )
+    below.scrollIntoView({ block: 'start' })
   })
   const afterInto = await tops()
-  const intoSize = await page.evaluate(() =>
-    parseFloat(
-      getComputedStyle(document.querySelector('.rich-pane .cm-content'))
-        .fontSize,
-    ),
+  await restyle(
+    ".rich-pane .cm-content::before { content: ''; display: block; height: 40px }",
   )
-  await restyle(`.rich-pane .cm-content { font-size: ${intoSize + 1}px }`)
   const afterIntoLayout = await tops()
   assert.ok(
     afterInto.rich - beforeInto.rich > 200 &&
-      Math.abs(afterIntoLayout.rich - afterInto.rich) < 100 &&
+      afterIntoLayout.rich - beforeInto.rich > 200 &&
       afterIntoLayout.source === beforeInto.source,
     JSON.stringify({ beforeInto, afterInto, afterIntoLayout }),
   )
@@ -608,12 +616,38 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
       style.remove()
   })
 
+  // Layout pushing the caret out of its pane leaves no line to align: the
+  // preview stays rather than lining up with whatever the source then shows.
+  await realign()
+  const beforePushed = await tops()
+  await restyle('.source-pane .cm-line { padding-top: 400px }')
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(() => {
+    const caret = document
+      .querySelector('.source-pane .editor-cursor')
+      ?.getBoundingClientRect()
+    const pane = document
+      .querySelector('.source-pane .cm-scroller')
+      .getBoundingClientRect()
+    return !caret?.height || caret.top > pane.bottom || caret.bottom < pane.top
+  })
+  const afterPushed = await tops()
+  assert.ok(
+    Math.abs(afterPushed.rich - beforePushed.rich) < 50,
+    JSON.stringify({ beforePushed, afterPushed }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await realign()
+
   // Away from the top: a caret in a paragraph taller than the pane, where
   // the preview keeps the text at its top in place as the window narrows.
   // That correction is the preview's own, and the alignment follows on.
   await source.evaluate((element) => {
     const view = element.cmTile.root.view
-    const at = view.state.doc.toString().indexOf('## Section 60') + 6000
+    const at = view.state.doc.toString().indexOf('## Section 60') + 1500
     view.dispatch({
       selection: { anchor: at },
       effects: view.constructor.scrollIntoView(at, { y: 'center' }),

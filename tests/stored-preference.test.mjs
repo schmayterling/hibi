@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
+import { readAutosavePreferences } from '../src/shared/autosave-preferences.ts'
 
 const require = createRequire(import.meta.url)
 const { outputFiles } = await build({
@@ -22,12 +23,18 @@ const { outputFiles } = await build({
   write: false,
 })
 
-function stores(storage) {
+function stores(storage, persist = () => {}) {
   const module = { exports: {} }
   const listeners = []
   runInNewContext(outputFiles[0].text, {
     module,
     localStorage: storage,
+    window: {
+      hibi: {
+        getAutosavePreferences: readAutosavePreferences,
+        setAutosavePreferences: persist,
+      },
+    },
     addEventListener(type, listener) {
       assert.equal(type, 'storage')
       listeners.push(listener)
@@ -139,3 +146,20 @@ for (const [name, key, changed, defaults, damaged = defaults] of [
     assert.equal(notifications.length, count)
   })
 }
+
+test('durable autosave off publishes even when the DOMStorage mirror is full', () => {
+  const first = stores({
+    getItem: () => null,
+    setItem: () => {
+      throw new Error('quota full')
+    },
+  })
+  let changes = 0
+  first.autosave.subscribe(() => {
+    changes++
+  })
+  first.autosave.set({ enabled: false })
+  assert.equal(first.autosave.snapshot().enabled, false)
+  assert.equal(changes, 1)
+  assert.throws(() => first.tabIndent.set({ enabled: false }), /quota full/)
+})

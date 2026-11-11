@@ -3332,6 +3332,9 @@
   "440c06b497b1": [
     "src/main/file-associations.ts"
   ],
+  "f50415d21b7a": [
+    "src/main/autosave-preferences.ts"
+  ],
   "2296b7344bc6": [
     "src/renderer/src/document-runtime.ts"
   ],

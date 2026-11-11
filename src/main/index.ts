@@ -341,6 +341,21 @@ app.setName('hibi')
 if (process.platform === 'darwin')
   systemPreferences.setUserDefault('ApplePressAndHoldEnabled', 'boolean', false)
 app.enableSandbox()
+// Quit waits for Chromium to finish creating two web-only sqlite stores, and a
+// busy disk can stall that indefinitely: bounce-tracking mitigation (DIPS) and
+// sites' declared reliability reports (DeclarativePerformanceObserver; the
+// script PerformanceObserver API is separate). Chromium deletes a DIPS file an
+// older profile kept. Keep any features already disabled on the command line.
+app.commandLine.appendSwitch(
+  'disable-features',
+  [
+    app.commandLine.getSwitchValue('disable-features'),
+    'DIPS',
+    'DeclarativePerformanceObserver',
+  ]
+    .filter(Boolean)
+    .join(','),
+)
 const testing = !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
 const foundationsIpcBenchmark =
   testing && process.env.HIBI_FOUNDATIONS_IPC_BENCH === '1'

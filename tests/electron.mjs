@@ -156,7 +156,11 @@ export async function snapshotElectronProcesses(pid, profile) {
         .join('\n')
         .slice(0, 2000)}`,
     )
-    // A store still being written names what shutdown waits for.
+    // A store still being written names what shutdown waits for. Two of
+    // Electron's own can still do it, and neither can be turned off: `Extension
+    // State/` (opened even with no extension loaded) and
+    // `Code Cache/electron-preload/` (written once per profile and preload, so on
+    // every launch of a fresh test profile). The app turns off the web-only ones.
     if (profile)
       console.error(
         `electron-shutdown-profile-files:\n${

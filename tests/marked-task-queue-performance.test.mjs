@@ -3,11 +3,17 @@ import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { GFM } from '@lezer/markdown'
 import { Lexer, Marked, Parser } from 'marked'
+import { micromark } from 'micromark'
+import { gfm, gfmHtml } from 'micromark-extension-gfm'
 import { mathTokens } from '../src/addons/math/syntax.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { listAction } from '../src/renderer/src/source-formatting-actions.ts'
 import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
-import { BlockTokenizer, blockMarkdown } from '../src/shared/marked-blocks.ts'
+import {
+  BlockTokenizer,
+  blockMarkdown,
+  taskQueueCounters,
+} from '../src/shared/marked-blocks.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 
 const read = (source, operation) =>
@@ -64,9 +70,17 @@ const controls = [
   '- [ ] one\n- ordinary\n\n[x] literal',
   '1. [ ] one\n2. [x] two\n\n> after',
   '- [ ] one\n\n# heading\n\n- [x] two\n\nafter',
+  '[ ] before\n\n- [ ]\n- [ ] one',
+]
+// Marked strips the marker from the last queued text that starts with one,
+// which can be a later item's text; each item here strips its own.
+const ownText = [
   '- [ ] one\n- [ ] [ ] two\n- [x] three',
   '- [x] one\n- > [ ] quoted\n- [ ] [x] two',
-  '[ ] before\n\n- [ ]\n- [ ] one',
+  '- [x] c\n- > [ ] q',
+  '- [ ] a\n  > [x] q\n- [ ] b',
+  '- [ ] a\n- [ ] [ ] b',
+  '1. [x] a\n2. > [ ] b',
 ]
 test('task queue controls retain following blocks and inline markup', () => {
   for (const source of controls)
@@ -95,8 +109,59 @@ test('task queue controls keep replacement queues made by block readers', () => 
   assert.equal(copies, 2)
 })
 
+const shape = (html) =>
+  html
+    .replace(/<input[^>]*checked[^>]*>/g, '[X]')
+    .replace(/<input[^>]*>/g, '[_]')
+    .replace(/<(\/?\w+)[^>]*>/g, '<$1>')
+    .replace(/\s+/g, ' ')
+    .replace(/ ?(<\/?\w+>) ?/g, '$1')
+    .trim()
 // JSON keeps every token field the projections read (task, checked, raw, text).
 const tree = (tokens) => JSON.parse(JSON.stringify(tokens))
+test('task queue items strip their own marker, as GFM does', () => {
+  for (const source of ownText)
+    assert.equal(
+      shape(new Marked(blockMarkdown).parse(source)),
+      shape(
+        micromark(source, { extensions: [gfm()], htmlExtensions: [gfmHtml()] }),
+      ),
+      source,
+    )
+})
+
+// The only difference from Marked's tokens: a task marker moved between texts.
+test('task queue tokens differ from native marked only by moved task markers', () => {
+  const moved = (ours, native, path = '') => {
+    if (JSON.stringify(ours) === JSON.stringify(native)) return []
+    if (
+      ours?.type === 'text' &&
+      native?.type === 'text' &&
+      ours.raw !== native.raw
+    ) {
+      const marker = /^\[[ xX]\][ \t]+/
+      const strip = (text) => text.replace(marker, '')
+      assert.equal(strip(ours.raw), strip(native.raw), path)
+      assert.notEqual(marker.test(ours.raw), marker.test(native.raw), path)
+      return [path]
+    }
+    assert.ok(ours && native && typeof ours === 'object', path)
+    return Object.keys({ ...ours, ...native }).flatMap((key) =>
+      moved(ours[key], native[key], `${path}.${key}`),
+    )
+  }
+  for (const source of ownText) {
+    const paths = moved(
+      tree(new Marked(blockMarkdown).lexer(source)),
+      tree(new Marked().lexer(source)),
+    )
+    assert.ok(
+      paths.length >= 2 && paths.length % 2 === 0,
+      `${source}: ${paths}`,
+    )
+  }
+})
+
 test('task queue tokens equal native marked tokens', () => {
   for (const source of [
     ...cases.map(([, unit]) => unit.repeat(32)),
@@ -157,4 +222,17 @@ test('task queue list reformat keeps checked tasks checked', () => {
     state.update(spec).state.doc.toString(),
     '- [x] done\n  - [ ] open\n- [x] last',
   )
+})
+
+test('task queue finds each item text by passing each queued text once', () => {
+  for (const count of [64, 512]) {
+    taskQueueCounters.steps = 0
+    const source = '- p\n  - [ ] a\n  - b\n'.repeat(count)
+    const tokens = new Marked(blockMarkdown).lexer(source)
+    assert.equal(tokens[0].items.length, count)
+    assert.ok(
+      taskQueueCounters.steps <= count * 4,
+      `${taskQueueCounters.steps} steps / ${count} items`,
+    )
+  }
 })

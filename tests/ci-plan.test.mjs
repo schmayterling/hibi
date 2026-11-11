@@ -1855,6 +1855,8 @@ test("on Windows, a process that took a used id is not the file's, nor its child
   )
   assert.equal(renewed.status, 0, renewed.reds)
   assert.ok(!gone(renewed.note('held')), 'a reused id was killed')
+  // Rightly left running by the check, so stopped here: it carries the tag.
+  process.kill(renewed.note('held'), 'SIGKILL')
 })
 
 test("on Windows, a look's rows are as old as its start, however long it takes", {

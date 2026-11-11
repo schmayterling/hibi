@@ -23,8 +23,10 @@ for pid in pids[:count]:
     argc = struct.unpack('i', raw[:4])[0]
     end = raw.find(b'\0', 4)
     path = raw[4:end]
-    at = end
-    while at < len(raw) and raw[at] == 0:
+    # The strings start at the next 8-byte boundary after argc and the path,
+    # so an empty argv[0] is read as one, not as padding.
+    at = end + 1
+    while (at - 4) % 8:
         at += 1
     strings = raw[at:].split(b'\0')
     environment = []

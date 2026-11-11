@@ -451,12 +451,17 @@ export async function runCI({ dev = false } = {}) {
         .filter(Boolean)
         .map((line) => {
           const [pid, parent, created, ...name] = line.split('\t')
-          return {
+          const row = {
             pid: Number(pid),
             parent: Number(parent),
             created: Number(created),
             name: name.join('\t'),
           }
+          if (![row.pid, row.parent, row.created].every(Number.isSafeInteger))
+            throw new Error(
+              `powershell.exe gave an unreadable line: ${line.slice(0, 80)}`,
+            )
+          return row
         })
         .filter((row) => row.pid !== process.pid),
     )
@@ -465,23 +470,34 @@ export async function runCI({ dev = false } = {}) {
   const same = (row, known) =>
     known && Math.abs(row.created - known.created) < 2000
   const learn = (rows) => {
-    for (const { runner, since, known } of lineages.values())
+    const now = Date.now()
+    for (const { runner, since, known } of lineages.values()) {
+      // A known id now on a process with another start time was freed and
+      // taken: that process isn't the file's, nor are its children.
+      for (const row of rows) {
+        const entry = known.get(row.pid)
+        if (entry && same(row, entry)) entry.seen = now
+        else if (entry) known.delete(row.pid)
+      }
       for (let grew = true; grew; ) {
         grew = false
         for (const row of rows) {
           if (row.created < since || known.has(row.pid)) continue
-          // A child starts after its parent: an older process that took a
-          // used id isn't one.
+          // A child starts after its parent, and while it was alive: a process
+          // started after its parent's id was last seen isn't its child.
           const parent = known.get(row.parent)
           if (
             row.pid === runner ||
-            (parent && row.created >= parent.created - 2000)
+            (parent &&
+              row.created >= parent.created - 2000 &&
+              row.created <= parent.seen + 1000)
           ) {
-            known.set(row.pid, row)
+            known.set(row.pid, { ...row, seen: now })
             grew = true
           }
         }
       }
+    }
   }
   let windowsLooks
   const follow = (runner, since) => {
@@ -557,6 +573,8 @@ export async function runCI({ dev = false } = {}) {
     // macOS shows another process's environment only as text after its command
     // line; the kernel's own copy keeps each entry apart.
     return capture('python3', [
+      // Isolated: no PYTHONPATH or user site packages in the scan.
+      '-I',
       fileURLToPath(new URL('./ci-owned.py', import.meta.url)),
       tag,
       String(runner),
@@ -566,6 +584,10 @@ export async function runCI({ dev = false } = {}) {
         .filter(Boolean)
         .map((line) => {
           const [pid, ...name] = line.split('\t')
+          if (!/^[1-9]\d*$/.test(pid))
+            throw new Error(
+              `python3 gave an unreadable line: ${line.slice(0, 80)}`,
+            )
           return { pid: Number(pid), name: name.join('\t') }
         }),
     )
@@ -577,8 +599,7 @@ export async function runCI({ dev = false } = {}) {
       /* Already gone. */
     }
   }
-  // Kills what carries the tag, and the runner's group, until two looks in a
-  // row find nothing. A process born mid-kill carries the tag too, so the next
+  // Kills what the file owns until two looks in a row find nothing. A process born mid-kill carries the tag too, so the next
   // look finds it. Resolves to what was left after a clean exit, what outlived
   // the kill, and any reason it couldn't tell.
   const cleanUp = async (tag, runner, exited) => {
@@ -596,12 +617,17 @@ export async function runCI({ dev = false } = {}) {
         if (round) found = await owned(tag, runner)
         quiet = found.length ? 0 : quiet + 1
         for (const { pid } of found) signal(pid, 'SIGKILL')
-        signal(-runner, 'SIGKILL')
         if (found.length) await pause(50)
       }
       return { left, outlived: found }
     } catch (error) {
+      // Nothing to go by: the runner and what's below it go the blunt way.
       signal(-runner, 'SIGKILL')
+      signal(runner, 'SIGKILL')
+      if (process.platform === 'win32')
+        await capture('taskkill', ['/pid', String(runner), '/T', '/F']).catch(
+          () => {},
+        )
       return { left, outlived: [], error: error.message }
     }
   }
@@ -711,7 +737,9 @@ export async function runCI({ dev = false } = {}) {
         batch,
         name: `did not finish within ${seconds} s`,
         file: test,
-        error: 'stopped with everything it started',
+        error: cleanup.error
+          ? 'stopped, but what it started could not be checked'
+          : 'stopped with everything it started',
       })
     const named = (found) =>
       found.map(({ pid, name }) => `${name} ${pid}`).join(', ')

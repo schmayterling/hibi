@@ -1203,6 +1203,32 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
     stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
     'ci: 1 failing tests\n  node  tests/one.test.mjs  did not stop what it started: could not verify cleanup: python3 took over 5 s',
   )
+  // One that answers with something that isn't a process list.
+  writeFileSync(join(bin, 'python3'), '#!/bin/sh\necho "pid\tname"\n', {
+    mode: 0o755,
+  })
+  const garbled = spawnSync(process.execPath, [resolve('scripts/ci.mjs')], {
+    cwd: repo,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: {
+      ...env,
+      PATH: `${bin}:${process.env.PATH}`,
+      CI_BASE: '',
+      CI_CLEAN: '',
+      CI_FULL: 'true',
+      CI_SHARD: '0/1',
+      CI_WORKERS: '1',
+      GITHUB_ACTIONS: '',
+      GITHUB_OUTPUT: '',
+      GITHUB_STEP_SUMMARY: '',
+      npm_execpath: stub,
+    },
+  })
+  assert.equal(
+    garbled.stdout.slice(garbled.stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    'ci: 1 failing tests\n  node  tests/one.test.mjs  did not stop what it started: could not verify cleanup: python3 gave an unreadable line: pid\tname',
+  )
 })
 
 test('what a file owns is found exactly, through a check it runs itself', (t) => {
@@ -1223,6 +1249,11 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
     // names its tag in a command line, one inside another variable.
     'tests/decoys.test.mjs': live(
       "test('decoys', () => {\n  const tag = process.env.HIBI_CI_FILE\n  const words = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', `HIBI_CI_FILE=${tag}`], { detached: true, stdio: 'ignore', env: {} })\n  const value = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore', env: { NOTE: `x HIBI_CI_FILE=${tag}` } })\n  words.unref()\n  value.unref()\n  writeFileSync(`${process.env.HELD}/decoys`, `${words.pid}\\n${value.pid}`)\n  appendFileSync(process.env.RAN, 'decoys ')\n})\n",
+    ),
+    // Passes, leaving a process whose first argument is empty and whose tag is
+    // its only setting.
+    'tests/blank.test.mjs': live(
+      "test('blank', () => {\n  const blank = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { argv0: '', detached: true, stdio: 'ignore', env: { HIBI_CI_FILE: process.env.HIBI_CI_FILE } })\n  blank.unref()\n  writeFileSync(`${process.env.HELD}/blank`, String(blank.pid))\n  appendFileSync(process.env.RAN, 'blank ')\n})\n",
     ),
     // Passes, leaving a process with no tag in its runner's process group.
     'tests/bare.test.mjs': live(
@@ -1293,12 +1324,12 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
   assert.deepEqual(
     readFileSync(ran, 'utf8').trim().split(' ').sort(),
     process.platform === 'win32'
-      ? ['bare', 'nested']
-      : ['bare', 'decoys', 'nested'],
+      ? ['bare', 'blank', 'nested']
+      : ['bare', 'blank', 'decoys', 'nested'],
   )
   assert.match(
     stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
-    /^ci: 2 failing tests\n {2}node {2}tests\/bare\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/nested\.test\.mjs {2}did not finish within 8 s: stopped with everything it started$/,
+    /^ci: 3 failing tests\n {2}node {2}tests\/bare\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/blank\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/nested\.test\.mjs {2}did not finish within 8 s: stopped with everything it started$/,
   )
   // Only look-alikes: left alone.
   if (process.platform !== 'win32')
@@ -1307,55 +1338,70 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
       .map(Number))
       process.kill(pid, 0)
   // What was the files' own is stopped, the inner check's too.
-  for (const name of ['bare', 'deep']) {
+  for (const name of ['bare', 'blank', 'deep']) {
     const pid = Number(readFileSync(join(held, name), 'utf8'))
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, name)
   }
 })
 
 // Windows can't run here: its process look stands in, reading this machine's
-// process table in the shape Win32_Process gives.
-test('on Windows, a file owns its process tree, and what it had to stop is named', {
-  skip: process.platform === 'win32' ? 'runs natively there' : false,
-}, (t) => {
+// process table in the shape Win32_Process gives. A test can rewrite what it
+// shows through $ROOT/rewrite.json: {parent: {pid: parent}, created: {pid: ms},
+// rows: [[pid, parent, created, name]]}.
+const windowsLook = `const { execFileSync } = require('node:child_process')
+const fs = require('node:fs')
+fs.appendFileSync(process.env.LOOKS, 'look\\n')
+if (process.env.LOOK_FAILS) process.exit(1)
+let rewrite = {}
+try {
+  rewrite = JSON.parse(fs.readFileSync(process.env.ROOT + '/rewrite.json', 'utf8'))
+} catch {}
+const seconds = (elapsed) => elapsed.split(/[-:]/).map(Number).reduce((sum, part, index, parts) => sum + part * [86400, 3600, 60, 1].slice(-parts.length)[index], 0)
+for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], { encoding: 'utf8' }).trim().split('\\n')) {
+  const [pid, parent, elapsed, ...name] = line.trim().split(/\\s+/)
+  const created = rewrite.created?.[pid] ?? Date.now() - seconds(elapsed) * 1000
+  console.log([pid, rewrite.parent?.[pid] ?? parent, created, name.join(' ').split('/').at(-1)].join('\\t'))
+}
+for (const row of rewrite.rows ?? []) console.log(row.join('\\t'))
+`
+const onWindows = async (t, files, { lookFails = false, during } = {}) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-windows-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
   const repo = join(root, 'repo')
   const bin = join(root, 'bin')
+  const notes = join(root, 'notes')
   const looks = join(root, 'looks')
-  const held = join(root, 'held')
   const stub = join(root, 'npm.cjs')
   const windows = join(root, 'windows.mjs')
+  const pids = new Set()
+  t.after(() => {
+    for (const pid of pids)
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        /* Stopped, as it should be. */
+      }
+    rmSync(root, { recursive: true, force: true })
+  })
   writeFileSync(stub, '')
+  writeFileSync(notes, '')
   writeFileSync(looks, '')
   mkdirSync(bin)
   writeFileSync(
     windows,
     "Object.defineProperty(process, 'platform', { value: 'win32' })\n",
   )
+  writeFileSync(join(root, 'look.cjs'), windowsLook)
+  // A shell wrapper: a #! line can't hold a node path with a space in it.
   writeFileSync(
     join(bin, 'powershell.exe'),
-    `#!${process.execPath}
-const { execFileSync } = require('node:child_process')
-require('node:fs').appendFileSync(process.env.LOOKS, 'look\\n')
-const seconds = (elapsed) => elapsed.split(/[-:]/).map(Number).reduce((sum, part, index, parts) => sum + part * [86400, 3600, 60, 1].slice(-parts.length)[index], 0)
-for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], { encoding: 'utf8' }).trim().split('\\n')) {
-  const [pid, parent, elapsed, ...name] = line.trim().split(/\\s+/)
-  console.log([pid, parent, Date.now() - seconds(elapsed) * 1000, name.join(' ').split('/').at(-1)].join('\\t'))
-}
-`,
+    `#!/bin/sh\nexec "${process.execPath}" "${join(root, 'look.cjs')}" "$@"\n`,
     { mode: 0o755 },
   )
-  const files = {
+  for (const [file, source] of Object.entries({
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
-    // Passes, leaving behind a process it started a while before.
-    'tests/leak.test.mjs':
-      "import { spawn } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('leak', async () => {\n  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  left.unref()\n  writeFileSync(`${process.env.HELD}-leak`, String(left.pid))\n  await new Promise((done) => setTimeout(done, 3000))\n})\n",
-    'tests/spin.test.mjs':
-      "// ci: timeout 2 s (spins)\nimport { spawn } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('spin', () => {\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(process.env.HELD, String(held.pid))\n  for (const end = Date.now() + 60000; Date.now() < end; );\n})\n",
-  }
-  for (const [file, source] of Object.entries(files)) {
+    ...files,
+  })) {
     mkdirSync(dirname(join(repo, file)), { recursive: true })
     writeFileSync(join(repo, file), source)
   }
@@ -1366,29 +1412,32 @@ for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], {
   git('config', 'user.email', 'ci@example.com')
   git('add', '.')
   git('commit', '-qm', 'first')
-  let heldPids = []
-  t.after(() => {
-    for (const pid of heldPids)
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch {
-        /* Stopped, as it should be. */
-      }
-  })
+  const read = () =>
+    readFileSync(notes, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+  const note = (key) => read().find((entry) => entry.key === key)?.value
+  const noted = async (key) => {
+    for (let wait = 0; wait < 600 && note(key) === undefined; wait++)
+      await new Promise((done) => setTimeout(done, 50))
+    return note(key)
+  }
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const started = Date.now()
-  const { status, stdout } = spawnSync(
+  const check = spawn(
     process.execPath,
     ['--import', windows, resolve('scripts/ci.mjs')],
     {
       cwd: repo,
-      encoding: 'utf8',
-      timeout: 120000,
+      stdio: ['ignore', 'pipe', 'ignore'],
       env: {
         ...env,
         PATH: `${bin}:${process.env.PATH}`,
-        HELD: held,
+        ROOT: root,
+        NOTES: notes,
         LOOKS: looks,
+        LOOK_FAILS: lookFails ? '1' : '',
         CI_BASE: '',
         CI_CLEAN: '',
         CI_FULL: 'true',
@@ -1401,17 +1450,202 @@ for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], {
       },
     },
   )
-  heldPids = [held, `${held}-leak`].map((path) =>
-    Number(readFileSync(path, 'utf8')),
+  t.after(() => check.kill('SIGKILL'))
+  let stdout = ''
+  check.stdout.on('data', (chunk) => {
+    stdout += chunk
+  })
+  const timer = setTimeout(() => check.kill('SIGKILL'), 120000)
+  const closed = new Promise((done) =>
+    check.once('close', (status) => done(status)),
   )
-  assert.equal(status, 1)
-  assert.ok(Date.now() - started < 45000, `took ${Date.now() - started} ms`)
+  await during?.({ root, noted, pids })
+  const status = await closed
+  clearTimeout(timer)
+  for (const { value } of read()) if (Number.isInteger(value)) pids.add(value)
+  return {
+    status,
+    ms: Date.now() - started,
+    reds: stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    looked: readFileSync(looks, 'utf8').length > 0,
+    note,
+  }
+}
+// A test file that can note what it started, in the shape onWindows reads.
+const noting = (body, first = '') =>
+  `${first}\nimport { spawn } from 'node:child_process'\nimport { appendFileSync, existsSync } from 'node:fs'\nimport test from 'node:test'\nconst note = (key, value) => appendFileSync(process.env.NOTES, JSON.stringify({ key, value }) + '\\n')\nconst hold = () => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\ntest('file', async () => {\n${body}\n})\n`
+const gone = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch {
+    return true
+  }
+}
+const off = process.platform === 'win32' ? 'runs natively there' : false
+
+test('on Windows, a file owns its process tree, and what it had to stop is named', {
+  skip: off,
+}, async (t) => {
+  const run = await onWindows(t, {
+    // Passes, leaving behind a process it started a while before.
+    'tests/leak.test.mjs': noting(
+      "const left = hold()\nleft.unref()\nnote('leak', left.pid)\nawait new Promise((done) => setTimeout(done, 3000))",
+    ),
+    'tests/spin.test.mjs': noting(
+      "note('held', hold().pid)\nfor (const end = Date.now() + 60000; Date.now() < end; );",
+      '// ci: timeout 2 s (spins)',
+    ),
+  })
+  assert.equal(run.status, 1)
+  assert.ok(run.ms < 45000, `took ${run.ms} ms`)
   // The Windows look ran, not the one this machine has.
-  assert.ok(readFileSync(looks, 'utf8').length > 0)
+  assert.ok(run.looked)
   assert.match(
-    stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    run.reds,
     /^ci: 2 failing tests\n {2}node {2}tests\/leak\.test\.mjs {2}did not stop what it started: left node \d+ running\n {2}node {2}tests\/spin\.test\.mjs {2}did not finish within 2 s: stopped with everything it started$/,
   )
-  for (const pid of heldPids)
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, String(pid))
+  for (const key of ['leak', 'held']) assert.ok(gone(run.note(key)), key)
+})
+
+test('on Windows, a leak is learned while its file runs, with no other file to look', {
+  skip: off,
+}, async (t) => {
+  const run = await onWindows(t, {
+    'tests/leak.test.mjs': noting(
+      "const left = hold()\nleft.unref()\nnote('leak', left.pid)\nawait new Promise((done) => setTimeout(done, 3000))",
+    ),
+  })
+  assert.match(
+    run.reds,
+    /^ci: 1 failing tests\n {2}node {2}tests\/leak\.test\.mjs {2}did not stop what it started: left node \d+ running$/,
+  )
+  assert.ok(gone(run.note('leak')))
+})
+
+test("on Windows, a process that took a used id is not the file's, nor its child", {
+  skip: off,
+}, async (t) => {
+  // A worker is learned and exits; an unrelated process takes its id and
+  // starts a child after the file did.
+  let decoy
+  const reused = await onWindows(
+    t,
+    {
+      'tests/reuse.test.mjs': noting(
+        "const worker = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3500)'], { stdio: 'ignore' })\nnote('worker', worker.pid)\nawait new Promise((done) => worker.once('exit', done))\nnote('gone', 1)\nwhile (!existsSync(process.env.ROOT + '/rewrite.json')) await new Promise((done) => setTimeout(done, 50))\nawait new Promise((done) => setTimeout(done, 5000))",
+      ),
+    },
+    {
+      during: async ({ root, noted, pids }) => {
+        await noted('gone')
+        const worker = await noted('worker')
+        const child = spawn(
+          process.execPath,
+          ['-e', 'setInterval(() => {}, 1000)'],
+          { detached: true, stdio: 'ignore' },
+        )
+        child.unref()
+        pids.add(child.pid)
+        decoy = child.pid
+        writeFileSync(
+          join(root, 'rewrite.json'),
+          JSON.stringify({
+            parent: { [decoy]: worker },
+            rows: [[worker, 1, Date.now(), 'unrelated.exe']],
+          }),
+        )
+      },
+    },
+  )
+  assert.equal(reused.status, 0, reused.reds)
+  assert.ok(!gone(decoy), 'the reused id claimed an unrelated child')
+  // With the worker gone from the table, a process named as its child still
+  // isn't one if it started after the worker was last seen, or before it.
+  for (const late of [true, false]) {
+    let stranger
+    const orphaned = await onWindows(
+      t,
+      {
+        'tests/reuse.test.mjs': noting(
+          `${late ? '' : "note('early', 1)\nwhile (!existsSync(process.env.ROOT + '/stranger')) await new Promise((done) => setTimeout(done, 50))\nawait new Promise((done) => setTimeout(done, 4000))\n"}const worker = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3500)'], { stdio: 'ignore' })\nnote('worker', worker.pid)\nawait new Promise((done) => worker.once('exit', done))\nnote('gone', 1)\nwhile (!existsSync(process.env.ROOT + '/rewrite.json')) await new Promise((done) => setTimeout(done, 50))\nawait new Promise((done) => setTimeout(done, 5000))`,
+        ),
+      },
+      {
+        during: async ({ root, noted, pids }) => {
+          const start = () => {
+            const child = spawn(
+              process.execPath,
+              ['-e', 'setInterval(() => {}, 1000)'],
+              { detached: true, stdio: 'ignore' },
+            )
+            child.unref()
+            pids.add(child.pid)
+            return child.pid
+          }
+          if (!late) {
+            await noted('early')
+            stranger = start()
+            writeFileSync(join(root, 'stranger'), '')
+          }
+          await noted('gone')
+          // Two looks after the worker left, so its last sighting is old.
+          await new Promise((done) => setTimeout(done, 4500))
+          if (late) stranger = start()
+          writeFileSync(
+            join(root, 'rewrite.json'),
+            JSON.stringify({ parent: { [stranger]: await noted('worker') } }),
+          )
+        },
+      },
+    )
+    assert.equal(
+      orphaned.status,
+      0,
+      `${late ? 'late' : 'early'}: ${orphaned.reds}`,
+    )
+    assert.ok(!gone(stranger), late ? 'started after' : 'started before')
+  }
+  // A learned helper later seen with another start time is another process.
+  const renewed = await onWindows(
+    t,
+    {
+      'tests/renewed.test.mjs': noting(
+        "const left = hold()\nleft.unref()\nnote('held', left.pid)\nawait new Promise((done) => setTimeout(done, 3000))\nnote('learned', 1)\nwhile (!existsSync(process.env.ROOT + '/rewrite.json')) await new Promise((done) => setTimeout(done, 50))",
+      ),
+    },
+    {
+      during: async ({ root, noted }) => {
+        await noted('learned')
+        writeFileSync(
+          join(root, 'rewrite.json'),
+          JSON.stringify({
+            created: { [await noted('held')]: Date.now() + 5000 },
+          }),
+        )
+      },
+    },
+  )
+  assert.equal(renewed.status, 0, renewed.reds)
+  assert.ok(!gone(renewed.note('held')), 'a reused id was killed')
+})
+
+test('on Windows, a look that fails still stops a file past its time', {
+  skip: off,
+}, async (t) => {
+  const run = await onWindows(
+    t,
+    {
+      'tests/spin.test.mjs': noting(
+        'for (const end = Date.now() + 40000; Date.now() < end; );',
+        '// ci: timeout 2 s (spins)',
+      ),
+    },
+    { lookFails: true },
+  )
+  assert.ok(run.ms < 30000, `the file ran on for ${run.ms} ms`)
+  assert.match(
+    run.reds,
+    /^ci: 2 failing tests\n {2}node {2}tests\/spin\.test\.mjs {2}did not finish within 2 s: stopped, but what it started could not be checked\n {2}node {2}tests\/spin\.test\.mjs {2}did not stop what it started: could not verify cleanup: powershell\.exe exited 1$/,
+  )
 })

@@ -7,6 +7,14 @@ import {
   type Tokens,
 } from 'marked'
 import { blockStartLines, lazyItemEnd } from '../addons/_shared/block-start.ts'
+import {
+  type BlockLines,
+  blockLine,
+  blockOrigin,
+  blockRow,
+  relativeLines,
+  sourceLines,
+} from './marked-block-lines.ts'
 import { withFenceRules } from './marked-fences.ts'
 import {
   extendQuote,
@@ -193,6 +201,7 @@ type QuoteHandoff = {
   taken: number
   length?: number
   tabs?: boolean
+  physical?: { parent: BlockLines; row: (row: number) => number }
 }
 let quoteFeed: QuoteHandoff | undefined
 // A quote's raw text that its extensions re-read, and the source it was read
@@ -274,6 +283,95 @@ function withTextMerges<T>(
 
 const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
 const scanningQuotes = new WeakSet<Tokenizer>()
+const blockLinesOf = new WeakMap<Tokenizer, BlockLines>()
+/** Underlines kept verbatim by dedenting are lazy, so cannot form headings. */
+function lazySetextEnds(source: string, text: string, physical = 0) {
+  const ends = new Set<number>()
+  if (/\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)/.test(text))
+    for (let at = 0, row = 0; at <= text.length; row++) {
+      const lf = text.indexOf('\n', at),
+        end = lf < 0 ? text.length : lf
+      const next = source.indexOf('\n', physical)
+      const line = text.slice(at, end)
+      const written = source.slice(physical, next < 0 ? undefined : next)
+      if (
+        row &&
+        /^ {0,3}(?:=+|-+)[ \t]*$/.test(line) &&
+        (line === written || (lf < 0 && line === written.trimEnd()))
+      )
+        ends.add(text.length - at)
+      if (lf < 0) break
+      at = lf + 1
+      physical = next < 0 ? source.length : next + 1
+    }
+  return ends
+}
+
+/** Parse a footnote with the physical columns of its actual container. */
+export function continuationTokens<T>(
+  lexer: Lexer,
+  physical: string,
+  text: string,
+  read: () => T,
+) {
+  const tokenizer = lexer.options.tokenizer!,
+    previous = lazyUnderlines.get(tokenizer),
+    previousLines = blockLinesOf.get(tokenizer)
+  let owner = { lines: sourceLines(physical), row: 0 }
+  if (
+    previousLines &&
+    previousLines.source === setextFrames.get(tokenizer)?.source
+  ) {
+    const quote = quoteFrames.get(tokenizer)
+    const at =
+      quote?.extension &&
+      quote.frame?.source === previousLines.source &&
+      quote.frame.scope === quote.scope
+        ? quote.frame.scanned
+        : previousLines.source.length - physical.length
+    if (at >= 0) {
+      const row = blockRow(previousLines, at)
+      const end = physical.indexOf('\n')
+      if (
+        blockLine(previousLines, row) ===
+        physical.slice(0, end < 0 ? undefined : end)
+      ) {
+        const original = blockOrigin(previousLines, row)
+        if (original.lines !== previousLines) owner = original
+      }
+    }
+  }
+  const ends = new Set<number>()
+  for (let at = 0, row = 0; at <= text.length; row++) {
+    const lf = text.indexOf('\n', at),
+      end = lf < 0 ? text.length : lf
+    if (
+      row &&
+      /^ {0,3}(?:=+|-+)[ \t]*$/.test(text.slice(at, end)) &&
+      /^ {0,3}(?:=+|-+)[ \t]*$/.test(
+        blockLine(owner.lines, owner.row + row) ?? '',
+      )
+    )
+      ends.add(text.length - at)
+    if (lf < 0) break
+    at = lf + 1
+  }
+  if (ends.size) lazyUnderlines.set(tokenizer, { text, ends })
+  else lazyUnderlines.delete(tokenizer)
+  blockLinesOf.set(tokenizer, sourceLines(text, owner.lines, owner.row))
+  const top = lexer.state.top
+  lexer.state.top = true
+  try {
+    return withQuoteScan(tokenizer, read)
+  } finally {
+    lexer.state.top = top
+    if (previousLines) blockLinesOf.set(tokenizer, previousLines)
+    else blockLinesOf.delete(tokenizer)
+    if (previous) lazyUnderlines.set(tokenizer, previous)
+    else lazyUnderlines.delete(tokenizer)
+  }
+}
+
 // Tokenizers whose quotes keep Marked's own tab handling.
 const untabbedQuotes = new WeakSet<Tokenizer>()
 // Each lexer makes a rules object: the long native quotes share one, so the
@@ -474,6 +572,21 @@ function readQuote(
   quoteFeed = undefined
   const scan = quoteScan(this, source, handoff?.lines)
   if (!scan) return
+  const parentLines = blockLinesOf.get(this)
+  const input =
+    quoteSource?.raw === source && quoteSource.lexer === this.lexer
+      ? quoteSource.source
+      : source
+  const physical = handoff?.physical
+    ? sourceLines(source, handoff.physical.parent, handoff.physical.row)
+    : parentLines
+      ? relativeLines(
+          source,
+          parentLines,
+          parentLines.source.length - input.length,
+        )
+      : sourceLines(source)
+  physical.read = scan.line
   let from = 0
   let front: string[] = []
   let frontAt = 0
@@ -674,10 +787,14 @@ function readQuote(
       })
       const before = { length: tokens.length, last: tokens.at(-1) }
       const top = this.lexer.state.top
+      const previousLines = blockLinesOf.get(this)
+      blockLinesOf.set(this, sourceLines(body, physical, chunkRow))
       this.lexer.state.top = true
       try {
         this.lexer.blockTokens(body, tokens, true)
       } finally {
+        if (previousLines) blockLinesOf.set(this, previousLines)
+        else blockLinesOf.delete(this)
         Object.assign(this, readers)
         if (descriptor) Object.defineProperty(tokens, 'at', descriptor)
         else Reflect.deleteProperty(tokens, 'at')
@@ -712,8 +829,17 @@ function readQuote(
         // Marked re-reads the nested quote with every remaining line, one
         // quote level removed. Feed it those lines as it asks for them.
         const prefix = last.raw.split('\n')
+        const prefixRow = lastToken().row!,
+          followingRow = rows()
         const inner: QuoteHandoff = {
           taken: 0,
+          physical: {
+            parent: physical,
+            row: (index) =>
+              index < prefix.length
+                ? prefixRow + index
+                : followingRow + index - prefix.length,
+          },
           lines: (index) => {
             if (index < prefix.length) return `${prefix[index]}\n`
             const line = rawLineAt(index - prefix.length)
@@ -781,7 +907,25 @@ function readQuote(
           }
           return line
         })
-        const list = this.list(input)!
+        const prefixRow = lastToken().row!,
+          followingRow = rows()
+        const prefixRows = followingRow - prefixRow
+        const previousLines = blockLinesOf.get(this)
+        blockLinesOf.set(
+          this,
+          sourceLines(input, physical, (row) =>
+            row < prefixRows
+              ? prefixRow + row
+              : followingRow + row - prefixRows,
+          ),
+        )
+        let list: Tokens.List
+        try {
+          list = this.list(input)!
+        } finally {
+          if (previousLines) blockLinesOf.set(this, previousLines)
+          else blockLinesOf.delete(this)
+        }
         tokens[tokens.length - 1] = list
         let consumed = list.raw.length - last.raw.length - 1
         if (consumed < 0) {
@@ -1433,8 +1577,19 @@ export class BlockTokenizer extends Tokenizer {
   private readList(
     source: string,
     read: typeof Tokenizer.prototype.list,
+    physical?: BlockLines,
   ): ReturnType<Tokenizer['list']> {
     if (!this.rules.block.list.test(source)) return read.call(this, source)
+    const enclosing = blockLinesOf.get(this)
+    const sourceView =
+      physical ??
+      (enclosing
+        ? relativeLines(
+            source,
+            enclosing,
+            enclosing.source.length - source.length,
+          )
+        : sourceLines(source))
     const state = quoteFrames.get(this)
     const parent = state?.scope
     const origin = state && quoteOrigin(state, source)
@@ -1505,27 +1660,12 @@ export class BlockTokenizer extends Tokenizer {
         scope.indent = parent!.indent + columns[current]! - base
       }
       const previous = lazyUnderlines.get(this),
+        previousLines = blockLinesOf.get(this),
         text = args[0],
-        ends = new Set<number>()
-      if (nativeSetext && /\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)/.test(text)) {
-        let physical = itemsAt[current]!
-        for (let at = 0, row = 0; at <= text.length; row++) {
-          const lf = text.indexOf('\n', at),
-            end = lf < 0 ? text.length : lf
-          const next = source.indexOf('\n', physical)
-          const line = text.slice(at, end)
-          const written = source.slice(physical, next < 0 ? undefined : next)
-          if (
-            row &&
-            /^ {0,3}(?:=+|-+)[ \t]*$/.test(line) &&
-            (line === written || (lf < 0 && line === written.trimEnd()))
-          )
-            ends.add(text.length - at)
-          if (lf < 0) break
-          at = lf + 1
-          physical = next < 0 ? source.length : next + 1
-        }
-      }
+        ends = nativeSetext
+          ? lazySetextEnds(source, text, itemsAt[current]!)
+          : new Set<number>()
+      blockLinesOf.set(this, relativeLines(text, sourceView, itemsAt[current]!))
       if (ends.size) lazyUnderlines.set(this, { text, ends })
       else lazyUnderlines.delete(this)
       try {
@@ -1535,6 +1675,8 @@ export class BlockTokenizer extends Tokenizer {
       } finally {
         if (previous) lazyUnderlines.set(this, previous)
         else lazyUnderlines.delete(this)
+        if (previousLines) blockLinesOf.set(this, previousLines)
+        else blockLinesOf.delete(this)
         containerColumns.set(this, base)
         lexer.blockTokens = nested
       }
@@ -1620,7 +1762,8 @@ export class BlockTokenizer extends Tokenizer {
           last.text += '\n' + addition
           const next = scope?.next,
             indent = scope?.indent,
-            top = lexer.state.top
+            top = lexer.state.top,
+            previousLines = blockLinesOf.get(this)
           this.rules = rules
           lexer.blockTokens = blockTokens
           containerColumns.set(this, column)
@@ -1628,6 +1771,7 @@ export class BlockTokenizer extends Tokenizer {
             scope.next = rows.at(-1)! + quoteLines(source, itemFrom, tailAt)
             scope.indent = parent!.indent + width
           }
+          blockLinesOf.set(this, relativeLines(addition, sourceView, tailAt))
           lexer.state.top = false
           try {
             last.tokens.push(
@@ -1635,6 +1779,8 @@ export class BlockTokenizer extends Tokenizer {
             )
           } finally {
             lexer.state.top = top
+            if (previousLines) blockLinesOf.set(this, previousLines)
+            else blockLinesOf.delete(this)
             containerColumns.set(this, base)
             lexer.blockTokens = nested
             if (scope) {
@@ -1679,6 +1825,7 @@ export class BlockTokenizer extends Tokenizer {
         this,
         source.slice(0, cutoff),
         read,
+        sourceView,
       )
     }
     return token

@@ -29,6 +29,10 @@ for pid in pids[:count]:
     while (at - 4) % 8:
         at += 1
     strings = raw[at:].split(b'\0')
+    # A layout this doesn't know isn't guessed at: ci.mjs names it.
+    if end < 0 or raw[end:at].strip(b'\0') or len(strings) <= argc:
+        print(f'unreadable\t{pid}')
+        continue
     environment = []
     for entry in strings[argc:]:
         if not entry:

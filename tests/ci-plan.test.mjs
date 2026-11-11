@@ -1352,6 +1352,10 @@ const windowsLook = `const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 fs.appendFileSync(process.env.LOOKS, 'look\\n')
 if (process.env.LOOK_FAILS) process.exit(1)
+if (process.env.LOOK_GARBLED) {
+  console.log('x\ty\tz\tw')
+  process.exit(0)
+}
 let rewrite = {}
 try {
   rewrite = JSON.parse(fs.readFileSync(process.env.ROOT + '/rewrite.json', 'utf8'))
@@ -1364,7 +1368,29 @@ for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], {
 }
 for (const row of rewrite.rows ?? []) console.log(row.join('\\t'))
 `
-const onWindows = async (t, files, { lookFails = false, during } = {}) => {
+// taskkill /T as Windows has it: the tree is walked from a live root, and a
+// root that's already gone is exit 128 with nothing killed.
+const windowsKill = `const { execFileSync } = require('node:child_process')
+const root = Number(process.argv[process.argv.indexOf('/pid') + 1])
+try {
+  process.kill(root, 0)
+} catch {
+  process.exit(128)
+}
+const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).trim().split('\\n').map((line) => line.trim().split(/\\s+/).map(Number))
+const kill = (pid) => {
+  for (const [child, parent] of rows) if (parent === pid) kill(child)
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {}
+}
+kill(root)
+`
+const onWindows = async (
+  t,
+  files,
+  { lookFails = false, garbled = false, during } = {},
+) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-windows-'))
   const repo = join(root, 'repo')
   const bin = join(root, 'bin')
@@ -1391,6 +1417,12 @@ const onWindows = async (t, files, { lookFails = false, during } = {}) => {
     "Object.defineProperty(process, 'platform', { value: 'win32' })\n",
   )
   writeFileSync(join(root, 'look.cjs'), windowsLook)
+  writeFileSync(join(root, 'kill.cjs'), windowsKill)
+  writeFileSync(
+    join(bin, 'taskkill'),
+    `#!/bin/sh\nexec "${process.execPath}" "${join(root, 'kill.cjs')}" "$@"\n`,
+    { mode: 0o755 },
+  )
   // A shell wrapper: a #! line can't hold a node path with a space in it.
   writeFileSync(
     join(bin, 'powershell.exe'),
@@ -1438,6 +1470,7 @@ const onWindows = async (t, files, { lookFails = false, during } = {}) => {
         NOTES: notes,
         LOOKS: looks,
         LOOK_FAILS: lookFails ? '1' : '',
+        LOOK_GARBLED: garbled ? '1' : '',
         CI_BASE: '',
         CI_CLEAN: '',
         CI_FULL: 'true',
@@ -1637,15 +1670,43 @@ test('on Windows, a look that fails still stops a file past its time', {
     t,
     {
       'tests/spin.test.mjs': noting(
-        'for (const end = Date.now() + 40000; Date.now() < end; );',
+        "note('worker', process.pid)\nfor (const end = Date.now() + 40000; Date.now() < end; );",
         '// ci: timeout 2 s (spins)',
       ),
     },
     { lookFails: true },
   )
-  assert.ok(run.ms < 30000, `the file ran on for ${run.ms} ms`)
+  assert.ok(run.ms < 30000, `the check waited ${run.ms} ms`)
+  // Not only the runner: the process running the file stops too.
+  assert.ok(gone(run.note('worker')), 'the spinning file kept running')
   assert.match(
     run.reds,
     /^ci: 2 failing tests\n {2}node {2}tests\/spin\.test\.mjs {2}did not finish within 2 s: stopped, but what it started could not be checked\n {2}node {2}tests\/spin\.test\.mjs {2}did not stop what it started: could not verify cleanup: powershell\.exe exited 1$/,
   )
+})
+
+test('on Windows, an unreadable look is a red, and a late child of a live parent is owned', {
+  skip: off,
+}, async (t) => {
+  const garbled = await onWindows(
+    t,
+    { 'tests/one.test.mjs': noting("note('one', 1)") },
+    { garbled: true },
+  )
+  assert.equal(
+    garbled.reds,
+    'ci: 1 failing tests\n  node  tests/one.test.mjs  did not stop what it started: could not verify cleanup: powershell.exe gave an unreadable line: x\ty\tz\tw',
+  )
+  // A parent seen at many looks starts a child well after its first: the
+  // child is still the file's.
+  const late = await onWindows(t, {
+    'tests/late.test.mjs': noting(
+      "const parent = spawn(process.execPath, ['-e', \"setTimeout(() => { const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }); require('node:fs').appendFileSync(process.env.NOTES, JSON.stringify({ key: 'child', value: child.pid }) + '\\\\n') }, 4500); setInterval(() => {}, 1000)\"], { detached: true, stdio: 'ignore' })\nparent.unref()\nnote('parent', parent.pid)\nawait new Promise((done) => setTimeout(done, 7000))",
+    ),
+  })
+  assert.match(
+    late.reds,
+    /^ci: 1 failing tests\n {2}node {2}tests\/late\.test\.mjs {2}did not stop what it started: left node \d+, node \d+ running$/,
+  )
+  for (const key of ['parent', 'child']) assert.ok(gone(late.note(key)), key)
 })

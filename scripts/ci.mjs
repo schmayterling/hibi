@@ -437,14 +437,17 @@ export async function runCI({ dev = false } = {}) {
   // processes its runner started and theirs, learned by parent id from a look
   // every 2 s while files run, so a child whose parent has since exited stays
   // its file's. ponytail: a process started and orphaned between two looks is
-  // missed; a native helper holding each runner in a job object would close
-  // that.
+  // missed, and so is a real child started over 1 s after its parent was last
+  // seen; a process that takes a freed id and starts a child within 1 s, then
+  // exits before a look, can be claimed. A native helper holding each runner
+  // in a job object would close all three.
   const windowsLook = () =>
     capture('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())`t$($_.Name)" }',
+      // A process with no start time, as the idle one can be, is left out.
+      'Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())`t$($_.Name)" }',
     ]).then((output) =>
       output
         .split(/\r?\n/)
@@ -469,8 +472,8 @@ export async function runCI({ dev = false } = {}) {
   // One process, or a process that took a used one's id: start times tell.
   const same = (row, known) =>
     known && Math.abs(row.created - known.created) < 2000
-  const learn = (rows) => {
-    const now = Date.now()
+  // `now` is when the look started: the rows are at least that fresh.
+  const learn = (rows, now) => {
     for (const { runner, since, known } of lineages.values()) {
       // A known id now on a process with another start time was freed and
       // taken: that process isn't the file's, nor are its children.
@@ -510,7 +513,8 @@ export async function runCI({ dev = false } = {}) {
     if (looking) return
     looking = true
     try {
-      learn(await windowsLook())
+      const now = Date.now()
+      learn(await windowsLook(), now)
     } catch {
       /* Looked at again in 2 s. */
     } finally {
@@ -529,14 +533,16 @@ export async function runCI({ dev = false } = {}) {
   // member of its runner's process group, tagged or not. Tags chain, so a check
   // run inside a test file still finds what its runners start.
   const owned = (tag, runner) => {
-    if (process.platform === 'win32')
+    if (process.platform === 'win32') {
+      const now = Date.now()
       return windowsLook().then((rows) => {
-        learn(rows)
+        learn(rows, now)
         const known = lineages.get(runner)?.known ?? new Map()
         return rows
           .filter((row) => same(row, known.get(row.pid)))
           .map(({ pid, name }) => ({ pid, name }))
       })
+    }
     const ownedBy = (entry) =>
       entry.startsWith('HIBI_CI_FILE=') &&
       entry.slice('HIBI_CI_FILE='.length).split(':').includes(tag)
@@ -622,12 +628,13 @@ export async function runCI({ dev = false } = {}) {
       return { left, outlived: found }
     } catch (error) {
       // Nothing to go by: the runner and what's below it go the blunt way.
-      signal(-runner, 'SIGKILL')
-      signal(runner, 'SIGKILL')
+      // taskkill /T walks the tree from a live root, so it goes first.
       if (process.platform === 'win32')
         await capture('taskkill', ['/pid', String(runner), '/T', '/F']).catch(
           () => {},
         )
+      signal(-runner, 'SIGKILL')
+      signal(runner, 'SIGKILL')
       return { left, outlived: [], error: error.message }
     }
   }

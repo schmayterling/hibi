@@ -7,6 +7,7 @@ import {
   type TokensList,
 } from 'marked'
 import { markedGithubFootnote as githubFootnotes } from 'marked-github-footnote'
+import { blockStart } from '../addons/_shared/block-start.ts'
 import {
   BlockTokenizer,
   blockContainers,
@@ -18,6 +19,8 @@ import {
 } from './marked-footnote-reference.ts'
 import { inlineStart } from './marked-inline-start.ts'
 import { lazyBlock, leafBlock } from './marked-leaf-blocks.ts'
+
+const definitionStart = blockStart(/ {0,3}\[\^[^\]\s]+\]:/)
 
 /** Bound definitions with Marked's list grammar before the footnote renderer stores them. */
 export function markedGithubFootnote(
@@ -38,6 +41,8 @@ export function markedGithubFootnote(
   const definition = extension.extensions!.find(
     (item) => item.name === 'footnoteDef',
   ) as TokenizerExtension
+  // As in GFM, a definition line ends a paragraph and a quote's lazy lines.
+  definition.start = definitionStart
   const readDefinition = definition.tokenizer
   // The dependency keeps the first definition it reads for each label, even
   // one read by a container pass that was later discarded.
@@ -61,21 +66,26 @@ export function markedGithubFootnote(
     }
     return token
   }
+  // An empty body has no paragraph to continue, so it takes no lazy lines.
+  const empty = (token: ReturnType<typeof read>) =>
+    token && !token.tokens?.length ? leafBlock(token) : token
   definition.tokenizer = function (source, tokens) {
     const marker = /^ {0,3}\[\^[^\]\s]+\]:[ \t]*/.exec(source)
     if (!marker) return
     let body = source.slice(marker[0].length)
-    if (!body) return read.call(this, source, tokens)
+    if (!body) return empty(read.call(this, source, tokens))
     const next = /\n {0,3}\[\^[^\]\s]+\]:/.exec(body)
     if (next) body = body.slice(0, next.index)
     // After an empty first line no paragraph is open, so a line indented less
     // than four columns cannot continue the definition lazily.
     const first = body.startsWith('\n') && /\n([ \t]*)\S/.exec(body)
     if (first && first[1]!.replace(/\t/g, '    ').length < 4)
-      return read.call(
-        this,
-        source.slice(0, marker[0].length + first.index),
-        tokens,
+      return empty(
+        read.call(
+          this,
+          source.slice(0, marker[0].length + first.index),
+          tokens,
+        ),
       )
     // An empty first line still needs a four-column continuation indent.
     const prefix = '-   ' + (body.startsWith('\n') ? '\u200b' : '')
@@ -97,7 +107,7 @@ export function markedGithubFootnote(
     })
     const item = tokenizer.list(prefix + body)?.items[0]
     if (!item || item.raw.length < prefix.length)
-      return read.call(this, source, tokens)
+      return empty(read.call(this, source, tokens))
     const end = marker[0].length + item.raw.length - prefix.length
     const physical = source.slice(0, end)
     const lexer = this.lexer,
@@ -116,7 +126,7 @@ export function markedGithubFootnote(
       lexer.blockTokens = blockTokens
     }
     const last = token?.tokens?.at(-1)
-    if (!token || !last) return token
+    if (!token || !last) return empty(token)
     if (!['paragraph', 'text'].includes(last.type)) return leafBlock(token)
     // A quote's lazy line continues this definition's last paragraph.
     return lazyBlock(token, (more) => definition.tokenizer.call(this, more, []))

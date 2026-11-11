@@ -36,6 +36,18 @@ test('footnote definitions in quotes continue through lazy lines', () => {
     assert.equal(shape(exported(source)), shape(oracle(source)), source)
 })
 
+test('footnote definition lines end paragraphs and quote lazy lines, as in GFM', () => {
+  for (const source of [
+    '[^1]:\nSome text\n[^2]: more\n\nx[^1] y[^2]',
+    'text\n[^2]: d3\n\ny[^2]',
+    '> a\n[^2]: d\n\ny[^2]',
+    '- a\n  [^2]: d\n\ny[^2]',
+    '> [^1]:\nlazy\n[^2]: d3\n\nx[^1] y[^2]',
+    '> [^1]:\n===\nlazy\n\nx[^1]',
+  ])
+    assert.equal(shape(exported(source)), shape(oracle(source)), source)
+})
+
 test('footnote definitions with an empty first line take no lazy lines', () => {
   for (const source of [
     '[^1]:\nx\n\ny[^1]',
@@ -81,9 +93,12 @@ test('footnote lazy re-reads in quotes stay linear in the text they read', () =>
       (item) => item.name === 'footnoteDef',
     )
     const read = definition.tokenizer
-    let scanned = 0
+    let scanned = 0,
+      reads = 0
     definition.tokenizer = function (source, tokens) {
       scanned += source.length
+      // Block extensions are also asked at every other block start.
+      if (/^ {0,3}\[\^/.test(source)) reads++
       return read.call(this, source, tokens)
     }
     const source = `${'> [^1]: f\ng\n'.repeat(count)}\nx[^1]\n`
@@ -92,5 +107,7 @@ test('footnote lazy re-reads in quotes stay linear in the text they read', () =>
       scanned <= source.length * 10,
       `${scanned} read / ${source.length}`,
     )
+    // One read and one lazy re-read per definition.
+    assert.ok(reads <= count * 2, `${reads} reads / ${count} definitions`)
   }
 })

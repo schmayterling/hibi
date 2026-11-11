@@ -156,6 +156,7 @@ export function withLeafBlocks<T>(tokenizer: Tokenizer, read: () => T): T {
       if ((token as Custom)[quote] !== undefined) (token as Custom).text = text
     }
     active.delete(lexer)
+    lazyBlocks.delete(lexer)
   }
 }
 

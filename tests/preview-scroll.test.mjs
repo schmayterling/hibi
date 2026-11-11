@@ -517,6 +517,44 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   })
   await realign()
 
+  // Layout growing every frame while a script scrolls the preview every
+  // frame: the script's writes end the alignment, and the preview keeps
+  // all of its scroll.
+  const beforeGrowing = await tops()
+  const growing = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const rich = document.querySelector('.rich-pane')
+        const style = document.createElement('style')
+        style.className = 'preview-scroll-test'
+        document.head.append(style)
+        let frame = 0
+        let wanted = 0
+        const tick = () => {
+          frame++
+          style.textContent = `.rich-pane .cm-content::before { content: ''; display: block; height: ${frame}px }`
+          if (frame >= 10) {
+            rich.scrollTop += 20
+            wanted += 20
+          }
+          if (frame < 60) requestAnimationFrame(tick)
+          else resolve(wanted)
+        }
+        requestAnimationFrame(tick)
+      }),
+  )
+  const afterGrowing = await tops()
+  assert.ok(
+    afterGrowing.rich - beforeGrowing.rich >= growing - 3 &&
+      Math.abs(afterGrowing.source - beforeGrowing.source) < 1,
+    JSON.stringify({ beforeGrowing, growing, afterGrowing }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await realign()
+
   // Clicking the independently scrolled preview also reveals its line in source.
   await scroll('.rich-pane', 0.6)
   const sourceBeforeClick = await page

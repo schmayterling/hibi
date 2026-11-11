@@ -165,6 +165,7 @@ export function linkScroll(
         const method = Element.prototype[name] as (...args: unknown[]) => void
         Object.defineProperty(pane, name, {
           configurable: true,
+          writable: true,
           value(this: Element, ...args: unknown[]) {
             foreign()
             method.apply(this, args)
@@ -187,6 +188,7 @@ export function linkScroll(
         if (!method) continue
         Object.defineProperty(view, name, {
           configurable: true,
+          writable: true,
           value(this: EditorView, ...args: unknown[]) {
             return ownScroll(() => method.apply(this, args))
           },
@@ -221,8 +223,7 @@ export function linkScroll(
     // Layout reaches the drawn line at once and the height map at the view's
     // next measure, which can scroll to keep its place: either counts.
     const shifted = (a: Place, b: Place) =>
-      moved(a.line, b.line) ||
-      (a.drawn !== null && b.drawn !== null && moved(a.drawn, b.drawn))
+      moved(a.line, b.line)
     if (panes.some((pane) => shifted(now[pane], was[pane]))) schedule()
     else if (panes.some((pane) => moved(now[pane].top, was[pane].top))) disarm()
   }

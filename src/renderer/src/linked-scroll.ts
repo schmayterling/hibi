@@ -31,11 +31,7 @@ export function linkScroll(
   // content: where it is drawn, if it is, and where the view's height map
   // has it.
   type Place = { top: number; drawn: number | null; line: number }
-  let placed: {
-    caret: ReturnType<typeof caret>
-    leader: Place
-    target: Place
-  } | null = null
+  let placed: { leader: Place; target: Place } | null = null
   const paneState = (pane: HTMLElement) => {
     const content = pane.querySelector('.cm-content')
     const view = content && sourceView(content)
@@ -131,7 +127,7 @@ export function linkScroll(
     const from = lineY(leader, ends.from, ends.position)
     const to = lineY(target, ends.to, ends.at)
     if (from === null || to === null) return null
-    return { caret: caret(leader), leader: from, target: to }
+    return { leader: from, target: to }
   }
   const record = () => {
     if (!syncScrolling && aligning) placed = measure()
@@ -180,9 +176,15 @@ export function linkScroll(
         else delete (target as Record<string, unknown>)[name]
       })
     }
-    const wrote = (pane: HTMLElement) => {
-      if (inOwnScroll()) placedAt.set(pane, get.call(pane))
-      else disarm()
+    // A correction arriving after someone else moved the pane doesn't make
+    // their scroll its own.
+    const writing = (pane: HTMLElement, write: () => void) => {
+      if (!inOwnScroll() || strayed()) {
+        disarm()
+        return write()
+      }
+      write()
+      placedAt.set(pane, get.call(pane))
     }
     for (const pane of [first, second]) {
       placedAt.set(pane, get.call(pane))
@@ -191,8 +193,7 @@ export function linkScroll(
           return get.call(this)
         },
         set(value: number) {
-          set.call(this, value)
-          wrote(pane)
+          writing(pane, () => set.call(this, value))
         },
       })
       for (const name of ['scroll', 'scrollTo', 'scrollBy'] as const) {
@@ -200,20 +201,13 @@ export function linkScroll(
         patch(pane, name, {
           writable: true,
           value(this: Element, ...args: unknown[]) {
-            method.apply(this, args)
-            wrote(pane)
+            writing(pane, () => method.apply(this, args))
           },
         })
       }
-      // Capturing, before the pane's view measures in its own listener.
-      const moved = (event: Event) => {
-        if (event.target === pane && strayed()) disarm()
-      }
-      pane.addEventListener('scroll', moved, { capture: true, passive: true })
       const anchor = pane.style.overflowAnchor
       pane.style.overflowAnchor = 'none'
       undo.push(() => {
-        pane.removeEventListener('scroll', moved, true)
         pane.style.overflowAnchor = anchor
       })
       const content = pane.querySelector('.cm-content')
@@ -299,12 +293,10 @@ export function linkScroll(
   const moved = (a: number, b: number) => Math.abs(a - b) > 0.25
   /** Realigns after layout under the aligned lines. */
   const check = () => {
-    if (aligning && strayed()) return disarm()
     const was = placed
     if (!aligning || !was) return
     const now = measure()
-    // A caret moved since, as a view scrolling to show it, aligns anew.
-    if (!now || !sameCaret(now.caret, was.caret)) return schedule()
+    if (!now) return schedule()
     const panes = ['leader', 'target'] as const
     // Layout reaches the drawn line at once and the height map at the view's
     // next measure, which can scroll to keep its place: either counts.
@@ -377,8 +369,6 @@ export function linkScroll(
     if (!changed && !deliberate) return
     aligning = true
     guard()
-    // A moved caret's own scroll, by the browser or the view, comes with it.
-    for (const pane of [first, second]) placedAt.set(pane, pane.scrollTop)
     placed = null
     schedule()
   }

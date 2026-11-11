@@ -223,7 +223,8 @@ export function linkScroll(
     // Layout reaches the drawn line at once and the height map at the view's
     // next measure, which can scroll to keep its place: either counts.
     const shifted = (a: Place, b: Place) =>
-      moved(a.line, b.line)
+      moved(a.line, b.line) ||
+      (a.drawn !== null && b.drawn !== null && moved(a.drawn, b.drawn))
     if (panes.some((pane) => shifted(now[pane], was[pane]))) schedule()
     else if (panes.some((pane) => moved(now[pane].top, was[pane].top))) disarm()
   }

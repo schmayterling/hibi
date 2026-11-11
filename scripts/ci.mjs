@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import {
   appendFileSync,
   existsSync,
@@ -7,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, posix, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -389,103 +391,127 @@ export async function runCI({ dev = false } = {}) {
       throw new Error(`ci: timeout ${asked} s is not 1 to 86400 seconds`)
     return seconds
   }
-  // A file owns every process below its runner and every member of each
-  // process group one of them was seen in: a group's leader can exit and
-  // leave its members to init, and Playwright starts Electron in a group of
-  // its own. Seen once a second while files run, and again while stopping.
-  const table = () =>
-    execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,stat='], {
-      encoding: 'utf8',
-    })
-      .trim()
-      .split('\n')
-      .map((line) => line.trim().split(/\s+/))
-      // An exited process its parent hasn't collected can't be stopped again.
-      .filter(([, , , stat]) => !stat?.startsWith('Z'))
-      .map(([pid, ppid, pgid]) => ({
-        pid: Number(pid),
-        ppid: Number(ppid),
-        pgid: Number(pgid),
-      }))
-  const own = (run, rows) => {
-    const children = new Map()
-    for (const row of rows)
-      children.set(row.ppid, [...(children.get(row.ppid) ?? []), row])
-    const ours = rows.find((row) => row.pid === process.pid)?.pgid
-    const found = new Map()
-    const add = (row) => {
-      if (found.has(row.pid) || row.pid === process.pid || row.pgid === ours)
-        return
-      found.set(row.pid, row)
-      run.groups.add(row.pgid)
-      for (const child of children.get(row.pid) ?? []) add(child)
-    }
-    const runner = rows.find((row) => row.pid === run.pid)
-    if (runner) add(runner)
-    for (let size = -1; size !== found.size; ) {
-      size = found.size
-      for (const row of rows) if (run.groups.has(row.pgid)) add(row)
-    }
-    return [...found.values()]
-  }
-  const runs = new Set()
-  let sampler
-  const watch = (run) => {
-    runs.add(run)
-    sampler ??= setInterval(() => {
-      try {
-        const rows = table()
-        for (const each of runs) own(each, rows)
-      } catch {
-        /* Seen again next second. */
-      }
-    }, 1000)
-  }
-  const unwatch = (run) => {
-    runs.delete(run)
-    if (!runs.size) {
-      clearInterval(sampler)
-      sampler = undefined
-    }
-  }
+  // Every process a file starts inherits its runner's tag, through forks, new
+  // sessions and parents that exit: what carries the tag is the file's. Looked
+  // for only when a file ends or is stopped. A process that clears its own
+  // environment escapes this, and only the runner's group kill catches it.
   const pause = (ms) => new Promise((done) => setTimeout(done, ms))
-  // Freezes everything a file owns until a look finds nothing new, so nothing
-  // can start a process unseen, then kills it all, group members included;
-  // resolves to what outlived it.
-  const stopRun = async (run) => {
+  const within = (promise, what) => {
+    let timer
+    return Promise.race([
+      promise,
+      new Promise((_, fail) => {
+        timer = setTimeout(() => fail(new Error(`${what} took over 5 s`)), 5000)
+      }),
+    ]).finally(() => clearTimeout(timer))
+  }
+  const capture = (command, args) =>
+    within(
+      new Promise((settle, fail) => {
+        const child = spawn(command, args, {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+        let output = ''
+        child.stdout.on('data', (chunk) => {
+          output += chunk
+        })
+        const timer = setTimeout(() => child.kill('SIGKILL'), 5000)
+        child.once('error', (error) => {
+          clearTimeout(timer)
+          fail(error)
+        })
+        child.once('close', (status, signal) => {
+          clearTimeout(timer)
+          if (status === 0) settle(output)
+          else fail(new Error(`${command} exited ${status ?? signal}`))
+        })
+      }),
+      command,
+    )
+  const tagged = (tag) => {
+    const mark = `HIBI_CI_FILE=${tag}`
+    if (process.platform === 'linux')
+      return within(
+        (async () => {
+          const found = []
+          for (const entry of await readdir('/proc'))
+            if (/^\d+$/.test(entry))
+              try {
+                const environment = await readFile(
+                  `/proc/${entry}/environ`,
+                  'utf8',
+                )
+                if (environment.split('\0').includes(mark))
+                  found.push({
+                    pid: Number(entry),
+                    name: (
+                      await readFile(`/proc/${entry}/comm`, 'utf8')
+                    ).trim(),
+                  })
+              } catch {
+                /* Gone, or not ours to read. */
+              }
+          return found
+        })(),
+        '/proc',
+      )
+    // macOS shows the environment of the user's own processes after their
+    // command line.
+    return capture('ps', ['-A', '-E', '-ww', '-o', 'pid=,command=']).then(
+      (output) =>
+        output
+          .split('\n')
+          .filter((line) => line.split(/\s+/).includes(mark))
+          .map((line) => {
+            const [pid, command] = line.trim().split(/\s+/)
+            return { pid: Number(pid), name: command.split('/').at(-1) }
+          }),
+    )
+  }
+  const signal = (pid, name) => {
+    try {
+      process.kill(pid, name)
+    } catch {
+      /* Already gone. */
+    }
+  }
+  // Kills what carries the tag, and the runner's group, until two looks in a
+  // row find nothing. A process born mid-kill carries the tag too, so the next
+  // look finds it. Resolves to what was left after a clean exit, what outlived
+  // the kill, and any reason it couldn't tell.
+  const cleanUp = async (tag, runner, exited) => {
     if (process.platform === 'win32') {
-      // 128: it had already exited.
-      const { status } = spawnSync('taskkill', [
-        '/pid',
-        String(run.pid),
-        '/T',
-        '/F',
-      ])
-      return [0, 128].includes(status) ? [] : [run.pid]
-    }
-    const signal = (pid, name) => {
       try {
-        process.kill(pid, name)
-      } catch {
-        /* Already gone. */
-      }
-    }
-    for (let round = 0; round < 50; round++) {
-      let members
-      try {
-        members = own(run, table())
+        await capture('taskkill', ['/pid', String(runner), '/T', '/F'])
       } catch (error) {
-        return [`unknown (${error.message})`]
+        // 128: it had already exited.
+        if (!/exited 128$/.test(error.message))
+          return { left: [], outlived: [], error: error.message }
       }
-      if (!members.length) return []
-      const fresh = members.filter((member) => !run.frozen.has(member.pid))
-      for (const member of members) {
-        signal(member.pid, fresh.length ? 'SIGSTOP' : 'SIGKILL')
-        run.frozen.add(member.pid)
-      }
-      await pause(100)
+      return { left: [], outlived: [] }
     }
-    return own(run, table()).map((member) => member.pid)
+    let left = []
+    let found = []
+    try {
+      // A process on its way out after a clean exit isn't left behind.
+      for (let look = 0; look < 20; look++) {
+        found = await tagged(tag)
+        if (!found.length || !exited) break
+        await pause(100)
+      }
+      if (exited) left = found
+      for (let quiet = 0, round = 0; quiet < 2 && round < 50; round++) {
+        if (round) found = await tagged(tag)
+        quiet = found.length ? 0 : quiet + 1
+        for (const { pid } of found) signal(pid, 'SIGKILL')
+        signal(-runner, 'SIGKILL')
+        if (found.length) await pause(50)
+      }
+      return { left, outlived: found }
+    } catch (error) {
+      signal(-runner, 'SIGKILL')
+      return { left, outlived: [], error: error.message }
+    }
   }
   const running = new Set()
   let cancelled = false
@@ -505,11 +531,12 @@ export async function runCI({ dev = false } = {}) {
     let seconds
     let started = false
     let overdue = false
-    let outlived = []
+    let cleanup = { left: [], outlived: [] }
     try {
       // Before anything that can fail: another file's report must not stand in.
       rmSync(report, { force: true })
       seconds = limit(test)
+      const tag = randomUUID()
       result = await new Promise((settle) => {
         const child = spawn(
           process.execPath,
@@ -530,6 +557,7 @@ export async function runCI({ dev = false } = {}) {
             env: {
               ...process.env,
               CI_FILE_LIMIT_MS: String((seconds + 60) * 1000),
+              HIBI_CI_FILE: tag,
             },
             detached: process.platform !== 'win32',
           },
@@ -545,14 +573,11 @@ export async function runCI({ dev = false } = {}) {
         child.stderr?.on('data', (chunk) => {
           output += chunk
         })
-        const run = { pid: child.pid, groups: new Set(), frozen: new Set() }
-        if (child.pid && process.platform !== 'win32') {
-          run.groups.add(child.pid)
-          watch(run)
-        }
         let stopping
         const stop = () => {
-          stopping ??= child.pid ? stopRun(run) : Promise.resolve([])
+          stopping ??= child.pid
+            ? cleanUp(tag, child.pid, false)
+            : Promise.resolve(cleanup)
           return stopping
         }
         running.add(stop)
@@ -567,13 +592,15 @@ export async function runCI({ dev = false } = {}) {
           if (ended) return
           ended = true
           clearTimeout(timer)
-          // A runner that died leaves what it started behind it.
-          const clean = !outcome.error && [0, 1].includes(outcome.status)
-          if (stopping || !clean) outlived = await stop()
-          running.delete(stop)
-          unwatch(run)
-          process.stdout.write(output)
-          settle(outcome)
+          try {
+            // Whatever made the runner end, what it started goes too.
+            if (stopping) cleanup = await stopping
+            else if (child.pid) cleanup = await cleanUp(tag, child.pid, true)
+          } finally {
+            running.delete(stop)
+            process.stdout.write(output)
+            settle(outcome)
+          }
         }
         child.once('error', (error) => end({ error }))
         child.once('close', (status, signal) => end({ status, signal }))
@@ -588,8 +615,14 @@ export async function runCI({ dev = false } = {}) {
         file: test,
         error: 'stopped with everything it started',
       })
-    if (outlived.length)
-      problems.push(`${outlived.join(', ')} kept running after it was stopped`)
+    const named = (found) =>
+      found.map(({ pid, name }) => `${name} ${pid}`).join(', ')
+    const leftovers = [
+      cleanup.left.length && `left ${named(cleanup.left)} running`,
+      cleanup.outlived.length &&
+        `${named(cleanup.outlived)} kept running after it was stopped`,
+      cleanup.error && `could not verify cleanup: ${cleanup.error}`,
+    ].filter(Boolean)
     if (!overdue)
       problems.push(
         result.error && String(result.error.message ?? result.error),
@@ -599,7 +632,9 @@ export async function runCI({ dev = false } = {}) {
     try {
       let lines = []
       try {
-        lines = readFileSync(report, 'utf8').split('\n').filter(Boolean)
+        // Only a runner that started wrote it.
+        if (started)
+          lines = readFileSync(report, 'utf8').split('\n').filter(Boolean)
       } catch {
         /* A missing report didn't finish, as below. */
       }
@@ -667,6 +702,13 @@ export async function runCI({ dev = false } = {}) {
               : `exited ${result.status ?? result.signal} with no failing test reported`,
         file: test,
         error: problems.filter(Boolean).join('; ') || 'no report',
+      })
+    if (leftovers.length)
+      failed.push({
+        batch,
+        name: 'did not stop what it started',
+        file: test,
+        error: leftovers.join('; '),
       })
     return { failed, ran }
   }

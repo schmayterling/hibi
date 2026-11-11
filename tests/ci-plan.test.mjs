@@ -916,6 +916,13 @@ const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { 
 require('node:fs').writeFileSync(\`\${process.env.HELD}/helper\`, String(helper.pid))
 setTimeout(() => process.exit(0), 1500)
 `,
+    // Starts a process in a new session and leaves at once, as a crash
+    // handler's launcher does: its child belongs to no one but init.
+    'tests/daemon.cjs': `const { spawn } = require('node:child_process')
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
+require('node:fs').writeFileSync(\`\${process.env.HELD}/daemon\`, String(child.pid))
+process.exit(0)
+`,
     // Starts processes in groups of their own while it's being stopped.
     'tests/breeder.cjs': `const { spawn } = require('node:child_process')
 const { appendFileSync } = require('node:fs')
@@ -933,7 +940,7 @@ setTimeout(() => {
     // processes in groups of their own, as Playwright does with Electron.
     [spin]: `// ci: timeout 2 s (spins)\n${testFile(
       'spin',
-      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/held`, String(held.pid))\n  spawn(process.execPath, ['tests/leader.cjs'], { detached: true, stdio: 'ignore' })\n  spawn(process.execPath, ['tests/breeder.cjs'], { detached: true, stdio: 'ignore' })\n  for (const end = Date.now() + 60000; Date.now() < end; );",
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/held`, String(held.pid))\n  spawn(process.execPath, ['tests/leader.cjs'], { detached: true, stdio: 'ignore' })\n  spawn(process.execPath, ['tests/breeder.cjs'], { detached: true, stdio: 'ignore' })\n  spawn(process.execPath, ['tests/daemon.cjs'], { detached: true, stdio: 'ignore' })\n  const bare = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env: {}, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/bare`, String(bare.pid))\n  for (const end = Date.now() + 60000; Date.now() < end; );",
     )}`,
     // Its runner dies under it, and leaves what it started behind.
     'tests/orphan.test.mjs': testFile(
@@ -951,6 +958,11 @@ setTimeout(() => {
       'app',
       "throw new Error('app-red')",
       "import './electron.mjs'",
+    ),
+    // Passes, but leaves a process running.
+    'tests/leak.test.mjs': testFile(
+      'leak',
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  left.unref()\n  writeFileSync(`${process.env.HELD}/leak`, String(left.pid))",
     ),
     // A red beside a stopped file stays a red.
     'tests/red.test.mjs': testFile('red', "throw new Error('red')"),
@@ -1024,6 +1036,7 @@ setTimeout(() => {
   assert.deepEqual(runs.sort(), [
     'app',
     // The file's own limit leaves this check the first word.
+    'leak',
     'limit:64000',
     'mate',
     'mate-done',
@@ -1034,16 +1047,26 @@ setTimeout(() => {
     'spin',
   ])
   const reds = stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd()
-  assert.equal(
+  const quote = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(
     reds,
-    [
-      'ci: 5 failing tests',
-      '  node  tests/orphan.test.mjs  exited SIGKILL with no failing test reported: killed by SIGKILL; its report did not finish',
-      '  node  tests/red.test.mjs:4  red: red',
-      `  node  ${spin}  did not finish within 2 s: stopped with everything it started`,
-      '  app  tests/app.test.mjs:4  app: app-red',
-      '  app  tests/zero.test.mjs  could not start: ci: timeout 0 s is not 1 to 86400 seconds',
-    ].join('\n'),
+    new RegExp(
+      `^${[
+        'ci: 7 failing tests',
+        '  node  tests/leak.test.mjs  did not stop what it started: left node \\d+ running',
+        '  node  tests/orphan.test.mjs  exited SIGKILL with no failing test reported: killed by SIGKILL; its report did not finish',
+        // What a runner that died left behind is named, then stopped.
+        '  node  tests/orphan.test.mjs  did not stop what it started: left node \\d+, node \\d+ running',
+        quote('  node  tests/red.test.mjs:4  red: red'),
+        quote(
+          `  node  ${spin}  did not finish within 2 s: stopped with everything it started`,
+        ),
+        quote('  app  tests/app.test.mjs:4  app: app-red'),
+        quote(
+          '  app  tests/zero.test.mjs  could not start: ci: timeout 0 s is not 1 to 86400 seconds',
+        ),
+      ].join('\n')}$`,
+    ),
   )
   // Stopping a file stops what it started, in its group or out of it, and
   // so does its runner dying.
@@ -1115,4 +1138,66 @@ test('an interrupted check stops its files and starts no more', async (t) => {
   // would outlive the check.
   await new Promise((done) => setTimeout(done, 2000))
   assert.equal(started().length, waves)
+})
+
+test('a cleanup that cannot be checked is a red, and the check still ends', {
+  skip:
+    process.platform !== 'darwin' && 'only macOS looks for processes with ps',
+}, (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-hung-ps-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const bin = join(root, 'bin')
+  const stub = join(root, 'npm.cjs')
+  writeFileSync(stub, '')
+  mkdirSync(bin)
+  // A ps that never answers.
+  writeFileSync(join(bin, 'ps'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    'tests/one.test.mjs':
+      "import 'node:child_process'\nimport test from 'node:test'\ntest('one', () => {})\n",
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const started = Date.now()
+  const { status, stdout } = spawnSync(
+    process.execPath,
+    [resolve('scripts/ci.mjs')],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: {
+        ...env,
+        PATH: `${bin}:${process.env.PATH}`,
+        CI_BASE: '',
+        CI_CLEAN: '',
+        CI_FULL: 'true',
+        CI_SHARD: '0/1',
+        CI_WORKERS: '1',
+        GITHUB_ACTIONS: '',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
+        npm_execpath: stub,
+      },
+    },
+  )
+  assert.equal(status, 1)
+  assert.ok(Date.now() - started < 30000, `took ${Date.now() - started} ms`)
+  assert.equal(
+    stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    'ci: 1 failing tests\n  node  tests/one.test.mjs  did not stop what it started: could not verify cleanup: ps took over 5 s',
+  )
 })

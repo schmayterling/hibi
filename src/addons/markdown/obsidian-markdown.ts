@@ -1,6 +1,7 @@
-import type { MarkedExtension } from 'marked'
+import type { MarkedExtension, Token } from 'marked'
+import { inlineStart } from '../../shared/marked-inline-start.ts'
+import { highlightToken, wikiToken } from '../../shared/marked-obsidian.ts'
 
-const wiki = /^(!?)\[\[([^\]\r\n]+)\]\]/
 const escapeHtml = (value: string) =>
   value.replace(
     /[&<>"']/g,
@@ -10,43 +11,9 @@ const escapeHtml = (value: string) =>
       ] ?? character,
   )
 
-function wikiParts(raw: string) {
-  const match = wiki.exec(raw)
-  if (!match) return null
-  const [target, alias] = (match[2] ?? '').split('|', 2)
-  if (!target?.trim()) return null
-  return {
-    raw: match[0],
-    embed: !!match[1],
-    target: target.trim(),
-    label: alias?.trim() || target.trim(),
-    aliased: alias !== undefined,
-  }
-}
-
-const token = (source: string, embed: boolean) => {
-  const parts = wikiParts(source)
-  if (!parts || parts.embed !== embed) return undefined
-  return {
-    type: embed ? 'obsidianEmbed' : 'obsidianWikiLink',
-    raw: parts.raw,
-    text: parts.label,
-    target: parts.target,
-    aliased: parts.aliased,
-    tokens: [{ type: 'text', raw: parts.label, text: parts.label }],
-  }
-}
-
-const highlightToken = (source: string) => {
-  const match = /^==(\S(?:[^\r\n]*?\S)?)==/.exec(source)
-  if (!match) return undefined
-  const text = match[1] ?? ''
-  return {
-    type: 'obsidianHighlight',
-    raw: match[0],
-    text,
-    tokens: [{ type: 'text', raw: text, text }],
-  }
+function token(source: string, embed: boolean, tokens: Token[]) {
+  const value = wikiToken(source, embed, tokens)
+  return value && { ...value, aliased: value.raw.includes('|') }
 }
 
 export const obsidianMarkdown: MarkedExtension = {
@@ -54,10 +21,7 @@ export const obsidianMarkdown: MarkedExtension = {
     {
       name: 'obsidianEmbed',
       level: 'inline',
-      start: (source) => source.indexOf('![['),
-      tokenizer(source) {
-        return token(source, true)
-      },
+      ...inlineStart('![[', (source, tokens) => token(source, true, tokens)),
       renderer(value) {
         return `<span class="obsidian-embed">${escapeHtml(value.raw)}</span>`
       },
@@ -65,10 +29,7 @@ export const obsidianMarkdown: MarkedExtension = {
     {
       name: 'obsidianWikiLink',
       level: 'inline',
-      start: (source) => source.indexOf('[['),
-      tokenizer(source) {
-        return token(source, false)
-      },
+      ...inlineStart('[[', (source, tokens) => token(source, false, tokens)),
       renderer(value) {
         return `<span class="obsidian-wiki-link">${escapeHtml(value.text)}</span>`
       },
@@ -76,8 +37,7 @@ export const obsidianMarkdown: MarkedExtension = {
     {
       name: 'obsidianHighlight',
       level: 'inline',
-      start: (source) => source.indexOf('=='),
-      tokenizer: highlightToken,
+      ...inlineStart('==', highlightToken),
       renderer(value) {
         return `<mark>${escapeHtml(value.text)}</mark>`
       },

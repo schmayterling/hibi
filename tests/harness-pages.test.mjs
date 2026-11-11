@@ -13,52 +13,64 @@ const builder = 'harness-page.mjs'
  * Lines that write a script tag a page loads, or a script tag left open for
  * a later string to finish, anywhere but the page builder. Inline script text
  * in notes, closed in the same string, is fine. Strings are read as the
- * program sees them: escapes decoded, and literal-only joins and templates
- * read whole. Pages built from values the source doesn't spell out (variables,
- * calls, JSON) are beyond it.
+ * program sees them, escapes decoded, and text spelled in adjacent literals of
+ * one join or template is read as one, even next to a variable. Pages built
+ * from text the source doesn't spell out (variables, calls such as String.raw
+ * with an invalid escape, JSON) are beyond it; String.raw`\x3cscript src` is
+ * read decoded, a false alarm. `work.scanned` counts the characters read.
  */
-function pagesOutsideBuilder(name, code) {
+function pagesOutsideBuilder(name, code, work = { scanned: 0 }) {
   if (/\.html?$/i.test(name))
     return [...code.matchAll(/<script\b[^>]*\bsrc\b/gi)].map(
       (match) => `${name}:${code.slice(0, match.index).split('\n').length}`,
     )
   const found = new Set()
-  const folded = new Map()
-  // The text a literal-only expression always makes; null for anything else.
-  const fold = (node) => {
-    if (folded.has(node)) return folded.get(node)
-    let text = null
-    if (node.type === 'StringLiteral') text = node.value
-    else if (node.type === 'TemplateElement') text = node.value.cooked ?? null
-    else if (node.type === 'TemplateLiteral') {
-      const parts = node.expressions.map(fold)
-      if (parts.every((part) => part !== null))
-        text = node.quasis
-          .map(
-            (quasi, index) => (quasi.value.cooked ?? '') + (parts[index] ?? ''),
-          )
-          .join('')
-    } else if (node.type === 'BinaryExpression' && node.operator === '+') {
-      const left = fold(node.left)
-      const right = left === null ? null : fold(node.right)
-      if (right !== null) text = left + right
-    } else if (node.type === 'ParenthesizedExpression')
-      text = fold(node.expression)
-    folded.set(node, text)
-    return text
-  }
-  const visit = (node) => {
-    if (Array.isArray(node)) return node.forEach(visit)
-    if (!node || typeof node.type !== 'string') return
-    const text = fold(node)
+  const check = (text, node) => {
+    work.scanned += text.length
     if (
-      text !== null &&
       [...text.matchAll(/<script\b/gi)].some((match) => {
         const tag = /^[^>]*>/.exec(text.slice(match.index))
         return !tag || /\bsrc\b/i.test(tag[0])
       })
     )
       found.add(`${name}:${node.loc.start.line}`)
+  }
+  const joins = (node) =>
+    node.type === 'StringLiteral' ||
+    node.type === 'TemplateLiteral' ||
+    (node.type === 'BinaryExpression' && node.operator === '+')
+  // The text a join or template spells, with null where a value goes.
+  const pieces = (node, out) => {
+    if (node.type === 'StringLiteral') out.push(node.value)
+    else if (node.type === 'TemplateLiteral')
+      node.quasis.forEach((quasi, index) => {
+        out.push(quasi.value.cooked ?? null)
+        if (index < node.expressions.length)
+          pieces(node.expressions[index], out)
+      })
+    else if (joins(node)) {
+      pieces(node.left, out)
+      pieces(node.right, out)
+    } else {
+      out.push(null)
+      visit(node)
+    }
+    return out
+  }
+  // Each literal is read once, in the longest run of text around it.
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.forEach(visit)
+    if (!node || typeof node.type !== 'string') return
+    if (joins(node)) {
+      let run = ''
+      for (const piece of [...pieces(node, []), null])
+        if (piece !== null) run += piece
+        else if (run) {
+          check(run, node)
+          run = ''
+        }
+      return
+    }
     for (const key in node)
       if (key !== 'loc' && typeof node[key] === 'object') visit(node[key])
   }
@@ -106,6 +118,8 @@ test('the page check sees pages built from pieces and pages on disk', () => {
     `const html = '\\x3cscript src="harness.js"></script>'`,
     'const html = `\\u003cscript src="harness.js"></script>`',
     `const html = '<scr' + 'ipt src="harness.js"></script>'`,
+    `const html = head + '<scr' + 'ipt src="x.js"></script>'`,
+    `const html = \`\${head}<scr\` + \`ipt src="x.js"></script>\``,
   ])
     assert.equal(flagged(code), true, code)
   assert.equal(
@@ -119,6 +133,14 @@ test('the page check sees pages built from pieces and pages on disk', () => {
     `const html = harnessPage({ css: 'harness.css' })`,
   ])
     assert.equal(flagged(code), false, code)
+  // A long join is read once, not once per piece.
+  const work = { scanned: 0 }
+  const long = `const html = ${"'a' + ".repeat(4096)}'${tag} src="x.js"></script>'`
+  assert.equal(pagesOutsideBuilder('long.mjs', long, work).length, 1)
+  assert.ok(
+    work.scanned < long.length,
+    `read ${work.scanned} of ${long.length}`,
+  )
   assert.match(
     harnessPage(),
     /^<!doctype html><html lang="en"><head><meta charset="utf-8">/,

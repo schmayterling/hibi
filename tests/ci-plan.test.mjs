@@ -30,7 +30,11 @@ const owns = (t) => {
       )
         .stdout.split('\n')
         .filter(Boolean)
-        .map((line) => line.split('\t'))
+        .map((line) => {
+          // A process it couldn't read is named so, and isn't known to be ours.
+          const [pid, name] = line.split('\t')
+          return pid === 'unreadable' ? [name, pid] : [pid, name]
+        })
     if (process.platform !== 'linux') return []
     return readdirSync('/proc')
       .filter((pid) => /^\d+$/.test(pid))
@@ -58,12 +62,13 @@ const owns = (t) => {
       await new Promise((done) => setTimeout(done, 100))
       found = left()
     }
-    for (const [pid] of found)
-      try {
-        process.kill(Number(pid), 'SIGKILL')
-      } catch {
-        /* Gone already. */
-      }
+    for (const [pid, name] of found)
+      if (name !== 'unreadable')
+        try {
+          process.kill(Number(pid), 'SIGKILL')
+        } catch {
+          /* Gone already. */
+        }
     assert.deepEqual(
       found.map(([pid, name]) => `${name} ${pid}`),
       [],
@@ -910,6 +915,7 @@ test('the report counts tests by the file that ran them, on every supported node
   }
   for (const [file, source] of Object.entries(files))
     writeFileSync(join(root, file), source)
+  const owned = owns(t)
   const report = (node, tests) => {
     const destination = join(root, 'report.jsonl')
     rmSync(destination, { force: true })
@@ -922,7 +928,7 @@ test('the report counts tests by the file that ran them, on every supported node
         `--test-reporter-destination=${destination}`,
         ...tests,
       ],
-      { cwd: root, env },
+      { cwd: root, env: { ...env, ...owned } },
     )
     return JSON.parse(
       readFileSync(destination, 'utf8').trim().split('\n').at(-1),
@@ -1054,6 +1060,8 @@ setTimeout(() => {
   const held = join(root, 'held')
   mkdirSync(held)
   let heldPids = []
+  // Registered first, so it runs first: before what's noted is stopped below.
+  const owned = owns(t)
   // A broken check would leave them running.
   t.after(() => {
     for (const pid of heldPids)
@@ -1072,7 +1080,7 @@ setTimeout(() => {
       timeout: 120000,
       env: {
         ...env,
-        ...owns(t),
+        ...owned,
         // A red exits 1 even where a rejection only warns.
         NODE_OPTIONS: '--unhandled-rejections=warn',
         HELD: held,
@@ -1143,7 +1151,7 @@ setTimeout(() => {
   }
 })
 
-test('an interrupted check stops its files and starts no more', async (t) => {
+test('an interrupted check stops its files, starts no more, and names its reds so far', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-interrupt-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const repo = join(root, 'repo')
@@ -1155,6 +1163,9 @@ test('an interrupted check stops its files and starts no more', async (t) => {
   const files = {
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
+    // Starts no process, so its group runs and ends before the waits'.
+    'tests/a-red.test.mjs':
+      "import test from 'node:test'\ntest('red', () => {\n  throw new Error('red before the interrupt')\n})\n",
   }
   for (let index = 0; index < waves * 2; index++)
     files[`tests/wait-${index}.test.mjs`] =
@@ -1174,7 +1185,7 @@ test('an interrupted check stops its files and starts no more', async (t) => {
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const check = spawn(process.execPath, [resolve('scripts/ci.mjs')], {
     cwd: repo,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'ignore'],
     env: {
       ...env,
       ...owns(t),
@@ -1191,6 +1202,10 @@ test('an interrupted check stops its files and starts no more', async (t) => {
     },
   })
   t.after(() => check.kill('SIGKILL'))
+  let stdout = ''
+  check.stdout.on('data', (chunk) => {
+    stdout += chunk
+  })
   const started = () => readFileSync(ran, 'utf8').split(' ').filter(Boolean)
   for (let wait = 0; started().length < waves && wait < 300; wait++)
     await new Promise((done) => setTimeout(done, 100))
@@ -1200,10 +1215,82 @@ test('an interrupted check stops its files and starts no more', async (t) => {
   )
   check.kill('SIGINT')
   assert.deepEqual(await closed, { status: null, signal: 'SIGINT' })
+  assert.match(
+    stdout,
+    /\nci: \d+ failing tests\n {2}unit {2}tests\/a-red\.test\.mjs:\d+ {2}red: red before the interrupt\n/,
+  )
   // The files waiting their turn never ran, then or after: one started late
   // would outlive the check.
   await new Promise((done) => setTimeout(done, 2000))
   assert.equal(started().length, waves)
+})
+
+test("on macOS, a process's arguments read only in the kernel's own layout, and any other is named unreadable", {
+  skip: process.platform === 'win32' && 'no python3 on the Windows runner',
+}, () => {
+  // KERN_PROCARGS2: argc, the exec path and its NUL, zeros to the next 8-byte
+  // boundary, then argv and the environment, each NUL-ended.
+  const record = ({ argc, path, padding = '', strings }) => {
+    const head = Buffer.alloc(4)
+    head.writeInt32LE(argc)
+    const named = Buffer.concat([head, Buffer.from(`${path}\0${padding}`)])
+    const zeros = Buffer.alloc((8 - ((named.length - 4) % 8)) % 8)
+    return Buffer.concat([
+      named,
+      zeros,
+      Buffer.from(strings.map((entry) => `${entry}\0`).join('')),
+    ]).toString('hex')
+  }
+  const records = [
+    record({
+      argc: 2,
+      path: '/bin/node',
+      strings: ['node', 'x', 'HIBI_CI_FILE=a:tag', 'OTHER=1'],
+    }),
+    // An empty argv[0] right after the zeros is an argument, not more zeros.
+    record({
+      argc: 2,
+      path: '/bin/nod',
+      strings: ['', 'x', 'HIBI_CI_FILE=tag'],
+    }),
+    // Tags in an argument or inside another variable aren't the file's.
+    record({
+      argc: 2,
+      path: '/bin/node',
+      strings: ['node', 'HIBI_CI_FILE=tag', 'X=HIBI_CI_FILE=tag'],
+    }),
+    // Not zeros between the path and the arguments.
+    record({ argc: 1, path: '/bin/node', padding: 'x', strings: ['node'] }),
+    // Fewer strings than argc says.
+    record({ argc: 9, path: '/bin/node', strings: ['node', 'x'] }),
+    // No end to the path.
+    Buffer.concat([Buffer.alloc(4), Buffer.from('/bin/node')]).toString('hex'),
+  ]
+  const { status, stdout, stderr } = spawnSync(
+    'python3',
+    [
+      '-I',
+      '-c',
+      "import importlib.util, json, sys\nspec = importlib.util.spec_from_file_location('owned', sys.argv[1])\nowned = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(owned)\nfor hexed in json.load(sys.stdin):\n    parsed = owned.parse(bytes.fromhex(hexed))\n    print(json.dumps(parsed and [parsed[0].decode(), [entry.decode() for entry in parsed[1]], owned.tagged(parsed[1], 'tag')]))",
+      resolve('scripts/ci-owned.py'),
+    ],
+    { input: JSON.stringify(records), encoding: 'utf8' },
+  )
+  assert.equal(status, 0, stderr)
+  assert.deepEqual(
+    stdout
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+    [
+      ['/bin/node', ['HIBI_CI_FILE=a:tag', 'OTHER=1'], true],
+      ['/bin/nod', ['HIBI_CI_FILE=tag'], true],
+      ['/bin/node', ['X=HIBI_CI_FILE=tag'], false],
+      null,
+      null,
+      null,
+    ],
+  )
 })
 
 test('a cleanup that cannot be checked is a red, and the check still ends', {
@@ -1350,6 +1437,8 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
   const nested = join(root, 'nested')
   mkdirSync(nested)
   let pids = []
+  // Registered first, so it runs first: before what's noted is stopped below.
+  const owned = owns(t)
   t.after(() => {
     for (const pid of pids)
       try {
@@ -1369,7 +1458,7 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
       timeout: 120000,
       env: {
         ...env,
-        ...owns(t),
+        ...owned,
         CHECK: resolve('scripts/ci.mjs'),
         HELD: held,
         NESTED: nested,
@@ -1419,6 +1508,7 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
 // rows: [[pid, parent, created, name]]}.
 const windowsLook = `const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
+const start = Date.now()
 fs.appendFileSync(process.env.LOOKS, 'look\\n')
 if (process.env.LOOK_FAILS) {
   // Not before the file has noted that it's running: what's stopped then is a
@@ -1436,12 +1526,25 @@ try {
   rewrite = JSON.parse(fs.readFileSync(process.env.ROOT + '/rewrite.json', 'utf8'))
 } catch {}
 const seconds = (elapsed) => elapsed.split(/[-:]/).map(Number).reduce((sum, part, index, parts) => sum + part * [86400, 3600, 60, 1].slice(-parts.length)[index], 0)
-for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], { encoding: 'utf8' }).trim().split('\\n')) {
-  const [pid, parent, elapsed, ...name] = line.trim().split(/\\s+/)
-  const created = rewrite.created?.[pid] ?? Date.now() - seconds(elapsed) * 1000
-  console.log([pid, rewrite.parent?.[pid] ?? parent, created, name.join(' ').split('/').at(-1)].join('\\t'))
+const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], { encoding: 'utf8' }).trim().split('\\n').map((line) => line.trim().split(/\\s+/))
+fs.appendFileSync(process.env.ROOT + '/listed', JSON.stringify({ start, pids: rows.map(([pid]) => pid) }) + '\\n')
+const listed = fs.readFileSync(process.env.ROOT + '/listed', 'utf8').trim().split('\\n').map((line) => JSON.parse(line))
+for (const [pid, parent, elapsed, ...name] of rows) {
+  let created = rewrite.created?.[pid] ?? Date.now() - seconds(elapsed) * 1000
+  let named = rewrite.parent?.[pid] ?? parent
+  // Said to be its parent's child, started a while after the last look that
+  // saw the parent began.
+  const late = rewrite.late?.[pid]
+  const seen = late && listed.findLast((look) => look.pids.includes(String(late.parent)))
+  if (seen) {
+    named = late.parent
+    created = seen.start + late.after
+  }
+  console.log([pid, named, created, name.join(' ').split('/').at(-1)].join('\\t'))
 }
 for (const row of rewrite.rows ?? []) console.log(row.join('\\t'))
+// A slow look: what it read is as old as when it started.
+if (process.env.LOOK_DELAY) execFileSync('sleep', [String(process.env.LOOK_DELAY / 1000)])
 `
 // taskkill /T as Windows has it: the tree is walked from a live root, and a
 // root that's already gone is exit 128 with nothing killed.
@@ -1464,7 +1567,7 @@ kill(root)
 const onWindows = async (
   t,
   files,
-  { lookFails = false, garbled = false, during } = {},
+  { lookFails = false, garbled = false, lookDelay, during } = {},
 ) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-windows-'))
   const repo = join(root, 'repo')
@@ -1474,6 +1577,8 @@ const onWindows = async (
   const stub = join(root, 'npm.cjs')
   const windows = join(root, 'windows.mjs')
   const pids = new Set()
+  // Registered first, so it runs first: before what's noted is stopped below.
+  const owned = owns(t)
   t.after(() => {
     for (const pid of pids)
       try {
@@ -1540,13 +1645,14 @@ const onWindows = async (
       stdio: ['ignore', 'pipe', 'ignore'],
       env: {
         ...env,
-        ...owns(t),
+        ...owned,
         PATH: `${bin}:${process.env.PATH}`,
         ROOT: root,
         NOTES: notes,
         LOOKS: looks,
         LOOK_FAILS: lookFails ? '1' : '',
         LOOK_GARBLED: garbled ? '1' : '',
+        LOOK_DELAY: lookDelay ? String(lookDelay) : '',
         CI_BASE: '',
         CI_CLEAN: '',
         CI_FULL: 'true',
@@ -1577,6 +1683,12 @@ const onWindows = async (
     ms: Date.now() - started,
     reds: stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
     looked: readFileSync(looks, 'utf8').length > 0,
+    listed: existsSync(join(root, 'listed'))
+      ? readFileSync(join(root, 'listed'), 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+      : [],
     note,
   }
 }
@@ -1743,6 +1855,61 @@ test("on Windows, a process that took a used id is not the file's, nor its child
   )
   assert.equal(renewed.status, 0, renewed.reds)
   assert.ok(!gone(renewed.note('held')), 'a reused id was killed')
+  // Rightly left running by the check, so stopped here: it carries the tag.
+  process.kill(renewed.note('held'), 'SIGKILL')
+})
+
+test("on Windows, a look's rows are as old as its start, however long it takes", {
+  skip: off,
+}, async (t) => {
+  let stranger
+  const run = await onWindows(
+    t,
+    {
+      // Its worker outlives it, so the check's own looks see the worker too.
+      'tests/slow.test.mjs': noting(
+        "const worker = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { stdio: 'ignore' })\nworker.unref()\nnote('worker', worker.pid)\nawait new Promise((done) => setTimeout(done, 6000))\nnote('ending', String(Date.now()))",
+      ),
+    },
+    {
+      lookDelay: 2000,
+      during: async ({ root, noted, pids }) => {
+        const worker = await noted('worker')
+        const child = spawn(
+          process.execPath,
+          ['-e', 'setInterval(() => {}, 1000)'],
+          { detached: true, stdio: 'ignore' },
+        )
+        child.unref()
+        pids.add(child.pid)
+        stranger = child.pid
+        // Said to start 2 s after the last look that saw the worker began: a
+        // second past when the worker was last seen, but before that look
+        // ended.
+        writeFileSync(
+          join(root, 'rewrite.json'),
+          JSON.stringify({
+            late: { [stranger]: { parent: worker, after: 2000 } },
+          }),
+        )
+      },
+    },
+  )
+  assert.equal(run.status, 0, run.reds)
+  assert.ok(
+    !gone(stranger),
+    'a process started after its parent was last seen was claimed',
+  )
+  // Looks while the file ran and the check's own after it ended both saw it.
+  const worker = String(run.note('worker'))
+  const ending = Number(run.note('ending'))
+  const saw = run.listed
+    .filter(({ pids }) => pids.includes(worker))
+    .map(({ start }) => start - ending)
+  assert.ok(
+    saw.some((at) => at < 0) && saw.some((at) => at > 0),
+    `looks that saw the worker, from the file's end: ${saw.join(', ')} ms`,
+  )
 })
 
 test('on Windows, a look that fails still stops a file past its time', {

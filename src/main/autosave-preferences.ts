@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import {
@@ -8,13 +8,22 @@ import {
 import { syncFolder, writeText } from './files'
 
 let writing: Promise<unknown> = Promise.resolve()
+let cleaned = false
 
 /** The synchronous bridge replies only after the atomic setting write finishes. */
 export function autosavePreferences(operation: unknown, value: unknown) {
   const next = writing
     .catch(() => {})
     .then(async () => {
-      const path = join(app.getPath('userData'), 'autosave.json')
+      const folder = app.getPath('userData')
+      const path = join(folder, 'autosave.json')
+      if (!cleaned) {
+        cleaned = true
+        for (const name of await readdir(folder).catch(() => []))
+          if (/^\.autosave\.json\.[0-9a-f-]{36}\.tmp$/.test(name))
+            await unlink(join(folder, name)).catch(() => {})
+      }
+      const off = { enabled: false, delay: 2000 }
       const save = async (
         preferences: ReturnType<typeof readAutosavePreferences>,
       ) => {
@@ -24,16 +33,23 @@ export function autosavePreferences(operation: unknown, value: unknown) {
       }
       if (
         operation === 'get' &&
-        (value === null || (typeof value === 'string' && value.length <= 1024))
+        (value === null || typeof value === 'string')
       ) {
         try {
           return readAutosavePreferences(await readFile(path, 'utf8'))
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-            return readAutosavePreferences('null')
+          if (
+            (error as NodeJS.ErrnoException).code !== 'ENOENT' ||
+            (value !== null && value.length > 1024)
+          )
+            return off
           const preferences = readAutosavePreferences(value)
-          // Migrate an existing off before the renderer can use the preference.
-          return value === null ? preferences : save(preferences)
+          // Leave legacy storage intact if migration fails; retry next launch.
+          try {
+            return value === null ? preferences : await save(preferences)
+          } catch {
+            return off
+          }
         }
       }
       if (

@@ -128,3 +128,32 @@ test('setting waits for file sync, failure preserves old setting, next write rec
   state.failRead = true
   assert.equal((await setting('get', '{"enabled":true}')).enabled, false)
 })
+
+test('migration failure starts off, preserves legacy choice, and retries when writable', async (t) => {
+  const { setting, state, root, disk } = await runtime(t)
+  state.fail = true
+  const legacy = '{"enabled":true,"delay":1000}'
+  assert.deepEqual(await setting('get', legacy), {
+    enabled: false,
+    delay: 2000,
+  })
+  await assert.rejects(fs.readFile(join(root, 'autosave.json')), {
+    code: 'ENOENT',
+  })
+  state.fail = false
+  assert.deepEqual(await setting('get', legacy), { enabled: true, delay: 1000 })
+  assert.deepEqual(await disk(), { enabled: true, delay: 1000 })
+})
+test("oversized legacy starts off and only this setting's orphan temps are removed", async (t) => {
+  const { setting, root } = await runtime(t)
+  await fs.writeFile(
+    join(root, '.autosave.json.00000000-0000-0000-0000-000000000001.tmp'),
+    'unfinished',
+  )
+  await fs.writeFile(join(root, 'other.tmp'), 'keep')
+  assert.deepEqual(await setting('get', 'x'.repeat(2048)), {
+    enabled: false,
+    delay: 2000,
+  })
+  assert.deepEqual(await fs.readdir(root), ['other.tmp'])
+})

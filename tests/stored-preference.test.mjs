@@ -163,3 +163,13 @@ test('durable autosave off publishes even when the DOMStorage mirror is full', (
   assert.equal(changes, 1)
   assert.throws(() => first.tabIndent.set({ enabled: false }), /quota full/)
 })
+
+test('stored memory changes only after the durable write succeeds', () => {
+  let first
+  first = stores({ getItem: () => null, setItem() {} }, () => {
+    assert.equal(first.autosave.snapshot().enabled, true)
+    throw new Error('disk refused')
+  })
+  assert.throws(() => first.autosave.set({ enabled: false }), /disk refused/)
+  assert.equal(first.autosave.snapshot().enabled, true)
+})

@@ -35,6 +35,7 @@ import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APP_ICON_CHANNELS } from '../shared/app-icon'
+import { AUTOSAVE_PREFERENCES_CHANNEL } from '../shared/autosave-preferences'
 import { BACKGROUND_CHANNELS, QUICK_NOTE_COMMAND } from '../shared/background'
 import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -144,6 +145,7 @@ import {
   titleBarColors,
 } from './appearance'
 import { fileHeldOpen, fileReadOnly } from './atomic-rename'
+import { autosavePreferences } from './autosave-preferences'
 import { BackgroundMode } from './background'
 import {
   autosaveDocument,
@@ -1621,6 +1623,20 @@ if (!app.requestSingleInstanceLock()) {
             throw error
           }
         })
+      ipcMain.on(AUTOSAVE_PREFERENCES_CHANNEL, (event, operation, value) => {
+        const reply = async () => {
+          trustedWindow(event)
+          return autosavePreferences(operation, value)
+        }
+        void reply().then(
+          (preferences) => {
+            event.returnValue = { preferences }
+          },
+          (error) => {
+            event.returnValue = { error: String(error) }
+          },
+        )
+      })
       handle(BACKGROUND_CHANNELS.settingsReady, () => {
         backgroundSettingsReady = true
         deliverBackgroundSettings()

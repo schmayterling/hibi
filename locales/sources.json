@@ -685,6 +685,9 @@
   "b9e81709a10d": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "a3ffa4ccbdbb": [
+    "src/renderer/src/AutosaveSettings.tsx"
+  ],
   "4dd68fc697c5": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -1362,6 +1365,9 @@
   ],
   "33b7ed2bf96e": [
     "src/main/addon-trust.ts"
+  ],
+  "50ee84f63a7e": [
+    "src/renderer/src/AutosaveSettings.tsx"
   ],
   "7c822b51dee0": [
     "src/main/file-associations.ts"
@@ -3340,6 +3346,9 @@
   ],
   "440c06b497b1": [
     "src/main/file-associations.ts"
+  ],
+  "f50415d21b7a": [
+    "src/main/autosave-preferences.ts"
   ],
   "2296b7344bc6": [
     "src/renderer/src/document-runtime.ts"

@@ -32,7 +32,10 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   const source = page.getByRole('textbox', { name: /^markdown editor$/i })
   const markdown = Array.from(
     { length: 90 },
-    (_, index) => `## Section ${index}\n\n${'Words that wrap. '.repeat(40)}`,
+    (_, index) =>
+      `## Section ${index}\n\n${'Words that wrap. '.repeat(index === 60 ? 900 : 40)}${
+        index === 45 ? `\n\n\`\`\`\n${'wide '.repeat(200)}\n\`\`\`` : ''
+      }`,
   ).join('\n\n')
   await replaceSourceText(page, source, markdown)
   await page.waitForFunction(() => {
@@ -53,6 +56,31 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
       .getByRole('main', { name: /^settings$/i })
       .waitFor({ state: 'hidden' })
   }
+  // Each view's own measure, which isolates a failing extension, before any
+  // alignment hooks the panes.
+  const hooks = () =>
+    page.evaluate(() => {
+      const rich = document.querySelector('.rich-pane')
+      const scroller = document.querySelector('.source-pane .cm-scroller')
+      const views = [rich, scroller].map(
+        (pane) => pane.querySelector('.cm-content').cmTile.root.view,
+      )
+      window.ownMeasures ??= views.map((view) => view.measure)
+      return {
+        panes: [rich, scroller].map((pane) =>
+          ['scrollTop', 'scroll', 'scrollTo', 'scrollBy'].filter((name) =>
+            Object.hasOwn(pane, name),
+          ),
+        ),
+        measures: views.map(
+          (view, index) =>
+            Object.hasOwn(view, 'measure') &&
+            view.measure === window.ownMeasures[index],
+        ),
+        anchors: [rich, scroller].map((pane) => pane.style.overflowAnchor),
+      }
+    })
+  const unhooked = await hooks()
   await settings()
   assert.equal(await toggle.isChecked(), true)
   await toggle.uncheck()
@@ -80,11 +108,20 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
     )
 
   const fromSource = await scroll('.source-pane .cm-scroller', 0.25)
-  assert.ok(Math.abs(fromSource.after.source - fromSource.before.source) > 100)
-  assert.ok(Math.abs(fromSource.after.rich - fromSource.before.rich) < 2)
+  assert.ok(
+    Math.abs(fromSource.after.source - fromSource.before.source) > 100,
+    JSON.stringify(fromSource),
+  )
+  assert.ok(
+    Math.abs(fromSource.after.rich - fromSource.before.rich) < 2,
+    JSON.stringify(fromSource),
+  )
   const fromPreview = await scroll('.rich-pane', 0.6)
   assert.ok(Math.abs(fromPreview.after.rich - fromPreview.before.rich) > 100)
   assert.ok(Math.abs(fromPreview.after.source - fromPreview.before.source) < 2)
+  // Ended by a wheel, the alignment leaves the panes and views as it found
+  // them, hibi's own measure included.
+  assert.deepEqual(await hooks(), unhooked)
 
   // Only scrolling is unlinked. Moving the caret still aligns the preview.
   await source.press(
@@ -144,6 +181,711 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   )
   await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
 
+  // An alignment follows layout changing under it however late, and keeps
+  // its place through the preview's own corrections, however far.
+  const frames = (count) =>
+    page.evaluate(async (count) => {
+      for (let frame = 0; frame < count; frame++)
+        await new Promise(requestAnimationFrame)
+    }, count)
+  const tops = async () => {
+    await frames(25)
+    return page.evaluate(() => ({
+      source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+      rich: document.querySelector('.rich-pane').scrollTop,
+    }))
+  }
+  const restyle = (css) =>
+    page.evaluate((css) => {
+      const style = document.createElement('style')
+      style.className = 'preview-scroll-test'
+      style.textContent = css
+      document.head.append(style)
+    }, css)
+  await source.press('ArrowDown')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  await restyle('.rich-pane .cm-content > * { padding-top: 1px }')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(200)
+  // Where the aligned line sits in the preview's scrolled content.
+  const place = async () => {
+    await frames(25)
+    return page.evaluate(() => {
+      const rich = document.querySelector('.rich-pane')
+      const mirror = rich
+        .querySelector('.mirror-cursor')
+        .getBoundingClientRect()
+      return {
+        source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+        rich: rich.scrollTop,
+        line:
+          rich.scrollTop +
+          mirror.top +
+          mirror.height / 2 -
+          rich.getBoundingClientRect().top,
+      }
+    })
+  }
+  const beforeGrowth = await place()
+  // The drawn blocks above grow: the preview follows by as much as they grew.
+  await restyle('.rich-pane .cm-content > * { padding-top: 120px }')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  const afterGrowth = await place()
+  const grew = afterGrowth.line - beforeGrowth.line
+  assert.ok(
+    grew > 1 &&
+      Math.abs(afterGrowth.rich - beforeGrowth.rich - grew) < 6 &&
+      afterGrowth.source === beforeGrowth.source,
+    JSON.stringify({ beforeGrowth, afterGrowth }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+
+  // The source keeping its own place as lines above it grow is a correction
+  // too: the alignment holds through it and still follows layout after.
+  const sourceBefore = await page
+    .locator('.source-pane .cm-scroller')
+    .evaluate((pane) => pane.scrollTop)
+  await restyle('.source-pane .cm-line { padding-top: 6px }')
+  // Drawn at once, the alignment follows before the view measures.
+  await frames(5)
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  // Its lines' new heights reach the view's height map at its next measure,
+  // which scrolls to keep its place.
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(
+    (before) =>
+      document.querySelector('.source-pane .cm-scroller').scrollTop - before >
+      1,
+    sourceBefore,
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  // Its lines above the caret shrink, moving the caret up the screen, where
+  // the preview can follow even at its top.
+  const caretBefore = await page
+    .locator('.source-pane .editor-cursor')
+    .evaluate((caret) => caret.getBoundingClientRect().top)
+  await restyle('.source-pane .cm-content { font-size: 85% }')
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(
+    (before) =>
+      Math.abs(
+        document
+          .querySelector('.source-pane .editor-cursor')
+          .getBoundingClientRect().top - before,
+      ) > 2,
+    caretBefore,
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+
+  // A pane scrolled apart from the caret, by a script or a reveal, stays
+  // apart, even while the layout under the alignment can still settle.
+  await source.press('ArrowUp')
+  await frames(2)
+  const beforePreview = await page.evaluate(() => ({
+    source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+    rich: document.querySelector('.rich-pane').scrollTop,
+  }))
+  const moved = await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop += 3500
+    return pane.scrollTop
+  })
+  const afterPreview = await tops()
+  assert.ok(
+    Math.abs(afterPreview.rich - moved) < 3 &&
+      Math.abs(afterPreview.source - beforePreview.source) < 3,
+    JSON.stringify({ beforePreview, moved, afterPreview }),
+  )
+  await source.press('ArrowDown')
+  await frames(2)
+  const beforeReveal = await page.evaluate(() => ({
+    source: document.querySelector('.source-pane .cm-scroller').scrollTop,
+    rich: document.querySelector('.rich-pane').scrollTop,
+  }))
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(
+        view.state.doc.toString().indexOf('## Section 70'),
+        { y: 'center' },
+      ),
+    })
+  })
+  const afterReveal = await tops()
+  assert.ok(
+    afterReveal.source - beforeReveal.source > 1000 &&
+      Math.abs(afterReveal.rich - beforeReveal.rich) < 3,
+    JSON.stringify({ beforeReveal, afterReveal }),
+  )
+
+  // A scroll whose view measures before the scroll event arrives is still a
+  // scroll, in either pane.
+  const realign = async (key = 'ArrowDown') => {
+    await source.press(key)
+    await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+    await frames(25)
+  }
+  const unscrolled = async (pane, by) => {
+    const before = await tops()
+    const after = await page.evaluate(
+      async ({ pane, by }) => {
+        const scroller = document.querySelector(pane)
+        const view = scroller.querySelector('.cm-content').cmTile.root.view
+        scroller.scrollTop += by
+        view.requestMeasure()
+        view.coordsAtPos(view.state.selection.main.head)
+        return scroller.scrollTop
+      },
+      { pane, by },
+    )
+    return { before, after, now: await tops() }
+  }
+  await realign('ArrowUp')
+  const sourceMeasured = await unscrolled('.source-pane .cm-scroller', 3500)
+  assert.ok(
+    Math.abs(sourceMeasured.now.rich - sourceMeasured.before.rich) < 1 &&
+      Math.abs(sourceMeasured.now.source - sourceMeasured.after) < 1,
+    JSON.stringify(sourceMeasured),
+  )
+  await realign()
+  const richMeasured = await unscrolled('.rich-pane', 3500)
+  assert.ok(
+    Math.abs(richMeasured.now.rich - richMeasured.after) < 1 &&
+      Math.abs(richMeasured.now.source - richMeasured.before.source) < 1,
+    JSON.stringify(richMeasured),
+  )
+
+  // Scrolled away, realigned by a caret move, then scrolled back to where it
+  // was: back is a scroll too, and later layout leaves the preview.
+  await realign()
+  const away = await page.evaluate(() => {
+    const pane = document.querySelector('.source-pane .cm-scroller')
+    const before = pane.scrollTop
+    pane.scrollTop += 60
+    return before
+  })
+  await frames(25)
+  await realign('ArrowRight')
+  await page.evaluate((top) => {
+    document.querySelector('.source-pane .cm-scroller').scrollTop = top
+  }, away)
+  const scrolledBack = await tops()
+  await restyle('.source-pane .cm-content { font-size: 90% }')
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  const afterBack = await tops()
+  assert.ok(
+    Math.abs(afterBack.rich - scrolledBack.rich) < 1,
+    JSON.stringify({ away, scrolledBack, afterBack }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+
+  // A reveal that sets the caret where it already is moves no caret.
+  await realign('ArrowUp')
+  const beforeSame = await tops()
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.selection.main.head },
+      effects: view.constructor.scrollIntoView(
+        view.state.doc.toString().indexOf('## Section 70'),
+        { y: 'center' },
+      ),
+    })
+  })
+  const afterSame = await tops()
+  assert.ok(
+    afterSame.source - beforeSame.source > 1000 &&
+      Math.abs(afterSame.rich - beforeSame.rich) < 1,
+    JSON.stringify({ beforeSame, afterSame }),
+  )
+
+  // A reveal of the caret already in view scrolls nothing, and layout after
+  // it is still followed.
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const at = view.state.doc.toString().indexOf('## Section 30') + 40
+    view.dispatch({
+      selection: { anchor: at },
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(view.state.selection.main.head),
+    })
+  })
+  await frames(5)
+  const caretBeforeShrink = await page
+    .locator('.source-pane .editor-cursor')
+    .evaluate((caret) => caret.getBoundingClientRect().top)
+  await restyle('.source-pane .cm-content { font-size: 85% }')
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(
+    (before) =>
+      Math.abs(
+        document
+          .querySelector('.source-pane .editor-cursor')
+          .getBoundingClientRect().top - before,
+      ) > 2,
+    caretBeforeShrink,
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+
+  // A caret moved within its line, scrolled to an edge by the view in a
+  // measure no update reports: the caret moved, so it is no scroll apart.
+  for (const y of ['start', 'end']) {
+    await source.evaluate((element, y) => {
+      const view = element.cmTile.root.view
+      const at = view.state.selection.main.head + 1
+      view.dispatch({
+        selection: { anchor: at },
+        effects: view.constructor.scrollIntoView(at, { y, yMargin: 48 }),
+      })
+    }, y)
+    await frames(30)
+    const size = await page.evaluate(() =>
+      parseFloat(
+        getComputedStyle(document.querySelector('.rich-pane .cm-content'))
+          .fontSize,
+      ),
+    )
+    await restyle(`.rich-pane .cm-content { font-size: ${size + 1}px }`)
+    await frames(40)
+    await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+    await page.evaluate(() => {
+      for (const style of document.querySelectorAll('.preview-scroll-test'))
+        style.remove()
+    })
+    await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  }
+
+  // Even when the view reports the caret's move only after scrolling to it.
+  await realign()
+  await page.evaluate(() => {
+    window.heldReports = []
+    window.holdReport = (event) => {
+      event.stopImmediatePropagation()
+      window.heldReports.push(event)
+    }
+    window.addEventListener(
+      'hibi:editor-interactions-invalidate',
+      window.holdReport,
+      true,
+    )
+  })
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const at = view.state.selection.main.head + 1
+    view.dispatch({
+      selection: { anchor: at },
+      effects: view.constructor.scrollIntoView(at, { y: 'start', yMargin: 48 }),
+    })
+  })
+  await frames(30)
+  assert.ok(await page.evaluate(() => window.heldReports.length > 0))
+  await page.evaluate(() =>
+    window.removeEventListener(
+      'hibi:editor-interactions-invalidate',
+      window.holdReport,
+      true,
+    ),
+  )
+  const held = await page.evaluate(() =>
+    parseFloat(
+      getComputedStyle(document.querySelector('.rich-pane .cm-content'))
+        .fontSize,
+    ),
+  )
+  await restyle(`.rich-pane .cm-content { font-size: ${held + 1}px }`)
+  await frames(40)
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+
+  // The same at other zooms, where scroll positions are fractions of pixels.
+  for (const zoom of [0.9, 1.1]) {
+    await app.evaluate(({ BrowserWindow }, zoom) => {
+      BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(zoom)
+    }, zoom)
+    await realign()
+    const zoomed = await unscrolled('.rich-pane', 1500)
+    assert.ok(
+      Math.abs(zoomed.now.rich - zoomed.after) < 1 &&
+        Math.abs(zoomed.now.source - zoomed.before.source) < 1,
+      JSON.stringify({ zoom, ...zoomed }),
+    )
+    await realign()
+    await restyle('.rich-pane .cm-content > * { padding-top: 30px }')
+    await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+    await page.evaluate(() => {
+      for (const style of document.querySelectorAll('.preview-scroll-test'))
+        style.remove()
+    })
+  }
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1)
+  })
+  await realign()
+
+  // Layout growing every frame while a script scrolls the preview every
+  // frame: the script's writes end the alignment, and the preview keeps
+  // all of its scroll.
+  const beforeGrowing = await tops()
+  const growing = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const rich = document.querySelector('.rich-pane')
+        const style = document.createElement('style')
+        style.className = 'preview-scroll-test'
+        document.head.append(style)
+        let frame = 0
+        let wanted = 0
+        const tick = () => {
+          frame++
+          style.textContent = `.rich-pane .cm-content::before { content: ''; display: block; height: ${frame}px }`
+          if (frame >= 10) {
+            rich.scrollTop += 20
+            wanted += 20
+          }
+          if (frame < 60) requestAnimationFrame(tick)
+          else resolve(wanted)
+        }
+        requestAnimationFrame(tick)
+      }),
+  )
+  const afterGrowing = await tops()
+  assert.ok(
+    afterGrowing.rich - beforeGrowing.rich >= growing - 3 &&
+      Math.abs(afterGrowing.source - beforeGrowing.source) < 1,
+    JSON.stringify({ beforeGrowing, growing, afterGrowing }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await realign()
+
+  // A key scrolling the focused preview, with no caret moving, is the
+  // reader's: layout changing after it leaves the preview there.
+  await realign()
+  await page.locator('.rich-pane').evaluate((pane) => {
+    pane.tabIndex = -1
+    pane.focus({ preventScroll: true })
+  })
+  const beforeKeys = await tops()
+  for (let press = 0; press < 2; press++) await page.keyboard.press('PageDown')
+  const afterKeys = await tops()
+  await restyle('.rich-pane .cm-content > * { padding-top: 4px }')
+  const afterKeysLayout = await tops()
+  assert.ok(
+    afterKeys.rich - beforeKeys.rich > 300 &&
+      Math.abs(afterKeysLayout.rich - afterKeys.rich) < 100 &&
+      afterKeysLayout.source === beforeKeys.source,
+    JSON.stringify({ beforeKeys, afterKeys, afterKeysLayout }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await source.focus()
+
+  // A scroll no script writes to the pane, as a descendant scrolled into
+  // view, still moves only the pane: the alignment ends, and layout after it
+  // doesn't take the preview back to the caret.
+  await realign()
+  const beforeInto = await tops()
+  // The first block below the pane: a short scroll, so the aligned line
+  // stays drawn and later layout moves it.
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    const bottom = pane.getBoundingClientRect().bottom
+    const below = [...pane.querySelectorAll('.cm-content > *')].find(
+      (block) => block.getBoundingClientRect().top >= bottom,
+    )
+    below.scrollIntoView({ block: 'start' })
+  })
+  const afterInto = await tops()
+  await restyle(
+    ".rich-pane .cm-content::before { content: ''; display: block; height: 40px }",
+  )
+  const afterIntoLayout = await tops()
+  assert.ok(
+    afterInto.rich - beforeInto.rich > 200 &&
+      afterIntoLayout.rich - beforeInto.rich > 200 &&
+      afterIntoLayout.source === beforeInto.source,
+    JSON.stringify({ beforeInto, afterInto, afterIntoLayout }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+
+  // Layout pushing the caret out of its pane leaves no line to align: the
+  // preview stays rather than lining up with whatever the source then shows.
+  await realign()
+  const beforePushed = await tops()
+  await restyle('.source-pane .cm-line { padding-top: 400px }')
+  await source.evaluate((element) => element.cmTile.root.view.requestMeasure())
+  await page.waitForFunction(() => {
+    const caret = document
+      .querySelector('.source-pane .editor-cursor')
+      ?.getBoundingClientRect()
+    const pane = document
+      .querySelector('.source-pane .cm-scroller')
+      .getBoundingClientRect()
+    return !caret?.height || caret.top > pane.bottom || caret.bottom < pane.top
+  })
+  const afterPushed = await tops()
+  assert.ok(
+    Math.abs(afterPushed.rich - beforePushed.rich) < 50,
+    JSON.stringify({ beforePushed, afterPushed }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await realign()
+
+  // Away from the top: a caret in a paragraph taller than the pane, where
+  // the preview keeps the text at its top in place as the window narrows.
+  // That correction is the preview's own, and the alignment follows on.
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const at = view.state.doc.toString().indexOf('## Section 60') + 1500
+    view.dispatch({
+      selection: { anchor: at },
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  const wide = await app.evaluate(({ BrowserWindow }) => {
+    const [window] = BrowserWindow.getAllWindows()
+    const bounds = window.getBounds()
+    window.setBounds({ ...bounds, width: bounds.width - 160 })
+    return bounds
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await app.evaluate(({ BrowserWindow }, bounds) => {
+    BrowserWindow.getAllWindows()[0].setBounds(bounds)
+  }, wide)
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await realign()
+
+  // Other doors a script or an addon has to the preview, while layout keeps
+  // growing: a descendant scrolled into view, a scroll command moving no
+  // caret, a write in a measure it asks for. Each keeps the preview where it
+  // took it.
+  const doors = (act) =>
+    page.evaluate(
+      (act) =>
+        new Promise((resolve) => {
+          const rich = document.querySelector('.rich-pane')
+          const view = rich.querySelector('.cm-content').cmTile.root.view
+          const style = document.createElement('style')
+          style.className = 'preview-scroll-test'
+          document.head.append(style)
+          const memo = {}
+          const step = new Function('frame', 'rich', 'view', 'memo', act)
+          let frame = 0
+          const tick = () => {
+            frame++
+            style.textContent = `.rich-pane .cm-content::before { content: ''; display: block; height: ${frame * 3}px }`
+            step(frame, rich, view, memo)
+            if (frame < 60) return requestAnimationFrame(tick)
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                const pane = rich.getBoundingClientRect()
+                const target =
+                  memo.element?.getBoundingClientRect().top ??
+                  (memo.pos === undefined
+                    ? null
+                    : view.coordsAtPos(memo.pos)?.top)
+                resolve({
+                  start: memo.start,
+                  rich: rich.scrollTop,
+                  offset: target == null ? null : target - pane.top,
+                  height: pane.height,
+                })
+              }),
+            )
+          }
+          requestAnimationFrame(tick)
+        }),
+      act,
+    )
+  const shown = (result) =>
+    result.offset !== null &&
+    result.offset > -50 &&
+    result.offset < result.height
+  const clearDoors = async () => {
+    await page.evaluate(() => {
+      for (const style of document.querySelectorAll('.preview-scroll-test'))
+        style.remove()
+    })
+    await realign()
+  }
+  // Away from the tall paragraph, whose top text the preview itself holds.
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const at = view.state.doc.toString().indexOf('## Section 30') + 40
+    view.dispatch({
+      selection: { anchor: at },
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  })
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  const intoView = await doors(
+    "if (frame === 10) { const top = rich.getBoundingClientRect().top; memo.element = [...rich.querySelectorAll('.cm-content > *')].find((block) => block.getBoundingClientRect().top >= top + 600 && block.offsetHeight < 2000); memo.element.scrollIntoView({ block: 'start' }) }",
+  )
+  assert.ok(shown(intoView), JSON.stringify(intoView))
+  await clearDoors()
+  const command = await doors(
+    "if (frame === 10) { memo.pos = view.state.doc.toString().indexOf('Section 45'); view.dispatch({ effects: view.constructor.scrollIntoView(memo.pos, { y: 'start' }) }) }",
+  )
+  assert.ok(shown(command), JSON.stringify(command))
+  await clearDoors()
+  const asked = await doors(
+    'if (frame === 10) { memo.start = rich.scrollTop; view.requestMeasure({ read() {}, write() { rich.scrollTop += 1000 } }) }',
+  )
+  assert.ok(asked.rich - asked.start >= 997, JSON.stringify(asked))
+  await clearDoors()
+
+  // A pane scrolled natively and then corrected by its own view in the same
+  // moment: the correction doesn't make the scroll the view's.
+  const beforeNative = await tops()
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const pane = view.scrollDOM
+    const bottom = pane.getBoundingClientRect().bottom
+    const below = [...view.contentDOM.querySelectorAll('.cm-line')].find(
+      (line) => line.getBoundingClientRect().top >= bottom,
+    )
+    below.scrollIntoView({ block: 'nearest' })
+    const style = document.createElement('style')
+    style.className = 'preview-scroll-test'
+    style.textContent = '.source-pane .cm-line { padding-top: 2px }'
+    document.head.append(style)
+    view.requestMeasure()
+    view.coordsAtPos(view.state.selection.main.head)
+  })
+  const afterNative = await tops()
+  assert.ok(
+    afterNative.source - beforeNative.source > 5 &&
+      Math.abs(afterNative.rich - beforeNative.rich) < 3,
+    JSON.stringify({ beforeNative, afterNative }),
+  )
+  await clearDoors()
+
+  // While the alignment holds, the browser keeps no place of its own in the
+  // preview: content growing above moves the lines, the alignment follows,
+  // and it still follows later layout.
+  await restyle(
+    ".rich-pane .cm-content::before { content: ''; display: block; height: 40px }",
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await restyle('.rich-pane .cm-content > * { padding-top: 6px }')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await clearDoors()
+
+  // Content shrinking under the preview at its end pulls the end into view;
+  // that is no one's scroll, and the alignment still follows after it.
+  await restyle('.rich-pane .cm-content > * { padding-top: 20px }')
+  await source.press(
+    process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await frames(25)
+  const beforeShrink = await tops()
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  const afterShrink = await tops()
+  const endSize = await page.evaluate(() =>
+    parseFloat(
+      getComputedStyle(document.querySelector('.rich-pane .cm-content'))
+        .fontSize,
+    ),
+  )
+  await restyle(`.rich-pane .cm-content { font-size: ${endSize - 1}px }`)
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  assert.ok(
+    afterShrink.rich < beforeShrink.rich - 1,
+    JSON.stringify({ beforeShrink, afterShrink }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await source.press(
+    process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
+  )
+  await realign()
+
+  // The same on the source: a script scrolling the source a little while
+  // layout grows ends the alignment, so later layout takes no pane anywhere.
+  await realign()
+  const beforeSource = await tops()
+  const sourceScripted = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const pane = document.querySelector('.source-pane .cm-scroller')
+        const style = document.createElement('style')
+        style.className = 'preview-scroll-test'
+        document.head.append(style)
+        let frame = 0
+        let wanted = 0
+        const tick = () => {
+          frame++
+          style.textContent = `.rich-pane .cm-content::before { content: ''; display: block; height: ${frame}px }`
+          if (frame >= 10 && frame < 20) {
+            pane.scrollTop += 20
+            wanted += 20
+          }
+          if (frame < 40) requestAnimationFrame(tick)
+          else resolve(wanted)
+        }
+        requestAnimationFrame(tick)
+      }),
+  )
+  const afterSource = await tops()
+  assert.ok(
+    afterSource.source - beforeSource.source >= sourceScripted - 3 &&
+      Math.abs(afterSource.rich - beforeSource.rich) < 100,
+    JSON.stringify({ beforeSource, sourceScripted, afterSource }),
+  )
+  await page.evaluate(() => {
+    for (const style of document.querySelectorAll('.preview-scroll-test'))
+      style.remove()
+  })
+  await realign()
+
   // Clicking the independently scrolled preview also reveals its line in source.
   await scroll('.rich-pane', 0.6)
   const sourceBeforeClick = await page
@@ -184,6 +926,35 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
       100
     )
   })
+  // A code block scrolled sideways inside the preview scrolls no pane.
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(
+        view.state.doc.toString().indexOf('wide wide'),
+        { y: 'center' },
+      ),
+    })
+  })
+  await page.waitForFunction(() => {
+    const code = document.querySelector('.rich-pane .hibi-lp-codescroll')
+    const rich = document.querySelector('.rich-pane').getBoundingClientRect()
+    const box = code?.getBoundingClientRect()
+    return box && box.bottom > rich.top && box.top < rich.bottom
+  })
+  const beforeSideways = await tops()
+  const sideways = await page.evaluate(() => {
+    const code = document.querySelector('.rich-pane .hibi-lp-codescroll')
+    code.scrollLeft = 200
+    return code.scrollLeft
+  })
+  const afterSideways = await tops()
+  assert.ok(
+    sideways > 0 &&
+      Math.abs(afterSideways.source - beforeSideways.source) < 1 &&
+      Math.abs(afterSideways.rich - beforeSideways.rich) < 1,
+    JSON.stringify({ sideways, beforeSideways, afterSideways }),
+  )
   await settings()
   await toggle.uncheck()
   await back()
@@ -202,14 +973,39 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   await page.getByRole('button', { name: /^side-by-side$/i }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, markdown)
+  const end = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await source.press(
     process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
   )
+  // The source keeps its first line a scroll margin inside its top padding,
+  // so the preview aligns that line rather than reaching zero.
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop < 10,
+    (before) => document.querySelector('.rich-pane').scrollTop < before / 2,
+    end,
   )
+  // No mirror caret is drawn in the heading's hidden marker.
+  await page.waitForFunction(() => {
+    const caret = document
+      .querySelector('.source-pane .editor-cursor')
+      ?.getBoundingClientRect()
+    const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root
+      .view
+    const start = view?.coordsAtPos(0)
+    return (
+      caret?.height &&
+      start &&
+      Math.abs((start.top + start.bottom) / 2 - caret.top - caret.height / 2) <
+        3
+    )
+  })
+  const top = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await scroll('.source-pane .cm-scroller', 0.5)
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop > 100,
+    (top) => document.querySelector('.rich-pane').scrollTop > top + 100,
+    top,
   )
 })

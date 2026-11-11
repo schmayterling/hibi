@@ -3,6 +3,9 @@ import test from 'node:test'
 import { Marked } from 'marked'
 import { micromark } from 'micromark'
 import { gfm, gfmHtml } from 'micromark-extension-gfm'
+import { blockStartCounters } from '../src/addons/_shared/block-start.ts'
+import { mathTokens, mathTokensWith } from '../src/addons/math/syntax.ts'
+import { textExtrasMarkdown } from '../src/addons/text-extras/grammar.ts'
 import { countText } from '../src/addons/word-count/count.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
@@ -110,4 +113,31 @@ test('footnote lazy re-reads in quotes stay linear in the text they read', () =>
     // One read and one lazy re-read per definition.
     assert.ok(reads <= count * 2, `${reads} reads / ${count} definitions`)
   }
+})
+
+test('footnote definition starts read each paragraph once beside other block starts', () => {
+  const markdown = new Marked(
+    blockMarkdown,
+    mathTokens,
+    textExtrasMarkdown,
+    markedGithubFootnote(),
+  )
+  for (const count of [500, 4000]) {
+    blockStartCounters.calls = blockStartCounters.units = 0
+    markdown.lexer('> a\n> $$\n> x\n> $$\n> -# s\n'.repeat(count))
+    assert.ok(
+      blockStartCounters.units <= blockStartCounters.calls * 8,
+      `${blockStartCounters.units} units / ${blockStartCounters.calls} calls`,
+    )
+  }
+})
+
+test('footnote definitions still end paragraphs past a disabled block start', () => {
+  const source = 'a\n$$\nb\n[^1]: x\n\ny[^1]'
+  const html = new Marked(
+    blockMarkdown,
+    mathTokensWith(() => false),
+    markedGithubFootnote(),
+  ).parse(source)
+  assert.equal(shape(html), shape(oracle(source)))
 })

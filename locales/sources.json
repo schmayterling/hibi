@@ -2880,6 +2880,9 @@
   "d443e8296852": [
     "src/main/index.ts"
   ],
+  "b250b8ce9b65": [
+    "src/main/document.ts"
+  ],
   "87c719d7d306": [
     "src/main/history.ts"
   ],
@@ -2922,10 +2925,10 @@
   "afea9e504cf0": [
     "src/main/index.ts"
   ],
-  "c7713db0285d": [
+  "9449a589da8c": [
     "src/renderer/src/recovery-offer.tsx"
   ],
-  "3efddb2ffbcb": [
+  "a8dc7f1608c1": [
     "src/renderer/src/recovery-offer.tsx"
   ],
   "3901114f50bd": [

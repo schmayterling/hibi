@@ -26,13 +26,27 @@ async function runtime(t) {
     'history',
     createHash('sha256').update(file).digest('hex'),
   )
-  const state = { copies: 0, syncs: 0, reads: 0, bytesRead: 0, yields: 0 }
+  const state = {
+    copies: 0,
+    syncs: 0,
+    folderSyncs: 0,
+    reads: 0,
+    bytesRead: 0,
+    yields: 0,
+  }
   const mocks = {
     electron: { app: { getPath: () => root } },
     'node:fs/promises': {
       ...fs,
       open: async (path, ...args) => {
         const handle = await fs.open(path, ...args)
+        if (String(path) === folder) {
+          const sync = handle.sync.bind(handle)
+          handle.sync = async () => {
+            state.folderSyncs++
+            return sync()
+          }
+        }
         if (String(path).startsWith(folder)) {
           if (String(path).endsWith('.tmp')) {
             if (!String(path).includes('.index.json.')) state.copies++
@@ -135,6 +149,30 @@ test('oversized repeated saves retain newest and distinct previous without dupli
   assert.ok(state.yields >= Math.floor((3 * (20 * mib + 1)) / 65536))
   for (const { store } of [first, second, third])
     assert.equal(store.counters().materializations, 0)
+})
+
+test('prewrite history reuses any matching version without changing requested or automatic flags', async (t) => {
+  const { api, file, folder, state } = await runtime(t)
+  await api.recordVersions(file, ['original'], 'previous')
+  if (process.platform !== 'win32') assert.ok(state.folderSyncs > 0)
+  assert.deepEqual(
+    (await api.listVersions(file)).map(({ automatic }) => automatic ?? false),
+    [false],
+  )
+  await api.recordVersions(file, ['automatic'], true)
+  const copies = state.copies
+  await api.recordVersions(file, ['original'], 'previous')
+  await api.recordVersions(file, ['automatic'], 'previous')
+  assert.equal(state.copies, copies)
+  assert.deepEqual(
+    (await api.listVersions(file)).map(({ automatic }) => automatic ?? false),
+    [true, false],
+  )
+  const [last] = await api.listVersions(file)
+  await fs.unlink(join(folder, `${last.id}.md`))
+  await api.recordVersions(file, ['automatic'], 'previous')
+  assert.equal(await api.previewVersion(file, last.id), 'automatic')
+  assert.equal(state.copies, copies + 1)
 })
 
 test('history prunes to its budgets while retaining one distinct predecessor', async (t) => {

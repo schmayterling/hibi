@@ -4,7 +4,12 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import { type DocumentVersion, HISTORY_PREVIEW_BYTES } from '../shared/history'
 import type { SourceSnapshot } from '../shared/source-buffer'
-import { readMarkdown, readMarkdownChunks, writeText } from './files'
+import {
+  readMarkdown,
+  readMarkdownChunks,
+  syncFolder,
+  writeText,
+} from './files'
 
 type Version = DocumentVersion & { hash: string }
 const AUTOSAVE_GAP = 3 * 60 * 1000
@@ -104,11 +109,11 @@ export async function sourceHash(markdown: string | SourceSnapshot) {
   if (typeof markdown !== 'string') hashes.set(markdown, hashed)
   return hashed
 }
-/** `automatic`: autosave wrote the last of `markdowns`. */
+/** `previous` protects bytes already on disk without changing how their save was requested. */
 export async function recordVersions(
   path: string,
   markdowns: (string | SourceSnapshot)[],
-  automatic = false,
+  automatic: boolean | 'previous' = false,
 ): Promise<void> {
   const current = await versions(path)
   const folder = directory(path)
@@ -118,6 +123,28 @@ export async function recordVersions(
   try {
     for (const markdown of markdowns) {
       const { hash, bytes } = await sourceHash(markdown)
+      if (automatic === 'previous') {
+        const existing = next.findLast((version) => version.hash === hash)
+        if (existing) {
+          const file = join(folder, `${existing.id}.md`)
+          const stored = await stat(file).catch(
+            (error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error
+              return null
+            },
+          )
+          if (stored?.size !== bytes) {
+            await writeText(
+              file,
+              typeof markdown === 'string'
+                ? markdown
+                : markdown.encodedChunks(),
+            )
+            await syncFolder(folder)
+          }
+          continue
+        }
+      }
       const last = next.at(-1)
       if (last?.hash === hash) {
         // Asked for now, whoever wrote this text first.
@@ -140,7 +167,7 @@ export async function recordVersions(
         hash,
         savedAt: Date.now(),
         bytes,
-        ...(automatic && markdown === markdowns.at(-1)
+        ...(automatic === true && markdown === markdowns.at(-1)
           ? { automatic: true as const }
           : {}),
       })
@@ -174,6 +201,7 @@ export async function recordVersions(
   }
   try {
     await writeText(join(folder, 'index.json'), JSON.stringify(next))
+    await syncFolder(folder)
   } catch (error) {
     const published = await versions(path).catch(() => null)
     if (published) {

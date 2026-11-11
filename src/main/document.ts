@@ -63,6 +63,8 @@ let path: string | null = null
 let pendingPath: string | null = null
 let revision = 0
 let highestRevision = 0
+// A recovered root stays in the journal until a user edits or requests a save.
+const recovered = new WeakMap<SourceStore, number>()
 function advanceRevision() {
   revision = ++highestRevision
 }
@@ -953,19 +955,29 @@ function missingFile(error: NodeJS.ErrnoException) {
   return null
 }
 
+async function protectPrevious(
+  destination: string,
+  previous: SourceSnapshot | null,
+) {
+  if (previous === null) return
+  try {
+    await recordVersions(destination, [previous], 'previous')
+  } catch (error) {
+    throw new Error(
+      'Hibi could not protect the previous file in version history. Your file was not saved. Your edits are still here. Free disk space or repair access to app data, then save again.',
+      { cause: error },
+    )
+  }
+}
+
 async function recordSaveHistory(
   window: BrowserWindow,
   destination: string,
-  previous: SourceSnapshot | null,
   content: SourceSnapshot,
   automatic = false,
 ) {
   try {
-    await recordVersions(
-      destination,
-      previous === null ? [content] : [previous, content],
-      automatic,
-    )
+    await recordVersions(destination, [content], automatic)
     return true
   } catch (error) {
     console.error('local history failed:', error)
@@ -1074,6 +1086,8 @@ export async function saveDocument(
     throw new Error(
       'This file is open in another tab. Choose a different name.',
     )
+  // Preserve the observation across history I/O as well as the note write.
+  let observed = await stat(destination).catch(missingFile)
   let previous: SourceSnapshot | null = null
   // Another app can create a draft's planned file before its first save.
   const appeared = exclusive && !!(await lstat(destination).catch(missingFile))
@@ -1108,6 +1122,7 @@ export async function saveDocument(
       if (choice.response !== 0) return null
       // Another app can write again while the prompt is open; ask about that text too.
       const shown = previous
+      observed = await stat(destination).catch(missingFile)
       previous =
         (
           await patiently(window, destination, () => readSource(destination))
@@ -1119,7 +1134,16 @@ export async function saveDocument(
           ? previous === null
           : previous !== null && (await sameSource(shown, previous))
     }
+  } else {
+    // Save as can replace an existing destination too.
+    previous =
+      (
+        await patiently(window, destination, () => readSource(destination))
+          .catch(missingFile)
+          .catch(heldNote)
+      )?.snapshot() ?? null
   }
+  await protectPrevious(destination, previous)
   await sayingWhenHeld(window, destination, (refused) =>
     writeMarkdown(
       destination,
@@ -1128,6 +1152,7 @@ export async function saveDocument(
       undefined,
       PATIENT_RENAME,
       refused,
+      observed,
     ),
   ).catch(heldNote)
   // A new path, or a file another app changed, keeps no copy of the text last saved.
@@ -1137,12 +1162,7 @@ export async function saveDocument(
   saved = saving
   // Edits made during the write were compared with the old baseline.
   updateDocumentEdited(window)
-  const recorded = await recordSaveHistory(
-    window,
-    destination,
-    previous,
-    content,
-  )
+  const recorded = await recordSaveHistory(window, destination, content)
   return Object.assign(getDocument(), {
     versionsKept: !recorded ? 'none' : replacedSaved ? 'both' : 'written',
   } satisfies Pick<DocumentState, 'versionsKept'>)
@@ -1171,6 +1191,8 @@ export async function autosaveDocument(
     (expectedContentVersion !== undefined &&
       expectedContentVersion !== draft.source.snapshot().version) ||
     !draft.path ||
+    (automatic &&
+      recovered.get(draft.source) === draft.source.snapshot().version) ||
     !dirty(draft.source, draft.saved) ||
     !canContinue()
   )
@@ -1180,6 +1202,7 @@ export async function autosaveDocument(
   const content = saving
   // A kept tab's draft is the tab itself, whose saved text changes below.
   const replaced = draft.saved
+  const observed = await stat(destination).catch(missingFile)
   const unchanged = await matchesMarkdown(destination, draft.saved).catch(
     missingFile,
   )
@@ -1205,7 +1228,16 @@ export async function autosaveDocument(
   )
   if (automatic && refused) throw markedReadOnly(destination)
   try {
-    await writeMarkdown(destination, content, false, canContinue, BRIEF_RENAME)
+    await protectPrevious(destination, replaced)
+    await writeMarkdown(
+      destination,
+      content,
+      false,
+      canContinue,
+      BRIEF_RENAME,
+      undefined,
+      observed,
+    )
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ECHANGED')
       return { status: 'conflict', document: null }
@@ -1222,7 +1254,6 @@ export async function autosaveDocument(
   const recorded = await recordSaveHistory(
     window,
     destination,
-    replaced,
     content,
     automatic,
   )
@@ -1318,8 +1349,11 @@ export async function openRecovered(
       opened &&
       !dirty(source, saved) &&
       (await sourceHash(saved)).hash === copy.savedHash
-    )
-      return restoreDocument(window, text())
+    ) {
+      const document = await restoreDocument(window, text())
+      recovered.set(source, source.snapshot().version)
+      return document
+    }
   }
   if (!isEmptyTab()) rememberLocation()
   if (!(await startTab(window, true))) return null

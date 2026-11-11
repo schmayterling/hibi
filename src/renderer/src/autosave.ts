@@ -13,7 +13,14 @@ export { autosaveDelays }
 const key = 'hibi:autosave'
 const preferences = stored<Preferences>(
   key,
-  () => window.hibi.getAutosavePreferences(localStorage.getItem(key)),
+  () => {
+    // A failed read must not stop the app from starting; off writes nothing.
+    try {
+      return window.hibi.getAutosavePreferences(localStorage.getItem(key))
+    } catch {
+      return { enabled: false, delay: 2000 }
+    }
+  },
   JSON.stringify,
   (value) => window.hibi.setAutosavePreferences(value),
 )
@@ -71,7 +78,7 @@ export function useAutosave(
     id: string
     revision: number
     status: 'saving' | 'saved' | 'waiting' | 'conflict' | 'error'
-    error?: string
+    message?: string | undefined
   } | null>(null)
   const currentResult =
     result?.id === document?.id && result?.revision === document?.revision
@@ -109,25 +116,26 @@ export function useAutosave(
     // composition whose element left the page ended with it.
     let composing: Node | null = null
     const schedule = (next: DocumentState) => {
-      clearTimeout(timers.get(next.tabId))
-      timers.delete(next.tabId)
-      const baseline = documentRuntime.session(next.tabId)?.savedSnapshot()
-      if (paused.has(next.tabId) && paused.get(next.tabId) !== baseline)
-        paused.delete(next.tabId)
-      if (!next.dirty || !settings.enabled) release(next.tabId)
+      const { tabId } = next
+      clearTimeout(timers.get(tabId))
+      timers.delete(tabId)
+      const baseline = documentRuntime.session(tabId)?.savedSnapshot()
+      if (paused.has(tabId) && paused.get(tabId) !== baseline)
+        paused.delete(tabId)
+      if (!next.dirty || !settings.enabled) release(tabId)
       if (
         !settings.enabled ||
         !next.dirty ||
         !next.canAutosave ||
         inFlight.current ||
-        paused.has(next.tabId)
+        paused.has(tabId)
       )
         return
-      const wait = attemptDelay(next.tabId, settings.delay)
+      const wait = attemptDelay(tabId, settings.delay)
       timers.set(
-        next.tabId,
+        tabId,
         setTimeout(async () => {
-          timers.delete(next.tabId)
+          timers.delete(tabId)
           // Another tab's attempt reschedules this one when it ends.
           if (inFlight.current) return
           // A field removed from the page mid-composition never reports
@@ -136,12 +144,12 @@ export function useAutosave(
           composing = null
           if (busyNow.current) {
             timers.set(
-              next.tabId,
+              tabId,
               setTimeout(() => schedule(next), 100),
             )
             return
           }
-          const token = documentRuntime.beginSave(next.tabId)
+          const token = documentRuntime.beginSave(tabId)
           if (!token) return
           inFlight.current = true
           const identity = { id: next.id, revision: next.revision }
@@ -149,20 +157,20 @@ export function useAutosave(
           setResult({ ...identity, status: 'saving' })
           try {
             const saved = await window.hibi.autosaveDocument(
-              next.tabId,
+              tabId,
               next.revision,
             )
             if (saved.document)
               documentRuntime.acknowledgeSave(saved.document, token)
-            if (saved.status === 'conflict') paused.set(next.tabId, baseline)
+            if (saved.status === 'conflict') paused.set(tabId, baseline)
             if (saved.status === 'held') {
               const now = Date.now()
-              const hold = holds.get(next.tabId) ?? {
+              const hold = holds.get(tabId) ?? {
                 baseline,
                 since: now,
                 last: now,
               }
-              holds.set(next.tabId, hold)
+              holds.set(tabId, hold)
               hold.last = now
               const { name } = next
               const message =
@@ -176,22 +184,23 @@ export function useAutosave(
               )
                 hold.notice = toasts.show({ message, duration: 0 })
               hold.message = saved.message
-            } else if (saved.status !== 'skipped') release(next.tabId)
+            } else if (saved.status !== 'skipped') release(tabId)
             // Results still acknowledge the saved baseline if typing continues during I/O.
             setResult({
               ...identity,
+              message: saved.message,
               status:
                 saved.status === 'skipped' || saved.status === 'held'
                   ? 'waiting'
                   : saved.status,
             })
           } catch (error) {
-            release(next.tabId)
-            paused.set(next.tabId, baseline)
+            release(tabId)
+            paused.set(tabId, baseline)
             setResult({
               ...identity,
               status: 'error',
-              error:
+              message:
                 error instanceof Error
                   ? error.message
                   : 'Could not save this file.',
@@ -201,15 +210,14 @@ export function useAutosave(
             inFlight.current = false
             const now = performance.now()
             rests.set(
-              next.tabId,
+              tabId,
               now + Math.min((now - started) * ATTEMPT_REST, LONGEST_REST),
             )
             // Timers of one length run in order: the tabs after this one go
             // first, so each gets a turn however many are held. Settings may
             // have changed during the attempt.
             const pending = documentRuntime.documents()
-            const turn =
-              pending.findIndex((tab) => tab.tabId === next.tabId) + 1
+            const turn = pending.findIndex((tab) => tab.tabId === tabId) + 1
             for (const tab of [
               ...pending.slice(turn),
               ...pending.slice(0, turn),
@@ -253,7 +261,7 @@ export function useAutosave(
               currentResult?.status === 'error'
             ? 'Autosave · paused'
             : document.dirty
-              ? 'Autosave · waiting'
+              ? (currentResult?.message ?? 'Autosave · waiting')
               : 'Autosave · saved'
   const tooltip =
     currentResult?.status === 'conflict'
@@ -261,7 +269,7 @@ export function useAutosave(
       : held
         ? (held.message ??
           'Another program is using this file, or Windows does not allow changes to it. Autosave keeps trying.')
-        : (currentResult?.error ??
+        : (currentResult?.message ??
           (!settings.enabled
             ? 'Autosave is off · click to configure'
             : !document?.canAutosave

@@ -122,8 +122,8 @@ export async function offerRecovery(
       app.toasts.show({
         message:
           opened === 1
-            ? 'Hibi opened a note with unsaved text.'
-            : `Hibi opened ${opened} notes with unsaved text.`,
+            ? 'Hibi opened a note with unsaved text. Edit or save it when you are ready to resume autosave.'
+            : `Hibi opened ${opened} notes with unsaved text. Edit or save each note when you are ready to resume autosave.`,
         ...(shown
           ? {
               action: {

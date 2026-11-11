@@ -121,8 +121,8 @@ test('local history snapshots on save, previews, and restores without overwritin
     async () => (await window.hibi.listVersions()).length === 2,
   )
   assert.deepEqual(await takeWrites(), {
-    syncs: ['document', 'version', 'version', 'index'],
-    indexWrites: 1,
+    syncs: ['version', 'index', 'document', 'version', 'index'],
+    indexWrites: 2,
   })
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), 'saved change')
@@ -316,6 +316,9 @@ test('local history snapshots on save, previews, and restores without overwritin
         )
         await writeFile(file, previous)
         const before = await page.evaluate(() => window.hibi.listVersions())
+        const baseline = await page.evaluate(
+          async () => (await window.hibi.getDocument()).savedMarkdown,
+        )
         await app.evaluate(
           ({ dialog }, { profile, failure }) => {
             const fs = process.getBuiltinModule('node:fs/promises')
@@ -358,7 +361,18 @@ test('local history snapshots on save, previews, and restores without overwritin
                 )
               return unlink(path)
             }
-            dialog.showMessageBox = async () => ({ response: 0 })
+            globalThis.historyProtectionPrompt = null
+            dialog.showMessageBox = async (_window, options) => {
+              if (
+                options.buttons.includes(
+                  'Save without keeping the previous version',
+                )
+              ) {
+                globalThis.historyProtectionPrompt = options
+                return { response: options.cancelId }
+              }
+              return { response: 0 }
+            }
             globalThis.restoreHistoryFailure = () => {
               fs.open = open
               fs.unlink = unlink
@@ -370,17 +384,31 @@ test('local history snapshots on save, previews, and restores without overwritin
           { profile, failure },
         )
         t.after(() => app.evaluate(() => globalThis.restoreHistoryFailure()))
-        const saved = await page.evaluate(() => window.hibi.saveDocument(false))
+        const refused = failure !== 'copy'
+        let saved
+        if (refused) {
+          assert.equal(
+            await page.evaluate(() => window.hibi.saveDocument(false)),
+            null,
+          )
+          assert.match(
+            (await app.evaluate(() => globalThis.historyProtectionPrompt))
+              .detail,
+            /previous version.*history/i,
+          )
+          saved = await page.evaluate(() => window.hibi.getDocument())
+        } else
+          saved = await page.evaluate(() => window.hibi.saveDocument(false))
         await app.evaluate(() => globalThis.restoreHistoryFailure())
-        assert.equal(saved.dirty, false)
-        assert.equal(saved.saveReceipt, true)
+        assert.equal(saved.dirty, refused)
+        assert.equal(saved.saveReceipt, refused ? undefined : true)
         assert.equal(
           await page.evaluate(
             async () => (await window.hibi.getDocument()).savedMarkdown,
           ),
-          content,
+          refused ? baseline : content,
         )
-        assert.equal(await readFile(file, 'utf8'), content)
+        assert.equal(await readFile(file, 'utf8'), refused ? previous : content)
         const after = await page.evaluate(() => window.hibi.listVersions())
         if (failure === 'copy') {
           await page
@@ -398,7 +426,7 @@ test('local history snapshots on save, previews, and restores without overwritin
             previous,
           )
         } else if (failure === 'index') assert.deepEqual(after, before)
-        else assert.equal(after.length, before.length + 2)
+        else assert.equal(after.length, before.length + 1)
         const history = join(profile, 'history')
         const [folder] = await readdir(history)
         assert.deepEqual(
@@ -417,7 +445,23 @@ test('local history snapshots on save, previews, and restores without overwritin
       document.dirty && document.markdown === 'saved after history failures'
     )
   })
-  await page.evaluate(() => window.hibi.saveDocument(false))
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 0 })
+  })
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(page, async () => {
+    const current = await window.hibi.getDocument()
+    return (
+      !current.dirty && current.savedMarkdown === 'saved after history failures'
+    )
+  })
+  const completed = await page.evaluate(() => window.hibi.getDocument())
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  assert.equal(completed.dirty, false)
+  assert.equal(completed.savedMarkdown, 'saved after history failures')
+  assert.equal(await readFile(file, 'utf8'), 'saved after history failures')
   assert.ok(
     (
       await page.evaluate(async () =>
@@ -430,29 +474,46 @@ test('local history snapshots on save, previews, and restores without overwritin
     ).includes('external content before copy failure'),
   )
 
-  await t.test('history failure still saves and notifies', async () => {
-    await rm(join(profile, 'history'), { recursive: true })
-    await writeFile(join(profile, 'history'), 'blocked')
-    const content = 'saved without history'
-    await replaceRichText(page, rich, content)
-    await waitForAsync(
-      page,
-      async (content) => (await window.hibi.getDocument()).markdown === content,
-      content,
-    )
-    const saved = await page.evaluate(() => window.hibi.saveDocument(false))
-    assert.equal(saved.dirty, false)
-    assert.equal(saved.saveReceipt, true)
-    assert.equal(
-      await page.evaluate(
-        async () => (await window.hibi.getDocument()).savedMarkdown,
-      ),
-      content,
-    )
-    assert.equal(await readFile(file, 'utf8'), content)
-    await page
-      .getByText('File saved, but Hibi could not add it to version history.')
-      .last()
-      .waitFor()
-  })
+  await t.test(
+    'history failure before replacement keeps disk and edits',
+    async () => {
+      const before = await readFile(file, 'utf8')
+      await rm(join(profile, 'history'), { recursive: true })
+      await writeFile(join(profile, 'history'), 'blocked')
+      const content = 'saved without history'
+      await replaceRichText(page, rich, content)
+      await waitForAsync(
+        page,
+        async (content) =>
+          (await window.hibi.getDocument()).markdown === content,
+        content,
+      )
+      await app.evaluate(({ dialog }) => {
+        globalThis.historyProtectionPrompt = null
+        dialog.showMessageBox = async (_window, options) => {
+          globalThis.historyProtectionPrompt = options
+          return { response: options.cancelId }
+        }
+      })
+      assert.equal(
+        await page.evaluate(() => window.hibi.saveDocument(false)),
+        null,
+      )
+      assert.match(
+        (await app.evaluate(() => globalThis.historyProtectionPrompt)).detail,
+        /previous version.*history/i,
+      )
+      const saved = await page.evaluate(() => window.hibi.getDocument())
+      assert.equal(saved.dirty, true)
+      assert.equal(saved.saveReceipt, undefined)
+      assert.equal(
+        await page.evaluate(
+          async () => (await window.hibi.getDocument()).savedMarkdown,
+        ),
+        before,
+      )
+      assert.equal(saved.markdown, content)
+      assert.equal(await readFile(file, 'utf8'), before)
+    },
+  )
 })

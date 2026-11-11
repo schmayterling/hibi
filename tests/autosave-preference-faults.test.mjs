@@ -23,7 +23,7 @@ async function profile(t) {
     }
     await rm(folder, { recursive: true, force: true })
   })
-  const launch = async (fail = false) => {
+  const launch = async (fail = false, readError = false) => {
     const app = await electron.launch({
       autosave: true,
       args: [
@@ -32,7 +32,11 @@ async function profile(t) {
         resolve('.'),
         `--user-data-dir=${folder}`,
       ],
-      env: { ...process.env, HIBI_TEST_AUTOSAVE_WRITE_ERROR: fail ? '1' : '' },
+      env: {
+        ...process.env,
+        HIBI_TEST_AUTOSAVE_WRITE_ERROR: fail ? '1' : '',
+        HIBI_TEST_AUTOSAVE_READ_ERROR: readError ? '1' : '',
+      },
     })
     running.add(app)
     return { app, page: await app.firstWindow() }
@@ -94,6 +98,38 @@ for (const mode of ['migration refused', 'oversized legacy']) {
     }
   })
 }
+
+test('a startup setting read that throws leaves autosave off and the editor usable', {
+  timeout: 60000,
+}, async (t) => {
+  const { folder, launch } = await profile(t)
+  await writeFile(
+    join(folder, 'autosave.json'),
+    JSON.stringify({ enabled: true, delay: 2000 }),
+  )
+  const { app, page } = await launch(false, true)
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  assert.equal(
+    await page.locator('[data-status-id="autosave"]').innerText(),
+    'Autosave off',
+  )
+  await page.getByRole('textbox', { name: /document editor/i }).click()
+  await page.keyboard.type('still editable')
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
+  await page
+    .locator('.rich-pane .hibi-formatted .cm-content')
+    .filter({ hasText: 'still editable' })
+    .waitFor()
+  assert.equal(
+    JSON.parse(await readFile(join(folder, 'autosave.json'), 'utf8')).enabled,
+    true,
+  )
+  // Close discards the typed text instead of waiting on the save prompt.
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+})
 
 test('failed autosave toggle keeps prior setting and shows an error toast', {
   timeout: 60000,

@@ -1053,10 +1053,10 @@ setTimeout(() => {
     new RegExp(
       `^${[
         'ci: 7 failing tests',
-        '  node  tests/leak.test.mjs  did not stop what it started: left node \\d+ running',
+        '  node  tests/leak.test.mjs  did not stop what it started: left node(?:\\.exe)? \\d+ running',
         '  node  tests/orphan.test.mjs  exited SIGKILL with no failing test reported: killed by SIGKILL; its report did not finish',
         // What a runner that died left behind is named, then stopped.
-        '  node  tests/orphan.test.mjs  did not stop what it started: left node \\d+, node \\d+ running',
+        '  node  tests/orphan.test.mjs  did not stop what it started: left node(?:\\.exe)? \\d+, node(?:\\.exe)? \\d+ running',
         quote('  node  tests/red.test.mjs:4  red: red'),
         quote(
           `  node  ${spin}  did not finish within 2 s: stopped with everything it started`,
@@ -1142,7 +1142,8 @@ test('an interrupted check stops its files and starts no more', async (t) => {
 
 test('a cleanup that cannot be checked is a red, and the check still ends', {
   skip:
-    process.platform !== 'darwin' && 'only macOS looks for processes with ps',
+    process.platform !== 'darwin' &&
+    'only macOS looks for processes with python3',
 }, (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-hung-ps-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -1151,8 +1152,10 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
   const stub = join(root, 'npm.cjs')
   writeFileSync(stub, '')
   mkdirSync(bin)
-  // A ps that never answers.
-  writeFileSync(join(bin, 'ps'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+  // A process scan that never answers.
+  writeFileSync(join(bin, 'python3'), '#!/bin/sh\nexec sleep 60\n', {
+    mode: 0o755,
+  })
   const files = {
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
@@ -1198,6 +1201,217 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
   assert.ok(Date.now() - started < 30000, `took ${Date.now() - started} ms`)
   assert.equal(
     stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
-    'ci: 1 failing tests\n  node  tests/one.test.mjs  did not stop what it started: could not verify cleanup: ps took over 5 s',
+    'ci: 1 failing tests\n  node  tests/one.test.mjs  did not stop what it started: could not verify cleanup: python3 took over 5 s',
   )
+})
+
+test('what a file owns is found exactly, through a check it runs itself', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-owned-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const ran = join(root, 'ran')
+  const held = join(root, 'held')
+  mkdirSync(held)
+  const stub = join(root, 'npm.cjs')
+  writeFileSync(stub, '')
+  const live = (body) =>
+    `import { spawn } from 'node:child_process'\nimport { appendFileSync, writeFileSync } from 'node:fs'\nimport test from 'node:test'\n${body}`
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    // Passes, after starting two processes that only look like its own: one
+    // names its tag in a command line, one inside another variable.
+    'tests/decoys.test.mjs': live(
+      "test('decoys', () => {\n  const tag = process.env.HIBI_CI_FILE\n  const words = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', `HIBI_CI_FILE=${tag}`], { detached: true, stdio: 'ignore', env: {} })\n  const value = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore', env: { NOTE: `x HIBI_CI_FILE=${tag}` } })\n  words.unref()\n  value.unref()\n  writeFileSync(`${process.env.HELD}/decoys`, `${words.pid}\\n${value.pid}`)\n  appendFileSync(process.env.RAN, 'decoys ')\n})\n",
+    ),
+    // Passes, leaving a process with no tag in its runner's process group.
+    'tests/bare.test.mjs': live(
+      "test('bare', () => {\n  const bare = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: {} })\n  bare.unref()\n  writeFileSync(`${process.env.HELD}/bare`, String(bare.pid))\n  appendFileSync(process.env.RAN, 'bare ')\n})\n",
+    ),
+    // Runs this check on a repo of its own, whose one test starts a process
+    // and never ends; stopped first, it takes the inner check's files along.
+    'tests/nested.test.mjs': `// ci: timeout 8 s (runs a check)\n${live(
+      `import { execFileSync, spawnSync } from 'node:child_process'\nimport { mkdirSync } from 'node:fs'\nimport { join } from 'node:path'\ntest('nested', () => {\n  appendFileSync(process.env.RAN, 'nested ')\n  const inner = join(process.env.NESTED, 'repo')\n  mkdirSync(join(inner, 'tests'), { recursive: true })\n  writeFileSync(join(inner, '.gitignore'), 'out/\\n.cache/\\n')\n  writeFileSync(join(inner, 'tests/file-limit.mjs'), '')\n  writeFileSync(join(inner, 'tests/deep.test.mjs'), "import { spawn } from 'node:child_process'\\nimport { writeFileSync } from 'node:fs'\\nimport test from 'node:test'\\ntest('deep', async () => {\\n  const deep = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\\n  writeFileSync(process.env.HELD + '/deep', String(deep.pid))\\n  await new Promise(() => {})\\n})\\n")\n  for (const args of [['init', '-q'], ['config', 'user.name', 'ci'], ['config', 'user.email', 'ci@example.com'], ['add', '.'], ['commit', '-qm', 'first']]) execFileSync('git', args, { cwd: inner })\n  const { NODE_TEST_CONTEXT, ...outer } = process.env\n  spawnSync(process.execPath, [process.env.CHECK], { cwd: inner, stdio: 'ignore', env: outer })\n})\n`,
+    )}`,
+  }
+  // Windows can't show a process's environment, so there a file owns every
+  // process it started, look-alikes included.
+  if (process.platform === 'win32') delete files['tests/decoys.test.mjs']
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  const nested = join(root, 'nested')
+  mkdirSync(nested)
+  let pids = []
+  t.after(() => {
+    for (const pid of pids)
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        /* Stopped, as it should be. */
+      }
+  })
+  writeFileSync(ran, '')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const { status, stdout } = spawnSync(
+    process.execPath,
+    [resolve('scripts/ci.mjs')],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 120000,
+      env: {
+        ...env,
+        CHECK: resolve('scripts/ci.mjs'),
+        HELD: held,
+        NESTED: nested,
+        RAN: ran,
+        CI_BASE: '',
+        CI_CLEAN: '',
+        CI_FULL: 'true',
+        CI_SHARD: '0/1',
+        CI_WORKERS: '1',
+        GITHUB_ACTIONS: '',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
+        npm_execpath: stub,
+      },
+    },
+  )
+  pids = readdirSync(held).flatMap((name) =>
+    readFileSync(join(held, name), 'utf8').trim().split('\n').map(Number),
+  )
+  assert.equal(status, 1)
+  assert.deepEqual(
+    readFileSync(ran, 'utf8').trim().split(' ').sort(),
+    process.platform === 'win32'
+      ? ['bare', 'nested']
+      : ['bare', 'decoys', 'nested'],
+  )
+  assert.match(
+    stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    /^ci: 2 failing tests\n {2}node {2}tests\/bare\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/nested\.test\.mjs {2}did not finish within 8 s: stopped with everything it started$/,
+  )
+  // Only look-alikes: left alone.
+  if (process.platform !== 'win32')
+    for (const pid of readFileSync(join(held, 'decoys'), 'utf8')
+      .split('\n')
+      .map(Number))
+      process.kill(pid, 0)
+  // What was the files' own is stopped, the inner check's too.
+  for (const name of ['bare', 'deep']) {
+    const pid = Number(readFileSync(join(held, name), 'utf8'))
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, name)
+  }
+})
+
+// Windows can't run here: its process look stands in, reading this machine's
+// process table in the shape Win32_Process gives.
+test('on Windows, a file owns its process tree, and what it had to stop is named', {
+  skip: process.platform === 'win32' ? 'runs natively there' : false,
+}, (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-windows-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const bin = join(root, 'bin')
+  const looks = join(root, 'looks')
+  const held = join(root, 'held')
+  const stub = join(root, 'npm.cjs')
+  const windows = join(root, 'windows.mjs')
+  writeFileSync(stub, '')
+  writeFileSync(looks, '')
+  mkdirSync(bin)
+  writeFileSync(
+    windows,
+    "Object.defineProperty(process, 'platform', { value: 'win32' })\n",
+  )
+  writeFileSync(
+    join(bin, 'powershell.exe'),
+    `#!${process.execPath}
+const { execFileSync } = require('node:child_process')
+require('node:fs').appendFileSync(process.env.LOOKS, 'look\\n')
+const seconds = (elapsed) => elapsed.split(/[-:]/).map(Number).reduce((sum, part, index, parts) => sum + part * [86400, 3600, 60, 1].slice(-parts.length)[index], 0)
+for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], { encoding: 'utf8' }).trim().split('\\n')) {
+  const [pid, parent, elapsed, ...name] = line.trim().split(/\\s+/)
+  console.log([pid, parent, Date.now() - seconds(elapsed) * 1000, name.join(' ').split('/').at(-1)].join('\\t'))
+}
+`,
+    { mode: 0o755 },
+  )
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    // Passes, leaving behind a process it started a while before.
+    'tests/leak.test.mjs':
+      "import { spawn } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('leak', async () => {\n  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  left.unref()\n  writeFileSync(`${process.env.HELD}-leak`, String(left.pid))\n  await new Promise((done) => setTimeout(done, 3000))\n})\n",
+    'tests/spin.test.mjs':
+      "// ci: timeout 2 s (spins)\nimport { spawn } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('spin', () => {\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(process.env.HELD, String(held.pid))\n  for (const end = Date.now() + 60000; Date.now() < end; );\n})\n",
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  let heldPids = []
+  t.after(() => {
+    for (const pid of heldPids)
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        /* Stopped, as it should be. */
+      }
+  })
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const started = Date.now()
+  const { status, stdout } = spawnSync(
+    process.execPath,
+    ['--import', windows, resolve('scripts/ci.mjs')],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 120000,
+      env: {
+        ...env,
+        PATH: `${bin}:${process.env.PATH}`,
+        HELD: held,
+        LOOKS: looks,
+        CI_BASE: '',
+        CI_CLEAN: '',
+        CI_FULL: 'true',
+        CI_SHARD: '0/1',
+        CI_WORKERS: '1',
+        GITHUB_ACTIONS: '',
+        GITHUB_OUTPUT: '',
+        GITHUB_STEP_SUMMARY: '',
+        npm_execpath: stub,
+      },
+    },
+  )
+  heldPids = [held, `${held}-leak`].map((path) =>
+    Number(readFileSync(path, 'utf8')),
+  )
+  assert.equal(status, 1)
+  assert.ok(Date.now() - started < 45000, `took ${Date.now() - started} ms`)
+  // The Windows look ran, not the one this machine has.
+  assert.ok(readFileSync(looks, 'utf8').length > 0)
+  assert.match(
+    stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
+    /^ci: 2 failing tests\n {2}node {2}tests\/leak\.test\.mjs {2}did not stop what it started: left node \d+ running\n {2}node {2}tests\/spin\.test\.mjs {2}did not finish within 2 s: stopped with everything it started$/,
+  )
+  for (const pid of heldPids)
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, String(pid))
 })

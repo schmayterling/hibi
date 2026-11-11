@@ -11,7 +11,7 @@ import {
 import { readdir, readFile } from 'node:fs/promises'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, posix, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const git = (root, ...args) =>
   execFileSync('git', args, {
@@ -394,14 +394,19 @@ export async function runCI({ dev = false } = {}) {
   // Every process a file starts inherits its runner's tag, through forks, new
   // sessions and parents that exit: what carries the tag is the file's. Looked
   // for only when a file ends or is stopped. A process that clears its own
-  // environment escapes this, and only the runner's group kill catches it.
+  // environment and leaves the runner's process group escapes this.
   const pause = (ms) => new Promise((done) => setTimeout(done, ms))
+  // PowerShell alone can take seconds to start.
+  const lookLimit = process.platform === 'win32' ? 20 : 5
   const within = (promise, what) => {
     let timer
     return Promise.race([
       promise,
       new Promise((_, fail) => {
-        timer = setTimeout(() => fail(new Error(`${what} took over 5 s`)), 5000)
+        timer = setTimeout(
+          () => fail(new Error(`${what} took over ${lookLimit} s`)),
+          lookLimit * 1000,
+        )
       }),
     ]).finally(() => clearTimeout(timer))
   }
@@ -415,7 +420,7 @@ export async function runCI({ dev = false } = {}) {
         child.stdout.on('data', (chunk) => {
           output += chunk
         })
-        const timer = setTimeout(() => child.kill('SIGKILL'), 5000)
+        const timer = setTimeout(() => child.kill('SIGKILL'), lookLimit * 1000)
         child.once('error', (error) => {
           clearTimeout(timer)
           fail(error)
@@ -428,25 +433,119 @@ export async function runCI({ dev = false } = {}) {
       }),
       command,
     )
-  const tagged = (tag) => {
-    const mark = `HIBI_CI_FILE=${tag}`
+  // Windows can't show another process's environment. There a file owns the
+  // processes its runner started and theirs, learned by parent id from a look
+  // every 2 s while files run, so a child whose parent has since exited stays
+  // its file's. ponytail: a process started and orphaned between two looks is
+  // missed; a native helper holding each runner in a job object would close
+  // that.
+  const windowsLook = () =>
+    capture('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())`t$($_.Name)" }',
+    ]).then((output) =>
+      output
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => {
+          const [pid, parent, created, ...name] = line.split('\t')
+          return {
+            pid: Number(pid),
+            parent: Number(parent),
+            created: Number(created),
+            name: name.join('\t'),
+          }
+        })
+        .filter((row) => row.pid !== process.pid),
+    )
+  const lineages = new Map()
+  // One process, or a process that took a used one's id: start times tell.
+  const same = (row, known) =>
+    known && Math.abs(row.created - known.created) < 2000
+  const learn = (rows) => {
+    for (const { runner, since, known } of lineages.values())
+      for (let grew = true; grew; ) {
+        grew = false
+        for (const row of rows) {
+          if (row.created < since || known.has(row.pid)) continue
+          // A child starts after its parent: an older process that took a
+          // used id isn't one.
+          const parent = known.get(row.parent)
+          if (
+            row.pid === runner ||
+            (parent && row.created >= parent.created - 2000)
+          ) {
+            known.set(row.pid, row)
+            grew = true
+          }
+        }
+      }
+  }
+  let windowsLooks
+  const follow = (runner, since) => {
+    lineages.set(runner, { runner, since, known: new Map() })
+    look()
+    windowsLooks ??= setInterval(look, 2000)
+  }
+  let looking = false
+  const look = async () => {
+    if (looking) return
+    looking = true
+    try {
+      learn(await windowsLook())
+    } catch {
+      /* Looked at again in 2 s. */
+    } finally {
+      looking = false
+    }
+  }
+  const unfollow = (runner) => {
+    lineages.delete(runner)
+    if (!lineages.size) {
+      clearInterval(windowsLooks)
+      windowsLooks = undefined
+    }
+  }
+  // What a file owns: every process whose environment holds its tag, read as
+  // a real entry (not a word in a command line or another variable), and every
+  // member of its runner's process group, tagged or not. Tags chain, so a check
+  // run inside a test file still finds what its runners start.
+  const owned = (tag, runner) => {
+    if (process.platform === 'win32')
+      return windowsLook().then((rows) => {
+        learn(rows)
+        const known = lineages.get(runner)?.known ?? new Map()
+        return rows
+          .filter((row) => same(row, known.get(row.pid)))
+          .map(({ pid, name }) => ({ pid, name }))
+      })
+    const ownedBy = (entry) =>
+      entry.startsWith('HIBI_CI_FILE=') &&
+      entry.slice('HIBI_CI_FILE='.length).split(':').includes(tag)
     if (process.platform === 'linux')
       return within(
         (async () => {
           const found = []
           for (const entry of await readdir('/proc'))
-            if (/^\d+$/.test(entry))
+            if (/^\d+$/.test(entry) && Number(entry) !== process.pid)
               try {
-                const environment = await readFile(
-                  `/proc/${entry}/environ`,
-                  'utf8',
+                const [environment, stat] = await Promise.all([
+                  readFile(`/proc/${entry}/environ`, 'utf8'),
+                  readFile(`/proc/${entry}/stat`, 'utf8'),
+                ])
+                // The group follows the name, which can hold anything but ')'.
+                const group = Number(
+                  stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2],
                 )
-                if (environment.split('\0').includes(mark))
+                if (group === runner || environment.split('\0').some(ownedBy))
                   found.push({
                     pid: Number(entry),
-                    name: (
-                      await readFile(`/proc/${entry}/comm`, 'utf8')
-                    ).trim(),
+                    name: stat.slice(
+                      stat.indexOf('(') + 1,
+                      stat.lastIndexOf(')'),
+                    ),
                   })
               } catch {
                 /* Gone, or not ours to read. */
@@ -455,17 +554,20 @@ export async function runCI({ dev = false } = {}) {
         })(),
         '/proc',
       )
-    // macOS shows the environment of the user's own processes after their
-    // command line.
-    return capture('ps', ['-A', '-E', '-ww', '-o', 'pid=,command=']).then(
-      (output) =>
-        output
-          .split('\n')
-          .filter((line) => line.split(/\s+/).includes(mark))
-          .map((line) => {
-            const [pid, command] = line.trim().split(/\s+/)
-            return { pid: Number(pid), name: command.split('/').at(-1) }
-          }),
+    // macOS shows another process's environment only as text after its command
+    // line; the kernel's own copy keeps each entry apart.
+    return capture('python3', [
+      fileURLToPath(new URL('./ci-owned.py', import.meta.url)),
+      tag,
+      String(runner),
+    ]).then((output) =>
+      output
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const [pid, ...name] = line.split('\t')
+          return { pid: Number(pid), name: name.join('\t') }
+        }),
     )
   }
   const signal = (pid, name) => {
@@ -480,28 +582,18 @@ export async function runCI({ dev = false } = {}) {
   // look finds it. Resolves to what was left after a clean exit, what outlived
   // the kill, and any reason it couldn't tell.
   const cleanUp = async (tag, runner, exited) => {
-    if (process.platform === 'win32') {
-      try {
-        await capture('taskkill', ['/pid', String(runner), '/T', '/F'])
-      } catch (error) {
-        // 128: it had already exited.
-        if (!/exited 128$/.test(error.message))
-          return { left: [], outlived: [], error: error.message }
-      }
-      return { left: [], outlived: [] }
-    }
     let left = []
     let found = []
     try {
       // A process on its way out after a clean exit isn't left behind.
       for (let look = 0; look < 20; look++) {
-        found = await tagged(tag)
+        found = await owned(tag, runner)
         if (!found.length || !exited) break
         await pause(100)
       }
       if (exited) left = found
       for (let quiet = 0, round = 0; quiet < 2 && round < 50; round++) {
-        if (round) found = await tagged(tag)
+        if (round) found = await owned(tag, runner)
         quiet = found.length ? 0 : quiet + 1
         for (const { pid } of found) signal(pid, 'SIGKILL')
         signal(-runner, 'SIGKILL')
@@ -537,6 +629,8 @@ export async function runCI({ dev = false } = {}) {
       rmSync(report, { force: true })
       seconds = limit(test)
       const tag = randomUUID()
+      // A little early: process start times come from the wall clock.
+      const since = Date.now() - 2000
       result = await new Promise((settle) => {
         const child = spawn(
           process.execPath,
@@ -557,7 +651,9 @@ export async function runCI({ dev = false } = {}) {
             env: {
               ...process.env,
               CI_FILE_LIMIT_MS: String((seconds + 60) * 1000),
-              HIBI_CI_FILE: tag,
+              HIBI_CI_FILE: [process.env.HIBI_CI_FILE, tag]
+                .filter(Boolean)
+                .join(':'),
             },
             detached: process.platform !== 'win32',
           },
@@ -573,6 +669,7 @@ export async function runCI({ dev = false } = {}) {
         child.stderr?.on('data', (chunk) => {
           output += chunk
         })
+        if (child.pid && process.platform === 'win32') follow(child.pid, since)
         let stopping
         const stop = () => {
           stopping ??= child.pid
@@ -597,6 +694,7 @@ export async function runCI({ dev = false } = {}) {
             if (stopping) cleanup = await stopping
             else if (child.pid) cleanup = await cleanUp(tag, child.pid, true)
           } finally {
+            unfollow(child.pid)
             running.delete(stop)
             process.stdout.write(output)
             settle(outcome)

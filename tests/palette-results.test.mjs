@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { electron } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 
 test('palette selection reuses filtered results and rerenders only the rows it changes', {
   timeout: 45000,
@@ -35,10 +36,7 @@ test('palette selection reuses filtered results and rerenders only the rows it c
       },
     },
   })
-  await writeFile(
-    join(root, 'index.html'),
-    '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-  )
+  await writeFile(join(root, 'index.html'), harnessPage({ css: 'harness.css' }))
   await writeFile(
     join(root, 'main.cjs'),
     `const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(join(root, 'profile'))});if(process.platform==='darwin')app.setActivationPolicy('accessory');app.whenReady().then(()=>{const w=new BrowserWindow({width:800,height:640,show:false,focusable:false,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});w.loadFile(${JSON.stringify(join(root, 'index.html'))});});`,

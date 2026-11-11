@@ -1,6 +1,14 @@
 import { Lexer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote as githubFootnotes } from 'marked-github-footnote'
-import { BlockTokenizer, blockContainers } from './marked-blocks.ts'
+import {
+  BlockTokenizer,
+  blockContainers,
+  continuationTokens,
+} from './marked-blocks.ts'
+import {
+  footnoteReference,
+  rememberFootnote,
+} from './marked-footnote-reference.ts'
 import { inlineStart } from './marked-inline-start.ts'
 import { leafBlock } from './marked-leaf-blocks.ts'
 
@@ -12,11 +20,23 @@ export function markedGithubFootnote(
   const reference = extension.extensions!.find(
     (item) => item.name === 'footnoteRef',
   ) as TokenizerExtension
-  Object.assign(reference, inlineStart('[^', reference.tokenizer))
+  const readReference = reference.tokenizer
+  Object.assign(
+    reference,
+    inlineStart('[^', function (source, tokens) {
+      const match = footnoteReference(this.lexer, source, tokens)
+      if (match) return readReference.call(this, match.raw, tokens)
+    }),
+  )
   const definition = extension.extensions!.find(
     (item) => item.name === 'footnoteDef',
   ) as TokenizerExtension
-  const read = definition.tokenizer
+  const readDefinition = definition.tokenizer
+  const read: typeof readDefinition = function (source, tokens) {
+    const token = readDefinition.call(this, source, tokens)
+    if (token) rememberFootnote(this.lexer, String(token.label))
+    return token
+  }
   definition.tokenizer = function (source, tokens) {
     const marker = /^ {0,3}\[\^[^\]\s]+\]:[ \t]*/.exec(source)
     if (!marker) return
@@ -46,7 +66,22 @@ export function markedGithubFootnote(
     if (!item || item.raw.length < prefix.length)
       return read.call(this, source, tokens)
     const end = marker[0].length + item.raw.length - prefix.length
-    const token = read.call(this, source.slice(0, end), tokens)
+    const physical = source.slice(0, end)
+    const lexer = this.lexer,
+      blockTokens = lexer.blockTokens
+    // The dependency dedents before parsing; retain which lines were lazy.
+    lexer.blockTokens = (...args) => {
+      lexer.blockTokens = blockTokens
+      return continuationTokens(lexer, source, args[0], () =>
+        Reflect.apply(lexer.blockTokens, lexer, args),
+      )
+    }
+    let token: ReturnType<typeof read>
+    try {
+      token = read.call(this, physical, tokens)
+    } finally {
+      lexer.blockTokens = blockTokens
+    }
     const last = token?.tokens?.at(-1)
     return token && last && !['paragraph', 'text'].includes(last.type)
       ? leafBlock(token)

@@ -18,6 +18,7 @@ import {
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { defaultPane, frozenSnapshot } from './frozen-oracle.mjs'
+import { harnessPage } from './harness-page.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -114,10 +115,7 @@ before(
       },
     })
     const html = join(bundle, 'index.html')
-    await writeFile(
-      html,
-      '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-    )
+    await writeFile(html, harnessPage({ css: 'harness.css' }))
     await mkdir(join(folder, 'notes'))
     const file = join(folder, 'notes', 'tables.md')
     await writeFile(file, note)

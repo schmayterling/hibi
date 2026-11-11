@@ -5,6 +5,7 @@ import {
   blockContainers,
   continuationTokens,
 } from './marked-blocks.ts'
+import { inlineStart } from './marked-inline-start.ts'
 import { leafBlock } from './marked-leaf-blocks.ts'
 
 /** Bound definitions with Marked's list grammar before the footnote renderer stores them. */
@@ -12,6 +13,10 @@ export function markedGithubFootnote(
   ...options: Parameters<typeof githubFootnotes>
 ) {
   const extension = githubFootnotes(...options)
+  const reference = extension.extensions!.find(
+    (item) => item.name === 'footnoteRef',
+  ) as TokenizerExtension
+  Object.assign(reference, inlineStart('[^', reference.tokenizer))
   const definition = extension.extensions!.find(
     (item) => item.name === 'footnoteDef',
   ) as TokenizerExtension

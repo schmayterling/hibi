@@ -3,6 +3,7 @@ import type { Marked, Token, TokenizerExtension, Tokens } from 'marked'
 import { customBodyFeatures } from '../../shared/formatted-custom-body.ts'
 import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
+import { inlineStart } from '../../shared/marked-inline-start.ts'
 import {
   disabledToken,
   type NoteSyntax,
@@ -89,12 +90,11 @@ function countFootnotes(parser: Marked) {
       {
         name: 'footnoteRef',
         level: 'inline',
-        start: (source) => source.indexOf('[^'),
-        tokenizer(source) {
+        ...inlineStart('[^', function (source) {
           const match = /^\[\^([^\]\s]+)\]/.exec(source)
           if (match?.[1] && this.lexer.tokens.links[footnoteKey(match[1])])
             return { type: 'footnoteRef', raw: match[0] }
-        },
+        }),
       },
     ],
   })

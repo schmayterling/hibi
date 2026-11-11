@@ -1,8 +1,11 @@
-// Run by electron-harness.test.mjs; whether this file exits is what that test checks.
-import { mkdtemp, rm } from 'node:fs/promises'
+// Run by electron-harness.test.mjs; whether this file exits is what that test
+// checks. That test also removes the profile, once every app here has closed.
+import { execFileSync } from 'node:child_process'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { setTimeout } from 'node:timers/promises'
 import { after, before, electron } from '../electron.mjs'
 
 const temp = await mkdtemp(join(tmpdir(), process.env.LAUNCH_TIMEOUT_PREFIX))
@@ -10,7 +13,8 @@ const launch = () =>
   electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(temp, 'profile')}`],
   })
-if (process.env.LAUNCH_TIMEOUT_CASE === 'hook') {
+const scenario = process.env.LAUNCH_TIMEOUT_CASE
+if (scenario === 'hook') {
   // A file's shared app, still launching when node runs the after hooks.
   let app
   before(async () => {
@@ -20,18 +24,25 @@ if (process.env.LAUNCH_TIMEOUT_CASE === 'hook') {
     await app.evaluate(() => {})
     console.log('after hook reached its app')
     await app.close()
-    await rm(temp, { recursive: true, force: true })
   })
   test('skipped by the name pattern', () => {})
 } else {
   // The timeout lands while the app is still starting.
   test('a test that times out during a launch', { timeout: 200 }, async (t) => {
     let app
-    t.after(async () => {
-      await app?.close()
-      await rm(temp, { recursive: true, force: true })
-    })
+    t.after(() => app?.close())
     app = await launch()
     await new Promise(() => {})
   })
+  if (scenario === 'later')
+    test('a later test outlives that launch', { timeout: 60000 }, async () => {
+      const running = () =>
+        execFileSync('ps', ['-axo', 'command='], { encoding: 'utf8' }).includes(
+          temp,
+        )
+      while (!running()) await setTimeout(200)
+      // Until the late app has started and been closed again.
+      while (running()) await setTimeout(200)
+      console.log('the late app closed while a later test ran')
+    })
 }

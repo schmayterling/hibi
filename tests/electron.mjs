@@ -52,13 +52,19 @@ if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
   test.after(reportLeftover)
   // A file's own after hooks run later still, and can bring a throw of their own.
   process.on('exit', reportLeftover)
+  test.afterEach(orphanPendingLaunches)
   test.after(closeOrphanedLaunches)
 }
 
-// A test that times out keeps running after node:test has run every hook. An
-// app it was still launching then would keep the file from ever exiting.
+// A test that times out keeps running after node:test has moved on. An app it
+// was still launching then would keep the file from ever exiting. A file runs
+// its tests one at a time, so a launch still pending when a test ends is that
+// test's, and nothing will close it.
 const orphanable = new Set()
 let hooksRan = false
+function orphanPendingLaunches() {
+  for (const launch of orphanable) launch.orphaned = true
+}
 async function closeOrphanedLaunches() {
   hooksRan = true
   await Promise.all(
@@ -366,7 +372,8 @@ export const electron = {
     launch.closed = launching
       .then(
         async (application) => {
-          if (hooksRan) await application.close().catch(() => {})
+          if (launch.orphaned || hooksRan)
+            await application.close().catch(() => {})
         },
         () => {},
       )

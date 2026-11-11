@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -35,12 +35,16 @@ const run = async (t, scenario, args = []) => {
       .split('\n')
       .filter((line) => line.includes(prefix))
       .map((line) => Number(line.trim().split(/\s+/)[0]))
-  t.after(() => {
+  t.after(async () => {
     child.kill('SIGKILL')
     for (const group of new Set(apps()))
       try {
         process.kill(-group, 'SIGKILL')
       } catch {}
+    // The fixture's profile, removed only once its apps are gone.
+    for (const name of await readdir(tmpdir()))
+      if (name.startsWith(prefix))
+        await rm(join(tmpdir(), name), { recursive: true, force: true })
   })
   const [code] = await Promise.race([
     once(child, 'exit'),
@@ -55,6 +59,16 @@ test('a file whose test times out during a launch still closes the app and exits
   const { code, output, left } = await run(t, 'test')
   assert.equal(code, 1, output)
   assert.match(output, /test timed out after 200ms/)
+  assert.deepEqual(left, [])
+})
+
+test('a launch a timed-out test left behind closes while a later test runs', {
+  timeout: 120000,
+}, async (t) => {
+  const { code, output, left } = await run(t, 'later')
+  assert.equal(code, 1, output)
+  assert.match(output, /test timed out after 200ms/)
+  assert.match(output, /the late app closed while a later test ran/)
   assert.deepEqual(left, [])
 })
 

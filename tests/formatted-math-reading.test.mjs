@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 
 test('formulas rendering on or above the reading line keep it in place, and later scrolling stands', {
   timeout: 120000,
@@ -29,10 +30,7 @@ test('formulas rendering on or above the reading line keep it in place, and late
     },
   })
   const html = join(bundle, 'index.html')
-  await writeFile(
-    html,
-    '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-  )
+  await writeFile(html, harnessPage({ css: 'harness.css' }))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })

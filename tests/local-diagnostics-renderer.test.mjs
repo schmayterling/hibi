@@ -6,6 +6,7 @@ import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
 import { electron, expectPageError, startupDiagnostics } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 
 test('both renderer profiles preserve native error propagation, safe original locations, recovery actions and listener disposal', {
   timeout: 30000,
@@ -35,10 +36,7 @@ test('both renderer profiles preserve native error propagation, safe original lo
       },
     },
   })
-  await writeFile(
-    join(root, 'index.html'),
-    '<!doctype html><meta charset="utf-8"><body><script src="harness.js"></script></body>',
-  )
+  await writeFile(join(root, 'index.html'), harnessPage())
   await writeFile(
     join(root, 'worker.js'),
     "throw new Error('PRIVATE_NATIVE_WORKER_MESSAGE')",

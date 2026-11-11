@@ -97,6 +97,8 @@ export type DocumentSaveReply = DocumentState | DocumentSaveReceipt
 export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentSaveReply | null
+  /** A skipped recovery waits for a user edit or explicit save. */
+  message?: string
 }
 /** Held: a program had the file open. Autosave tries again; the text is kept. */
 export type AutosaveReply =

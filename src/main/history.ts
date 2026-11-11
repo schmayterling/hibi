@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, stat, unlink } from 'node:fs/promises'
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { type DocumentVersion, HISTORY_PREVIEW_BYTES } from '../shared/history'
@@ -20,11 +27,32 @@ const directory = (path: string) =>
     'history',
     createHash('sha256').update(path).digest('hex'),
   )
+const opened = new Map<string, Promise<void>>()
 async function versions(path: string): Promise<Version[]> {
+  const folder = directory(path)
+  let opening = opened.get(folder)
+  if (!opening) {
+    opening = readdir(folder)
+      .catch(() => [])
+      .then((files) =>
+        Promise.all(
+          files
+            .filter((file) =>
+              /^\.(?:index\.json|[0-9a-f-]{36}\.md)\.[0-9a-f-]{36}\.tmp$/.test(
+                file,
+              ),
+            )
+            .map((file) => unlink(join(folder, file)).catch(() => {})),
+        ),
+      )
+      .then(() => {})
+    // Later callers wait too, so cleanup cannot race a new copy in this run.
+    opened.set(folder, opening)
+  }
+  await opening
+  const index = join(folder, 'index.json')
   try {
-    const data: unknown = JSON.parse(
-      await readFile(join(directory(path), 'index.json'), 'utf8'),
-    )
+    const data: unknown = JSON.parse(await readFile(index, 'utf8'))
     if (
       !Array.isArray(data) ||
       data.some(
@@ -40,7 +68,10 @@ async function versions(path: string): Promise<Version[]> {
     return data as Version[]
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
+    // Keep damaged metadata and all old copies; only the index starts afresh.
+    await rename(index, `${index}.corrupt-${Date.now()}-${randomUUID()}`)
+    await syncFolder(folder)
+    return []
   }
 }
 const validId = (id: unknown): id is string =>

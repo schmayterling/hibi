@@ -2992,6 +2992,12 @@ if (!app.requestSingleInstanceLock()) {
                   document: null,
                   message: (error as Error).message,
                 }
+              if ((error as NodeJS.ErrnoException).code === 'EHISTORY')
+                return {
+                  status: 'held',
+                  document: null,
+                  message: (error as Error).message,
+                }
               if (!fileHeldOpen(error)) throw error
               return { status: 'held', document: null }
             }

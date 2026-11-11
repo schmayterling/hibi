@@ -963,9 +963,19 @@ async function protectPrevious(
   try {
     await recordVersions(destination, [previous], 'previous')
   } catch (error) {
-    throw new Error(
-      'Hibi could not protect the previous file in version history. Your file was not saved. Your edits are still here. Free disk space or repair access to app data, then save again.',
-      { cause: error },
+    const code = (error as NodeJS.ErrnoException).code
+    const reason =
+      code === 'ENOSPC' || code === 'EDQUOT'
+        ? 'The storage for Hibi’s app data is full.'
+        : code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
+          ? 'Hibi does not have permission to write history in its app data folder, or that folder is read-only.'
+          : 'Hibi could not write version history in its app data folder.'
+    throw Object.assign(
+      new Error(
+        `Hibi could not keep the previous version in history. ${reason} Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.`,
+        { cause: error },
+      ),
+      { code: 'EHISTORY' },
     )
   }
 }
@@ -1143,7 +1153,24 @@ export async function saveDocument(
           .catch(heldNote)
       )?.snapshot() ?? null
   }
-  await protectPrevious(destination, previous)
+  let protectedHistory = true
+  try {
+    await protectPrevious(destination, previous)
+  } catch (error) {
+    if (automatic) throw error
+    const choice = await runFileDialog(() =>
+      dialog.showMessageBox(window, {
+        type: 'warning',
+        message: `Could not keep the previous version of ${basename(destination)}.`,
+        detail: `${(error as Error).message}\n\nSaving without it replaces the file with your current text. Its previous contents may not be recoverable.`,
+        buttons: ['Save without keeping the previous version', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+      }),
+    )
+    if (choice.response !== 0) return null
+    protectedHistory = false
+  }
   await sayingWhenHeld(window, destination, (refused) =>
     writeMarkdown(
       destination,
@@ -1162,7 +1189,8 @@ export async function saveDocument(
   saved = saving
   // Edits made during the write were compared with the old baseline.
   updateDocumentEdited(window)
-  const recorded = await recordSaveHistory(window, destination, content)
+  const recorded =
+    protectedHistory && (await recordSaveHistory(window, destination, content))
   return Object.assign(getDocument(), {
     versionsKept: !recorded ? 'none' : replacedSaved ? 'both' : 'written',
   } satisfies Pick<DocumentState, 'versionsKept'>)
@@ -1191,12 +1219,16 @@ export async function autosaveDocument(
     (expectedContentVersion !== undefined &&
       expectedContentVersion !== draft.source.snapshot().version) ||
     !draft.path ||
-    (automatic &&
-      recovered.get(draft.source) === draft.source.snapshot().version) ||
     !dirty(draft.source, draft.saved) ||
     !canContinue()
   )
     return { status: 'skipped', document: null }
+  if (recovered.get(draft.source) === draft.source.snapshot().version)
+    return {
+      status: 'skipped',
+      document: null,
+      message: 'Autosave · waiting for an edit',
+    }
   const destination = draft.path
   const saving = draft.source.snapshot()
   const content = saving

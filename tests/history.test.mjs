@@ -361,7 +361,18 @@ test('local history snapshots on save, previews, and restores without overwritin
                 )
               return unlink(path)
             }
-            dialog.showMessageBox = async () => ({ response: 0 })
+            globalThis.historyProtectionPrompt = null
+            dialog.showMessageBox = async (_window, options) => {
+              if (
+                options.buttons.includes(
+                  'Save without keeping the previous version',
+                )
+              ) {
+                globalThis.historyProtectionPrompt = options
+                return { response: options.cancelId }
+              }
+              return { response: 0 }
+            }
             globalThis.restoreHistoryFailure = () => {
               fs.open = open
               fs.unlink = unlink
@@ -376,9 +387,14 @@ test('local history snapshots on save, previews, and restores without overwritin
         const refused = failure !== 'copy'
         let saved
         if (refused) {
-          await assert.rejects(
-            page.evaluate(() => window.hibi.saveDocument(false)),
-            /could not protect.*version history/i,
+          assert.equal(
+            await page.evaluate(() => window.hibi.saveDocument(false)),
+            null,
+          )
+          assert.match(
+            (await app.evaluate(() => globalThis.historyProtectionPrompt))
+              .detail,
+            /previous version.*history/i,
           )
           saved = await page.evaluate(() => window.hibi.getDocument())
         } else
@@ -472,9 +488,20 @@ test('local history snapshots on save, previews, and restores without overwritin
           (await window.hibi.getDocument()).markdown === content,
         content,
       )
-      await assert.rejects(
-        page.evaluate(() => window.hibi.saveDocument(false)),
-        /could not protect.*version history/i,
+      await app.evaluate(({ dialog }) => {
+        globalThis.historyProtectionPrompt = null
+        dialog.showMessageBox = async (_window, options) => {
+          globalThis.historyProtectionPrompt = options
+          return { response: options.cancelId }
+        }
+      })
+      assert.equal(
+        await page.evaluate(() => window.hibi.saveDocument(false)),
+        null,
+      )
+      assert.match(
+        (await app.evaluate(() => globalThis.historyProtectionPrompt)).detail,
+        /previous version.*history/i,
       )
       const saved = await page.evaluate(() => window.hibi.getDocument())
       assert.equal(saved.dirty, true)

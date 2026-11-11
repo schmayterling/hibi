@@ -494,6 +494,9 @@
   "97d14ff6a64e": [
     "src/renderer/src/AutosaveSettings.tsx"
   ],
+  "4f0997654238": [
+    "src/main/document.ts"
+  ],
   "e674447337e8": [
     "src/renderer/src/DependencySettings.tsx"
   ],
@@ -1447,6 +1450,9 @@
   ],
   "9ec4e620e7b9": [
     "src/addons/dictionary/pack-store.ts"
+  ],
+  "33435ec285c4": [
+    "src/main/document.ts"
   ],
   "8f95a0391d5d": [
     "src/addons/quick-note/native.ts"
@@ -2880,7 +2886,7 @@
   "d443e8296852": [
     "src/main/index.ts"
   ],
-  "b250b8ce9b65": [
+  "1e7f6a0207ab": [
     "src/main/document.ts"
   ],
   "87c719d7d306": [
@@ -5326,6 +5332,9 @@
   ],
   "4b77ec6e263f": [
     "src/main/workspace-actions.ts"
+  ],
+  "e7820342a138": [
+    "src/main/document.ts"
   ],
   "4c5e2f1569fd": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -8037,6 +8046,9 @@
   ],
   "229213386c16": [
     "src/renderer/src/main.tsx"
+  ],
+  "fb2ba637fdbc": [
+    "src/main/document.ts"
   ],
   "6e73ea811fa6": [
     "src/renderer/src/addons.ts"

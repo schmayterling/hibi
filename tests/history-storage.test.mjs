@@ -446,3 +446,59 @@ test('a version autosave wrote is flagged; the text it replaced and saves asked 
     [false, true, false],
   )
 })
+
+test('damaged history indexes are quarantined without removing older copies', async (t) => {
+  for (const damaged of ['{not json', '{}', '[{"id":"bad"}]']) {
+    const { api, file, folder, state } = await runtime(t)
+    await fs.mkdir(folder, { recursive: true })
+    const oldCopy = join(folder, `${randomUUID()}.md`)
+    await fs.writeFile(oldCopy, 'old copy')
+    await fs.writeFile(join(folder, 'index.json'), damaged)
+    await api.recordVersions(file, ['previous'], 'previous')
+    const quarantined = (await fs.readdir(folder)).filter((name) =>
+      name.startsWith('index.json.corrupt-'),
+    )
+    assert.equal(quarantined.length, 1)
+    assert.equal(
+      await fs.readFile(join(folder, quarantined[0]), 'utf8'),
+      damaged,
+    )
+    assert.equal(await fs.readFile(oldCopy, 'utf8'), 'old copy')
+    const versions = await api.listVersions(file)
+    assert.equal(versions.length, 1)
+    assert.equal(await api.previewVersion(file, versions[0].id), 'previous')
+    assert.ok(state.folderSyncs >= 2)
+  }
+})
+
+test('unreadable index can be set aside when its history folder is writable', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const { api, file, folder } = await runtime(t)
+  await fs.mkdir(folder, { recursive: true })
+  await fs.writeFile(join(folder, 'index.json'), '[]', { mode: 0o000 })
+  await api.recordVersions(file, ['previous'], 'previous')
+  const [quarantined] = (await fs.readdir(folder)).filter((name) =>
+    name.startsWith('index.json.corrupt-'),
+  )
+  assert.ok(quarantined)
+  assert.equal((await api.listVersions(file)).length, 1)
+})
+
+test('first history open removes only its owned abandoned temporary files, once', async (t) => {
+  const { api, file, folder } = await runtime(t)
+  await fs.mkdir(folder, { recursive: true })
+  const own = [
+    `.${randomUUID()}.md.${randomUUID()}.tmp`,
+    `.index.json.${randomUUID()}.tmp`,
+  ]
+  const foreign = ['.keep.tmp', 'index.json.corrupt-1', `${randomUUID()}.md`]
+  for (const name of [...own, ...foreign])
+    await fs.writeFile(join(folder, name), name)
+  assert.deepEqual(await api.listVersions(file), [])
+  assert.deepEqual((await fs.readdir(folder)).sort(), foreign.sort())
+  // Cleanup must not remove a temporary file from a live save later this run.
+  await fs.writeFile(join(folder, own[0]), 'live write')
+  await api.listVersions(file)
+  assert.equal(await fs.readFile(join(folder, own[0]), 'utf8'), 'live write')
+})

@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, stat, unlink } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { type DocumentVersion, HISTORY_PREVIEW_BYTES } from '../shared/history'
 import type { SourceSnapshot } from '../shared/source-buffer'
-import { readMarkdown, readMarkdownChunks, writeText } from './files'
+import {
+  readMarkdown,
+  readMarkdownChunks,
+  syncFolder,
+  writeText,
+} from './files'
 
 type Version = DocumentVersion & { hash: string }
 const AUTOSAVE_GAP = 3 * 60 * 1000
@@ -15,28 +20,93 @@ const directory = (path: string) =>
     'history',
     createHash('sha256').update(path).digest('hex'),
   )
+const opened = new Map<string, Promise<void>>()
 async function versions(path: string): Promise<Version[]> {
-  try {
-    const data: unknown = JSON.parse(
-      await readFile(join(directory(path), 'index.json'), 'utf8'),
-    )
-    if (
-      !Array.isArray(data) ||
-      data.some(
-        (v) =>
-          !v ||
-          !validId(v.id) ||
-          typeof v.savedAt !== 'number' ||
-          typeof v.bytes !== 'number' ||
-          typeof v.hash !== 'string',
+  const folder = directory(path)
+  let opening = opened.get(folder)
+  if (!opening) {
+    opening = readdir(folder)
+      .catch(() => [])
+      .then((files) =>
+        Promise.all(
+          files
+            .filter((file) =>
+              /^\.(?:index\.json|[0-9a-f-]{36}\.md)\.[0-9a-f-]{36}\.tmp$/.test(
+                file,
+              ),
+            )
+            .map((file) => unlink(join(folder, file)).catch(() => {})),
+        ),
       )
-    )
-      throw new Error('Hibi could not read the saved version history.')
-    return data as Version[]
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
+      .then(() => {})
+    // Later callers wait too, so cleanup cannot race a new copy in this run.
+    opened.set(folder, opening)
   }
+  await opening
+  const index = join(folder, 'index.json')
+  let text: string
+  try {
+    text = await readFile(index, 'utf8')
+  } catch (error) {
+    // Other read errors may pass; they leave the index for the next try.
+    const { code } = error as NodeJS.ErrnoException
+    if (code === 'ENOENT') return []
+    throw Object.assign(
+      new Error('Hibi could not read the saved version history.', {
+        cause: error,
+      }),
+      { code },
+    )
+  }
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return rebuild(folder, text)
+  }
+  if (
+    !Array.isArray(data) ||
+    data.some(
+      (v) =>
+        !v ||
+        !validId(v.id) ||
+        typeof v.savedAt !== 'number' ||
+        typeof v.bytes !== 'number' ||
+        typeof v.hash !== 'string',
+    )
+  )
+    return rebuild(folder, text)
+  return data as Version[]
+}
+/**
+ * Keeps damaged metadata aside and lists again every copy still on disk, by
+ * its own bytes and time, so none is left outside the index and its budget.
+ */
+async function rebuild(folder: string, damaged: string): Promise<Version[]> {
+  const index = join(folder, 'index.json')
+  const found: Version[] = []
+  for (const name of await readdir(folder)) {
+    const id = name.slice(0, -3)
+    if (!name.endsWith('.md') || !validId(id)) continue
+    try {
+      const file = join(folder, name)
+      const [body, info] = await Promise.all([readFile(file), stat(file)])
+      if (!info.isFile()) continue
+      found.push({
+        id,
+        hash: createHash('sha256').update(body).digest('hex'),
+        savedAt: Math.round(info.mtimeMs),
+        bytes: body.byteLength,
+      })
+    } catch {
+      // A copy that cannot be read stays on disk, out of the list.
+    }
+  }
+  found.sort((a, b) => a.savedAt - b.savedAt)
+  await writeText(`${index}.corrupt-${Date.now()}-${randomUUID()}`, damaged)
+  await writeText(index, JSON.stringify(found))
+  await syncFolder(folder)
+  return found
 }
 const validId = (id: unknown): id is string =>
   typeof id === 'string' &&
@@ -104,11 +174,11 @@ export async function sourceHash(markdown: string | SourceSnapshot) {
   if (typeof markdown !== 'string') hashes.set(markdown, hashed)
   return hashed
 }
-/** `automatic`: autosave wrote the last of `markdowns`. */
+/** `previous` protects bytes already on disk without changing how their save was requested. */
 export async function recordVersions(
   path: string,
   markdowns: (string | SourceSnapshot)[],
-  automatic = false,
+  automatic: boolean | 'previous' = false,
 ): Promise<void> {
   const current = await versions(path)
   const folder = directory(path)
@@ -118,6 +188,28 @@ export async function recordVersions(
   try {
     for (const markdown of markdowns) {
       const { hash, bytes } = await sourceHash(markdown)
+      if (automatic === 'previous') {
+        const existing = next.findLast((version) => version.hash === hash)
+        if (existing) {
+          const file = join(folder, `${existing.id}.md`)
+          const stored = await stat(file).catch(
+            (error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error
+              return null
+            },
+          )
+          if (stored?.size !== bytes) {
+            await writeText(
+              file,
+              typeof markdown === 'string'
+                ? markdown
+                : markdown.encodedChunks(),
+            )
+            await syncFolder(folder)
+          }
+          continue
+        }
+      }
       const last = next.at(-1)
       if (last?.hash === hash) {
         // Asked for now, whoever wrote this text first.
@@ -140,7 +232,7 @@ export async function recordVersions(
         hash,
         savedAt: Date.now(),
         bytes,
-        ...(automatic && markdown === markdowns.at(-1)
+        ...(automatic === true && markdown === markdowns.at(-1)
           ? { automatic: true as const }
           : {}),
       })
@@ -174,6 +266,7 @@ export async function recordVersions(
   }
   try {
     await writeText(join(folder, 'index.json'), JSON.stringify(next))
+    await syncFolder(folder)
   } catch (error) {
     const published = await versions(path).catch(() => null)
     if (published) {

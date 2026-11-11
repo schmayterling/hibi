@@ -13,6 +13,7 @@ import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { admittedOperations } from '../shared/admitted-operations'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APP_ICON_CHANNELS } from '../shared/app-icon'
+import { AUTOSAVE_PREFERENCES_CHANNEL } from '../shared/autosave-preferences'
 import { BACKGROUND_CHANNELS } from '../shared/background'
 import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -267,7 +268,20 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   let backgroundSettingsReady = false
+  function autosavePreferences(operation: 'get' | 'set', value: unknown) {
+    const result = transport.sendSync(
+      AUTOSAVE_PREFERENCES_CHANNEL,
+      operation,
+      value,
+    )
+    if (result.error) throw new Error(result.error)
+    return result.preferences
+  }
   contextBridge.exposeInMainWorld('hibiTransport', {
+    getAutosavePreferences: (legacy) => autosavePreferences('get', legacy),
+    setAutosavePreferences: (next) => {
+      autosavePreferences('set', next)
+    },
     openDocumentTransfer: (tabId) =>
       transport.invoke(DOCUMENT_CHANNELS.transferOpen, tabId),
     readDocumentTransfer: (request) =>

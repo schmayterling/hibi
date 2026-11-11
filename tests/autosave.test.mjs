@@ -123,6 +123,7 @@ test('autosave preserves later edits, pauses on external changes, and never prom
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
+    await app.firstWindow().then((page) => page.clock.resume())
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
@@ -130,6 +131,7 @@ test('autosave preserves later edits, pauses on external changes, and never prom
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await page.clock.install()
   await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   const rich = page.getByRole('textbox', { name: /document editor/i })
@@ -187,6 +189,18 @@ test('autosave preserves later edits, pauses on external changes, and never prom
       return result
     })
   })
+  await page.evaluate(() => {
+    const save = window.hibi.autosaveDocument
+    window.autosaveRuns = []
+    window.hibi.autosaveDocument = (...args) => {
+      const started = performance.now()
+      const run = save(...args).finally(() => {
+        window.autosaveElapsed = performance.now() - started
+      })
+      window.autosaveRuns.push(run)
+      return run
+    }
+  })
   // A note rests ten times its last attempt's length before the next, and
   // slow disks make attempts long; the pill says what it waited on.
   const rested = async () => {
@@ -197,6 +211,11 @@ test('autosave preserves later edits, pauses on external changes, and never prom
       attempt = await app.evaluate(() => globalThis.attempt)
     }
     assert.notEqual(attempt, null, 'the last autosave attempt never ended')
+    // Finish the renderer callback before advancing its rest: main's reply
+    // precedes that bookkeeping, and a held save makes wall-clock waits unbounded.
+    await page.evaluate(() => Promise.all(window.autosaveRuns))
+    const elapsed = await page.evaluate(() => window.autosaveElapsed)
+    await page.clock.fastForward(10 * elapsed + 1000 + 2000)
     return { timeout: Math.max(6500, 10 * attempt + 1000 + 2000) }
   }
   const pillIs = async (text) => {

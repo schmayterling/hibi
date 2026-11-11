@@ -1,10 +1,24 @@
 import { useSyncExternalStore } from 'react'
 import { Select, SettingRow, Toggle } from '../../ui/Controls'
+import { useToasts } from '../../ui/Sonner'
 import { autosave, autosaveDelays } from './autosave'
 import { RecoverySettings } from './RecoverySettings'
 
 export function AutosaveSettings() {
   const settings = useSyncExternalStore(autosave.subscribe, autosave.snapshot)
+  const toasts = useToasts()
+  const save = (next: Parameters<typeof autosave.set>[0]) => {
+    try {
+      autosave.set(next)
+    } catch {
+      toasts.show({
+        message:
+          'Could not change autosave settings. Your previous settings are still in use.',
+        description: 'Check disk space and permissions, then try again.',
+        variant: 'error',
+      })
+    }
+  }
   return (
     <>
       <h2>Saving</h2>
@@ -17,9 +31,7 @@ export function AutosaveSettings() {
           <Toggle
             id="autosave-enabled"
             checked={settings.enabled}
-            onChange={(event) =>
-              autosave.set({ enabled: event.target.checked })
-            }
+            onChange={(event) => save({ enabled: event.target.checked })}
           />
         </SettingRow>
         <SettingRow id="autosave-delay" label="Save after">
@@ -27,9 +39,7 @@ export function AutosaveSettings() {
             id="autosave-delay"
             value={settings.delay}
             disabled={!settings.enabled}
-            onChange={(event) =>
-              autosave.set({ delay: Number(event.target.value) })
-            }
+            onChange={(event) => save({ delay: Number(event.target.value) })}
           >
             {autosaveDelays.map((delay) => (
               <option key={delay} value={delay}>

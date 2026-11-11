@@ -13,6 +13,7 @@ import {
   parser,
 } from '@lezer/markdown'
 import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
+import { footnoteLabel } from '../../../shared/marked-footnote-reference.ts'
 import { mappedPrefix } from '../../../shared/source-projection.ts'
 import { ChunkedMarkdownParser } from '../chunked-markdown.ts'
 import {
@@ -385,9 +386,9 @@ function definitionsIn(
         if (next >= 0) break
       }
       definitions.push({
-        label: doc
-          .sliceString(label.from + base, label.to + base)
-          .toLowerCase(),
+        label: footnoteLabel(
+          doc.sliceString(label.from + base, label.to + base),
+        ),
         offset: content - start,
       })
     },
@@ -850,7 +851,7 @@ export function defined(state: EditorState, label: string) {
   const index =
     state.field(footnoteDefinitions, false) ??
     state.facet(formattedOwner)?.field(footnoteDefinitions, false)
-  return !!index && countOf(index.labels, label.toLowerCase()) > 0
+  return !!index && countOf(index.labels, footnoteLabel(label)) > 0
 }
 
 /**
@@ -861,7 +862,7 @@ export function defined(state: EditorState, label: string) {
 export function definitionOf(state: EditorState, label: string) {
   const index = state.field(footnoteDefinitions, false)
   if (!index || index.stale) return null
-  const wanted = label.toLowerCase()
+  const wanted = footnoteLabel(label)
   let from = index.start
   for (const group of index.groups)
     for (const stretch of group.stretches) {

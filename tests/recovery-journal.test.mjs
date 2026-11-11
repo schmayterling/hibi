@@ -311,10 +311,7 @@ test('over a file changed outside, a copy opens apart and autosave cannot replac
 
   const second = await launch()
   await second.page.evaluate(() =>
-    localStorage.setItem(
-      'hibi:autosave',
-      JSON.stringify({ enabled: true, delay: 1000 }),
-    ),
+    window.hibi.setAutosavePreferences({ enabled: true, delay: 1000 }),
   )
   await second.page.reload()
   await waitForFormattedEditor(second.app, second.page)

@@ -22,7 +22,7 @@ the nested empty list, ordered item beginning with an empty line, and empty task
 
 ## other task projection limits and differences
 
-- `1. [ ] x` renders a checkbox in the formatted view, while the counter and rich schema keep `[ ]` as text. this is a projection limit for ordered tasks.
+- `1. [ ] x` renders a checkbox in the formatted view. the counter excludes the checkbox marker and counts `x`, including in loose and nested ordered lists.
 - `- [ ] # h`, with a space or tab after the checkbox, keeps `#` as text in both views. the counter re-lexes the first line as blocks and drops `#`; this is a projection limit.
 - `- [ ]\tbuy\n\t- [ ]\tnested` retains nested task structure in the formatted view and counter (2 / 14). the rich tokenizer mishandles tab indentation (2 / 17); this is an intended difference from rich.
 

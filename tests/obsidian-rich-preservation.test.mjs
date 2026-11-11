@@ -12,7 +12,12 @@ import {
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-async function openFormattedPreservation(t, original, addons = {}) {
+async function openFormattedPreservation(
+  t,
+  original,
+  addons = {},
+  autosave = false,
+) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-cm-preservation-'))
   const file = join(folder, 'note.md')
   const profile = join(folder, 'profile')
@@ -20,6 +25,7 @@ async function openFormattedPreservation(t, original, addons = {}) {
   await writeFile(join(profile, 'addons.json'), JSON.stringify(addons))
   await writeFile(file, original)
   const app = await electron.launch({
+    autosave,
     args: [resolve('.'), `--user-data-dir=${profile}`, file],
   })
   t.after(async () => {
@@ -199,12 +205,9 @@ test('formatted edits and autosave preserve exact Obsidian syntax and entities',
     `${spacing}\n\n${entities}` +
     '\n\n&nbsp;\n\na\nb\n\nSource: keep this text.\n'
   const { app, page, rich, file, cdp, expected, caret } =
-    await openFormattedPreservation(t, original)
+    await openFormattedPreservation(t, original, {}, true)
   await page.evaluate(() => {
-    localStorage.setItem(
-      'hibi:autosave',
-      JSON.stringify({ enabled: true, delay: 1000 }),
-    )
+    window.hibi.setAutosavePreferences({ enabled: true, delay: 1000 })
     localStorage.setItem('markdown-markers', 'false')
   })
   await page.reload()

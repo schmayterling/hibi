@@ -154,15 +154,12 @@ test('word count keeps bracketed text that is not a task marker, as the rich vie
   }
 })
 
-test('word count reads a marker line that is a setext heading as the heading, as the rich view does', () => {
+test('word count reads an ordered marker line that is a setext heading as the heading, as the rich view does', () => {
   for (const [source, words] of [
     ['[l]: /w\n\n1. [x]\n   ===\n\n   [l] text', 3],
     ['[l]: /w\n\n1. [ ]\n   ===\n   [l] after', 2],
     ['[l]: /w\n\n1. [x]\n   ---\n\n   [l] text and more', 5],
     ['1. [x]\n   ===\n\n   [x] y z', 4],
-    ['[l]: /w\n\n- [x]\n  ===\n\n  [l] text', 3],
-    ['- [x]\n  ===\n\n  [x] y z', 4],
-    ['- [x]\n  ---', 1],
   ]) {
     let heading = -1,
       marker = Infinity

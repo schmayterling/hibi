@@ -13,12 +13,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import {
-  autosaveOff,
-  electron,
-  waitForAsync,
-  waitForFormattedEditor,
-} from './electron.mjs'
+import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
 const windows = process.platform === 'win32'
@@ -129,9 +124,8 @@ async function open(t, { autosave = false, notes = ['note.md'] } = {}) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(20000)
   await waitForFormattedEditor(app, page)
-  // These tests hold manual saves; only the ones about autosave leave it on.
-  if (!autosave) await autosaveOff(app, page)
-  else {
+  // These tests hold manual saves; only the ones about autosave turn it on.
+  if (autosave) {
     await page.locator('[data-status-id="autosave"]').click()
     await page.getByRole('checkbox', { name: /^autosave$/i }).check()
     await page.getByLabel(/^save after$/i).selectOption('1000')

@@ -13,6 +13,7 @@ import {
   frozenSnapshot,
   overlayScrollbars,
 } from './frozen-oracle.mjs'
+import { harnessPage } from './harness-page.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const image =
@@ -100,10 +101,7 @@ before(
       },
     })
     const html = join(bundle, 'index.html')
-    await writeFile(
-      html,
-      '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-    )
+    await writeFile(html, harnessPage({ css: 'harness.css' }))
     const file = join(folder, 'notes', 'blocks.md')
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)

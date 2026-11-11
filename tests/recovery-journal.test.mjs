@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
-  autosaveOff,
   electron,
   openInDocumentEditor,
   stopElectronTree,
@@ -56,7 +55,6 @@ async function note(t, text = 'original') {
   const file = join(profile, 'note.md')
   await writeFile(file, text)
   const running = new Set()
-  let autosavePinned = false
   const copies = () =>
     readdir(join(profile, 'recovery')).catch((error) => {
       if (error.code === 'ENOENT') return []
@@ -109,10 +107,6 @@ async function note(t, text = 'original') {
             })),
         ),
       async open(text) {
-        if (!autosavePinned) {
-          await autosaveOff(app, page)
-          autosavePinned = true
-        }
         await pressShortcut(app, `${mod}+o`)
         await shows(text)
         await page.waitForFunction(

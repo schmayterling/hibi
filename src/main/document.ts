@@ -50,7 +50,7 @@ import {
   writeMarkdown,
   writeText,
 } from './files'
-import { recordVersions, sourceHash } from './history'
+import { historyProtectionError, recordVersions, sourceHash } from './history'
 import type { UnsavedNote } from './recovery-journal'
 import {
   flushUndoHistory,
@@ -963,20 +963,7 @@ async function protectPrevious(
   try {
     await recordVersions(destination, [previous], 'previous')
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    const reason =
-      code === 'ENOSPC' || code === 'EDQUOT'
-        ? 'The storage for Hibi’s app data is full.'
-        : code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
-          ? 'Hibi does not have permission to write history in its app data folder, or that folder is read-only.'
-          : 'Hibi could not write version history in its app data folder.'
-    throw Object.assign(
-      new Error(
-        `Hibi could not keep the previous version in history. ${reason} Your file is unchanged and your edits are still here. Save manually to choose whether to save without this version.`,
-        { cause: error },
-      ),
-      { code: 'EHISTORY' },
-    )
+    throw historyProtectionError(error)
   }
 }
 

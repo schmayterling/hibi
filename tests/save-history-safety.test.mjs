@@ -524,10 +524,13 @@ for (const mode of ['manual', 'quit']) {
     await waitWhileRunning(
       app,
       child,
-      ({ BrowserWindow }) =>
-        globalThis.historyPrompts.some((p) => p.type === 'error') ||
-        (BrowserWindow.getAllWindows()[0]?.isDocumentEdited() ?? false) ===
-          false,
+      mode === 'quit'
+        ? ({ BrowserWindow }) =>
+            !BrowserWindow.getAllWindows().length ||
+            globalThis.historyPrompts.some((p) => p.type === 'error')
+        : ({ BrowserWindow }) =>
+            globalThis.historyPrompts.some((p) => p.type === 'error') ||
+            !BrowserWindow.getAllWindows()[0].isDocumentEdited(),
     )
     assert.equal(await readFile(file, 'utf8'), 'new text')
     if (mode === 'quit')
@@ -575,7 +578,7 @@ test('unwritable history keeps autosave refusing with one lasting notice', {
   await page.clock.fastForward(1000)
   await waitForAsync(page, () => window.historyAttempts.length >= 1)
   const notice = page
-    .locator('.toast')
+    .locator('.toast:not([data-closing="true"])')
     .filter({ hasText: /previous version.*history/i })
   await notice.waitFor({ timeout: 8000 })
   await page.evaluate(() => {
@@ -586,7 +589,8 @@ test('unwritable history keeps autosave refusing with one lasting notice', {
   // The renderer acknowledges the reply before the next rest begins.
   await page.evaluate(() => Promise.resolve())
   const rest = await page.evaluate(() => window.historyAttempts[0])
-  await page.clock.fastForward(rest * 10 + 1001)
+  // A lasting held notice uses the existing 30-second retry gap as well as I/O rest.
+  await page.clock.fastForward(Math.max(rest * 10 + 1001, 30001))
   await waitForAsync(page, () => window.historyAttempts.length >= 2)
   assert.equal(await readFile(file, 'utf8'), 'original')
   assert.equal(
@@ -602,6 +606,7 @@ test('unwritable history keeps autosave refusing with one lasting notice', {
   await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), 'new text')
+  await notice.waitFor({ state: 'detached', timeout: 8000 })
   assert.equal(await notice.count(), 0)
 })
 

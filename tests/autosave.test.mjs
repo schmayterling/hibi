@@ -859,6 +859,7 @@ test('an attempt that hung for an hour does not stop autosave for ten', {
       return save(...args)
     })
   })
+  const runBetweenAttempts = await attemptClock(page)
   await page.clock.install()
   await page.clock.pauseAt(Date.now() + 60000)
   const typed = async (text) => {
@@ -875,8 +876,11 @@ test('an attempt that hung for an hour does not stop autosave for ten', {
   await page.clock.runFor(60 * 60 * 1000)
   await app.evaluate(() => globalThis.releaseHung())
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  // Main reports the note saved before the page hears back: the rest starts
+  // only when it does.
+  await waitForAsync(page, () => globalThis.autosaving === 0)
   await typed('after the hang')
-  await page.clock.runFor(5 * 60 * 1000)
+  await runBetweenAttempts(5 * 60 * 1000)
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), 'after the hang')
 })

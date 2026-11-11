@@ -1568,6 +1568,59 @@ function installQuoteState(
   }
 }
 
+// Marked's task pass, with its queue search resumed where the last one ended:
+// entries above the cursor failed the test and stay unchanged, and the entry it
+// stripped may still start with a marker, so each search starts on it.
+function readTasks(
+  lexer: Lexer,
+  list: Tokens.List,
+  tasks: boolean[],
+  rules: Tokenizer['rules']['other'],
+) {
+  const queue = lexer.inlineQueue
+  let cursor = queue.length - 1
+  list.items.forEach((item, index) => {
+    const first = item.tokens[0]
+    if (
+      !tasks[index] ||
+      (first?.type !== 'text' && first?.type !== 'paragraph')
+    )
+      return
+    item.task = true
+    item.text = item.text.replace(rules.listReplaceTask, '')
+    first.raw = first.raw.replace(rules.listReplaceTask, '')
+    first.text = first.text.replace(rules.listReplaceTask, '')
+    for (; cursor >= 0; cursor--)
+      if (rules.listIsTask.test(queue[cursor]!.src)) {
+        queue[cursor]!.src = queue[cursor]!.src.replace(
+          rules.listReplaceTask,
+          '',
+        )
+        break
+      }
+    const marker = rules.listTaskCheckbox.exec(item.raw)
+    if (!marker) return
+    const box: Tokens.Checkbox = {
+      type: 'checkbox',
+      raw: marker[0] + ' ',
+      checked: marker[0] !== '[ ]',
+    }
+    item.checked = box.checked
+    if (!list.loose) item.tokens.unshift(box)
+    else if ('tokens' in first && first.tokens) {
+      first.raw = box.raw + first.raw
+      first.text = box.raw + first.text
+      first.tokens.unshift(box)
+    } else
+      item.tokens.unshift({
+        type: 'paragraph',
+        raw: box.raw,
+        text: box.raw,
+        tokens: [box],
+      })
+  })
+}
+
 export class BlockTokenizer extends Tokenizer {
   override list(source: string, read = Tokenizer.prototype.list) {
     return withQuoteScan(this, () =>
@@ -1618,11 +1671,21 @@ export class BlockTokenizer extends Tokenizer {
     // Marked adds four source spaces to lazy underlines. Keep the bytes and
     // reject those heading candidates during item lexing instead.
     if (nativeSetext) lheading.test = () => false
+    // Marked restarts its task marker search at the end of the inline queue
+    // for every task item. Record the answers and strip with one cursor below.
+    const isTask = rules.other.listIsTask,
+      tasks: boolean[] = []
+    const listIsTask = new RegExp(isTask.source, isTask.flags)
+    listIsTask.test = (text) => {
+      tasks.push(isTask.test(text))
+      return false
+    }
     this.rules = {
       ...rules,
       block: { ...rules.block, lheading },
       other: {
         ...rules.other,
+        listIsTask,
         listItemRegex: (bullet) => {
           const rule = rules.other.listItemRegex(bullet),
             exec = rule.exec
@@ -1711,6 +1774,8 @@ export class BlockTokenizer extends Tokenizer {
         lexer.blockTokens = nested
         const firstColumn = columns.length
         const group = read.call(this, source.slice(from))
+        if (group) readTasks(lexer, group, tasks, rules.other)
+        tasks.length = 0
         if (!group) break
         const bound = leafListEnd(
           group,

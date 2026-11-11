@@ -133,3 +133,36 @@ test('footnotes after list headings keep indented and lazy columns distinct', ()
     assert.equal(body(parser().parse(source)), body(oracle(source)), source)
   }
 })
+
+for (const prefix of [
+  '- a\n  - b\n    ===\n',
+  '- a\n  1. b\n     ===\n',
+  '- a\n  - b\n    - c\n      ===\n',
+  '- a\n  > - b\n  >   ===\n',
+  '- a\n  > - b\n  >   - c\n  >     ===\n',
+  '- a\n  > > - b\n  > >   ===\n',
+  '- a\n  > - b\n  >   > - c\n  >   >   ===\n',
+  '- a\n  > q\n',
+  '- a\n  > > q\n',
+  '- a\n  > - b\n  >   > q\n',
+])
+  for (const text of ['g\nlazy\n    ===', 'g\n\t===', 'g\n    h\n \t===']) {
+    test('nested footnote columns ' + JSON.stringify(prefix + text), () => {
+      const source = prefix + '[^2]: ' + text + '\n\nx[^2]'
+      assert.equal(body(parser().parse(source)), body(oracle(source)), source)
+    })
+  }
+
+test('duplicate footnote markers keep their physical quote ownership', () => {
+  const source = '- a\n  > - b\n  >   ===\n[^2]: g\n    ===\n\nx[^2]'
+  assert.equal(body(parser().parse(source)), body(oracle(source)), source)
+  const duplicate =
+    '- a\n  > - b\n  >   ===\n  > [^2]: g\n  >     ===\n[^2]: g\n===\n\nx[^2]'
+  // Main also loses inline text in this duplicate case; guard column ownership.
+  const heading = (html) => body(html)?.match(/^<h[12]>/)?.[0]
+  assert.equal(
+    heading(parser().parse(duplicate)),
+    heading(oracle(duplicate)),
+    duplicate,
+  )
+})

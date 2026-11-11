@@ -88,3 +88,64 @@ test('one MiB lazy footnote stays under 20 cpu seconds', () => {
   assert.equal(tokens[0].tokens[0].text, source.slice(6).trimEnd())
   assert.ok(user + system < 20_000_000, `${(user + system) / 1e6} cpu seconds`)
 })
+
+test('nested footnote physical line indexes scan bounded source units', (t) => {
+  for (const count of [32, 64, 128, 256]) {
+    const source =
+      '- a\n  - b\n    ===\n' +
+      Array.from(
+        { length: count },
+        (_, i) => '[^' + i + ']: f\n    ===\n',
+      ).join('')
+    const indexOf = String.prototype.indexOf
+    let units = 0
+    const probe = t.mock.method(
+      String.prototype,
+      'indexOf',
+      function (marker, from = 0) {
+        const at = indexOf.call(this, marker, from)
+        if (marker === '\n')
+          units += Math.max(0, (at < 0 ? this.length : at + 1) - from)
+        return at
+      },
+    )
+    const parser = new Marked(blockMarkdown, markedGithubFootnote())
+    let tokens
+    try {
+      tokens = parser.lexer(source)
+    } finally {
+      probe.mock.restore()
+    }
+    let definitions = 0
+    parser.walkTokens(tokens, (token) => {
+      if (token.type === 'footnoteDef') {
+        definitions++
+        assert.equal(token.tokens[0].type, 'heading')
+      }
+    })
+    assert.equal(definitions, count)
+    assert.ok(
+      units <= source.length * 80,
+      units + ' physical units / ' + source.length,
+    )
+  }
+})
+
+test('one MiB nested footnote preserves genuine headings under 20 cpu seconds', (t) => {
+  const unit = 'b\n    ===\n',
+    count = Math.ceil(2 ** 20 / unit.length)
+  const source = '- a\n  - b\n    ===\n[^2]: g\n' + unit.repeat(count)
+  const start = process.cpuUsage()
+  const parser = new Marked(blockMarkdown, markedGithubFootnote())
+  let definition
+  parser.walkTokens(parser.lexer(source), (token) => {
+    if (token.type === 'footnoteDef') definition = token
+  })
+  assert.equal(definition.tokens.length, count)
+  assert.ok(definition.tokens.every((token) => token.type === 'heading'))
+  const { user, system } = process.cpuUsage(start)
+  t.diagnostic(
+    JSON.stringify({ cpuMs: (user + system) / 1000, bytes: source.length }),
+  )
+  assert.ok(user + system < 20_000_000, (user + system) / 1e6 + ' cpu seconds')
+})

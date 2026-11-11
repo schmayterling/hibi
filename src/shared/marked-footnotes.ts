@@ -17,7 +17,7 @@ import {
   rememberFootnote,
 } from './marked-footnote-reference.ts'
 import { inlineStart } from './marked-inline-start.ts'
-import { leafBlock } from './marked-leaf-blocks.ts'
+import { lazyBlock, leafBlock } from './marked-leaf-blocks.ts'
 
 /** Bound definitions with Marked's list grammar before the footnote renderer stores them. */
 export function markedGithubFootnote(
@@ -45,7 +45,15 @@ export function markedGithubFootnote(
   // retains it between documents exactly as the dependency does.
   let stored = new Map<string, Tokens.Generic>()
   const read: typeof readDefinition = function (source, tokens) {
-    const token = readDefinition.call(this, source, tokens)
+    // The body's block read leaves the lexer at top level; a list item's
+    // following lines must still read as tight text.
+    const top = this.lexer.state.top
+    let token: ReturnType<typeof readDefinition>
+    try {
+      token = readDefinition.call(this, source, tokens)
+    } finally {
+      this.lexer.state.top = top
+    }
     if (token) {
       rememberFootnote(this.lexer, String(token.label))
       const key = String(token.label).toLowerCase()
@@ -60,6 +68,15 @@ export function markedGithubFootnote(
     if (!body) return read.call(this, source, tokens)
     const next = /\n {0,3}\[\^[^\]\s]+\]:/.exec(body)
     if (next) body = body.slice(0, next.index)
+    // After an empty first line no paragraph is open, so a line indented less
+    // than four columns cannot continue the definition lazily.
+    const first = body.startsWith('\n') && /\n([ \t]*)\S/.exec(body)
+    if (first && first[1]!.replace(/\t/g, '    ').length < 4)
+      return read.call(
+        this,
+        source.slice(0, marker[0].length + first.index),
+        tokens,
+      )
     // An empty first line still needs a four-column continuation indent.
     const prefix = '-   ' + (body.startsWith('\n') ? '\u200b' : '')
     const tokenizer = new BlockTokenizer()
@@ -99,9 +116,10 @@ export function markedGithubFootnote(
       lexer.blockTokens = blockTokens
     }
     const last = token?.tokens?.at(-1)
-    return token && last && !['paragraph', 'text'].includes(last.type)
-      ? leafBlock(token)
-      : token
+    if (!token || !last) return token
+    if (!['paragraph', 'text'].includes(last.type)) return leafBlock(token)
+    // A quote's lazy line continues this definition's last paragraph.
+    return lazyBlock(token, (more) => definition.tokenizer.call(this, more, []))
   }
   const hooks = extension.hooks!
   return {

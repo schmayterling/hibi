@@ -56,7 +56,7 @@ export function markedGithubFootnote(
     // The dependency dedents before parsing; retain which lines were lazy.
     lexer.blockTokens = (...args) => {
       lexer.blockTokens = blockTokens
-      return continuationTokens(lexer, physical, args[0], () =>
+      return continuationTokens(lexer, source, args[0], () =>
         Reflect.apply(lexer.blockTokens, lexer, args),
       )
     }

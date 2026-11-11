@@ -275,7 +275,17 @@ function withTextMerges<T>(
 const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
 const scanningQuotes = new WeakSet<Tokenizer>()
 /** Underlines kept verbatim by dedenting are lazy, so cannot form headings. */
-function lazySetextEnds(source: string, text: string, physical = 0) {
+const listUnderlines = new WeakMap<
+  Tokenizer,
+  { text: string; ends: Set<number>; footnotes: Set<number> }
+>()
+function lazySetextEnds(
+  source: string,
+  text: string,
+  physical = 0,
+  parent?: Set<number>,
+  scope?: { ends: Set<number>; footnotes: Set<number> },
+) {
   const ends = new Set<number>()
   if (/\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)/.test(text))
     for (let at = 0, row = 0; at <= text.length; row++) {
@@ -284,10 +294,17 @@ function lazySetextEnds(source: string, text: string, physical = 0) {
       const next = source.indexOf('\n', physical)
       const line = text.slice(at, end)
       const written = source.slice(physical, next < 0 ? undefined : next)
+      if (scope) {
+        if (line === written && /^ {0,3}\[\^/.test(line))
+          scope.footnotes.add(text.length - at)
+        if (/^ {0,3}(?:=+|-+)[ \t]*$/.test(written))
+          scope.ends.add(text.length - at)
+      }
       if (
         row &&
         /^ {0,3}(?:=+|-+)[ \t]*$/.test(line) &&
-        (line === written || (lf < 0 && line === written.trimEnd()))
+        (line === written || (lf < 0 && line === written.trimEnd())) &&
+        (!parent || parent.has(source.length - physical))
       )
         ends.add(text.length - at)
       if (lf < 0) break
@@ -306,7 +323,16 @@ export function continuationTokens<T>(
 ) {
   const tokenizer = lexer.options.tokenizer!,
     previous = lazyUnderlines.get(tokenizer),
-    ends = lazySetextEnds(physical, text)
+    parent = listUnderlines.get(tokenizer),
+    ends = lazySetextEnds(
+      physical,
+      text,
+      0,
+      parent?.text === setextFrames.get(tokenizer)?.source &&
+        parent?.footnotes.has(physical.length)
+        ? parent.ends
+        : undefined,
+    )
   if (ends.size) lazyUnderlines.set(tokenizer, { text, ends })
   else lazyUnderlines.delete(tokenizer)
   const top = lexer.state.top
@@ -1551,10 +1577,13 @@ export class BlockTokenizer extends Tokenizer {
         scope.indent = parent!.indent + columns[current]! - base
       }
       const previous = lazyUnderlines.get(this),
+        parentUnderlines = listUnderlines.get(this),
         text = args[0],
+        lines = { text, ends: new Set<number>(), footnotes: new Set<number>() },
         ends = nativeSetext
-          ? lazySetextEnds(source, text, itemsAt[current]!)
+          ? lazySetextEnds(source, text, itemsAt[current]!, undefined, lines)
           : new Set<number>()
+      listUnderlines.set(this, lines)
       if (ends.size) lazyUnderlines.set(this, { text, ends })
       else lazyUnderlines.delete(this)
       try {
@@ -1567,6 +1596,8 @@ export class BlockTokenizer extends Tokenizer {
       } finally {
         if (previous) lazyUnderlines.set(this, previous)
         else lazyUnderlines.delete(this)
+        if (parentUnderlines) listUnderlines.set(this, parentUnderlines)
+        else listUnderlines.delete(this)
         containerColumns.set(this, base)
         lexer.blockTokens = nested
       }

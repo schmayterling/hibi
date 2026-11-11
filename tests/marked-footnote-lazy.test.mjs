@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Marked } from 'marked'
+import { Lexer, Marked } from 'marked'
 import { micromark } from 'micromark'
 import { gfm, gfmHtml } from 'micromark-extension-gfm'
-import { blockMarkdown } from '../src/shared/marked-blocks.ts'
+import {
+  BlockTokenizer,
+  blockMarkdown,
+  continuationTokens,
+} from '../src/shared/marked-blocks.ts'
 import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 
 const parser = () => new Marked(blockMarkdown, markedGithubFootnote())
@@ -12,7 +16,7 @@ const oracle = (source) =>
 const body = (html) =>
   html
     .match(
-      /<ol>\s*<li id="(?:user-content-)?fn-(?:1|a)">\s*([\s\S]*)\n<\/li>\s*<\/ol>/,
+      /<ol>\s*<li id="(?:user-content-)?fn-(?:1|2|a)">\s*([\s\S]*)\n<\/li>\s*<\/ol>/,
     )?.[1]
     .replace(/\s*<a [^>]*data-footnote-backref[^>]*>[\s\S]*?<\/a>/g, '')
     .replaceAll('user-content-fn-', 'fn-')
@@ -70,3 +74,62 @@ for (const prefix of ['', '- a\n\n']) {
     })
   }
 }
+
+for (const prefix of [
+  '- a\n  ===\n',
+  '- a\n    ===\n',
+  '- a\n    ---\n',
+  '1. a\n    ===\n',
+])
+  for (const text of [
+    'g\nlazy\n    ===',
+    'g\n\t===',
+    'g\n    h\n\t===',
+    'g\nlazy\n\t===',
+  ]) {
+    const source = prefix + '[^2]: ' + text + '\n\nx[^2]'
+    test(`footnote after setext list ${JSON.stringify(prefix + text)} keeps its heading`, () => {
+      const expected = body(oracle(source))
+      assert.match(expected, /^<h1>/)
+      assert.equal(body(parser().parse(source)), expected, source)
+    })
+  }
+
+test('a separating blank keeps footnote ownership independent', () => {
+  for (const prefix of ['', '- a\n    ===\n\n'])
+    for (const text of [
+      'g\nlazy\n    ===',
+      'g\n\t===',
+      'g\n    h\n\t===',
+      'g\nlazy\n\t===',
+    ]) {
+      const source = prefix + '[^2]: ' + text + '\n\nx[^2]'
+      assert.equal(body(parser().parse(source)), body(oracle(source)), source)
+    }
+})
+
+test('throwing continuation reads restore lexer state and block reader', () => {
+  const lexer = new Lexer({ tokenizer: new BlockTokenizer() })
+  const read = lexer.blockTokens
+  lexer.state.top = false
+  assert.throws(
+    () =>
+      continuationTokens(lexer, '[^1]: f\n===', 'f\n===', () => {
+        throw new Error('stopped body')
+      }),
+    /stopped body/,
+  )
+  assert.equal(lexer.state.top, false)
+  assert.equal(lexer.blockTokens, read)
+  assert.equal(lexer.lex('fresh\n===')[0].type, 'heading')
+})
+
+test('footnotes after list headings keep indented and lazy columns distinct', () => {
+  for (const indent of ['', ' ', '  ', '   ', '    ', '\t']) {
+    const source =
+      '- a\n  ===\n[^2]: g\nlazy\n' +
+      indent +
+      '===\n[^3]: next\n    ===\n\nx[^2] y[^3]'
+    assert.equal(body(parser().parse(source)), body(oracle(source)), source)
+  }
+})

@@ -320,7 +320,7 @@ const revealed = Annotation.define<boolean>()
 const scrollTarget = (EditorView.scrollIntoView(0).value as object).constructor
 
 /** Whether a transaction asks the view to scroll, other than to a reading position. */
-function asksScroll(transaction: Transaction) {
+export function asksScroll(transaction: Transaction) {
   return (
     !transaction.annotation(revealed) &&
     (transaction.scrollIntoView ||

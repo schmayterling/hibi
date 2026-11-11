@@ -15,3 +15,14 @@ export function ownScroll<T>(write: () => T): T {
 }
 
 export const inOwnScroll = () => depth > 0
+
+/** Runs code an addon or another script handed hibi as not hibi's own. */
+export function foreignScroll<T>(run: () => T): T {
+  const outer = depth
+  depth = 0
+  try {
+    return run()
+  } finally {
+    depth = outer
+  }
+}

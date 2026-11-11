@@ -1,6 +1,8 @@
+import type { Transaction } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
-import { inOwnScroll, ownScroll } from './own-scroll'
+import { foreignScroll, inOwnScroll, ownScroll } from './own-scroll'
+import { asksScroll } from './reading-position'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown caret alignment stays active even when linked scrolling is disabled. */
@@ -134,9 +136,13 @@ export function linkScroll(
   const record = () => {
     if (!syncScrolling && aligning) placed = measure()
   }
-  // A script scrolling a pane ends the alignment where it writes. Hibi's own
-  // corrections write inside ownScroll, as do the panes' views measuring and
-  // focusing, which keep their place; the browser's anchoring writes nothing.
+  // While an alignment holds, each pane is where hibi's own corrections put
+  // it: the panes' views measuring and focusing, reading-position keeping its
+  // place, and this alignment's writes. A pane anywhere else was scrolled by
+  // someone else: a script writing to it, a descendant scrolled into view, a
+  // scroll command moving no caret, an addon's measure. The browser keeps no
+  // place of its own meanwhile.
+  const placedAt = new Map<HTMLElement, number>()
   let unguard: (() => void) | null = null
   const guard = () => {
     if (syncScrolling || unguard) return
@@ -146,61 +152,130 @@ export function linkScroll(
     )
     if (!scrollTop?.get || !scrollTop.set) return
     const { get, set } = scrollTop
-    const foreign = () => {
-      if (!inOwnScroll()) disarm()
-    }
     const undo: (() => void)[] = []
+    // Puts back whatever the object had of its own, as SourceEditor's measure.
+    const patch = (target: object, name: string, own: PropertyDescriptor) => {
+      const before = Object.getOwnPropertyDescriptor(target, name)
+      Object.defineProperty(target, name, { configurable: true, ...own })
+      const installed = Object.getOwnPropertyDescriptor(target, name)
+      undo.push(() => {
+        const now = Object.getOwnPropertyDescriptor(target, name)
+        // Replaced since by its owner: theirs stays.
+        if (now?.value !== installed?.value || now?.set !== installed?.set)
+          return
+        if (before) Object.defineProperty(target, name, before)
+        else delete (target as Record<string, unknown>)[name]
+      })
+    }
+    const wrote = (pane: HTMLElement) => {
+      if (inOwnScroll()) placedAt.set(pane, get.call(pane))
+      else disarm()
+    }
     for (const pane of [first, second]) {
-      Object.defineProperty(pane, 'scrollTop', {
-        configurable: true,
+      placedAt.set(pane, get.call(pane))
+      patch(pane, 'scrollTop', {
         get() {
           return get.call(this)
         },
         set(value: number) {
-          foreign()
           set.call(this, value)
+          wrote(pane)
         },
       })
       for (const name of ['scroll', 'scrollTo', 'scrollBy'] as const) {
         const method = Element.prototype[name] as (...args: unknown[]) => void
-        Object.defineProperty(pane, name, {
-          configurable: true,
+        patch(pane, name, {
           writable: true,
           value(this: Element, ...args: unknown[]) {
-            foreign()
             method.apply(this, args)
+            wrote(pane)
           },
         })
       }
+      // Capturing, before the pane's view measures in its own listener.
+      const moved = (event: Event) => {
+        if (event.target !== pane) return
+        const top = get.call(pane)
+        const at = placedAt.get(pane) ?? top
+        if (Math.abs(top - at) < 1) return
+        // Content shrinking under a pane at its end pulls the end into view.
+        if (top < at && top >= pane.scrollHeight - pane.clientHeight - 1) {
+          placedAt.set(pane, top)
+          return
+        }
+        disarm()
+      }
+      pane.addEventListener('scroll', moved, { capture: true, passive: true })
+      const anchor = pane.style.overflowAnchor
+      pane.style.overflowAnchor = 'none'
       undo.push(() => {
-        for (const name of ['scrollTop', 'scroll', 'scrollTo', 'scrollBy'])
-          delete (pane as unknown as Record<string, unknown>)[name]
+        pane.removeEventListener('scroll', moved, true)
+        pane.style.overflowAnchor = anchor
       })
       const content = pane.querySelector('.cm-content')
       const view = content && sourceView(content)
       if (!view) continue
+      const methods = view as unknown as Record<
+        string,
+        (...args: unknown[]) => unknown
+      >
       for (const name of ['measure', 'focus'] as const) {
         // ponytail: measure is the view's own entry to its measure pass, not
         // public API; the source-anchor test fails if the view stops calling it.
-        const method = (
-          view as unknown as Record<string, (...args: unknown[]) => void>
-        )[name]
+        const method = methods[name]
         if (!method) continue
-        Object.defineProperty(view, name, {
-          configurable: true,
+        patch(view, name, {
           writable: true,
           value(this: EditorView, ...args: unknown[]) {
             return ownScroll(() => method.apply(this, args))
           },
         })
-        undo.push(() => {
-          delete (view as unknown as Record<string, unknown>)[name]
-        })
       }
+      // What others ask of a measure is theirs, even inside the view's.
+      const request = methods.requestMeasure
+      type Request = {
+        read: (view: EditorView) => unknown
+        write?: (measured: unknown, view: EditorView) => void
+      }
+      const theirs = new WeakMap<Request, Request>()
+      const foreign = (asked: Request): Request => ({
+        ...asked,
+        read: (view) => foreignScroll(() => asked.read(view)),
+        write: (measured, view) =>
+          foreignScroll(() => asked.write?.(measured, view)),
+      })
+      if (request)
+        patch(view, 'requestMeasure', {
+          writable: true,
+          value(this: EditorView, asked?: Request) {
+            if (!asked) return request.call(this)
+            const wrapped = theirs.get(asked) ?? foreign(asked)
+            theirs.set(asked, wrapped)
+            return request.call(this, wrapped)
+          },
+        })
+      // A scroll command that moves no caret is a scroll, not a correction.
+      const update = methods.update
+      if (update)
+        patch(view, 'update', {
+          writable: true,
+          value(this: EditorView, transactions: readonly Transaction[]) {
+            if (
+              transactions.some(
+                (transaction) =>
+                  asksScroll(transaction) &&
+                  (!transaction.selection ||
+                    transaction.selection.eq(transaction.startState.selection)),
+              )
+            )
+              disarm()
+            return update.call(this, transactions)
+          },
+        })
     }
     unguard = () => {
       unguard = null
-      for (const step of undo) step()
+      for (const step of undo.reverse()) step()
     }
   }
   const disarm = () => {
@@ -212,7 +287,7 @@ export function linkScroll(
   }
   // Within a fraction of a pixel: a scroll of half a pixel still counts.
   const moved = (a: number, b: number) => Math.abs(a - b) > 0.25
-  /** Realigns after layout under the aligned lines; ends on a scroll. */
+  /** Realigns after layout under the aligned lines. */
   const check = () => {
     const was = placed
     if (!aligning || !was) return
@@ -226,7 +301,6 @@ export function linkScroll(
       moved(a.line, b.line) ||
       (a.drawn !== null && b.drawn !== null && moved(a.drawn, b.drawn))
     if (panes.some((pane) => shifted(now[pane], was[pane]))) schedule()
-    else if (panes.some((pane) => moved(now[pane].top, was[pane].top))) disarm()
   }
   const sync = () => {
     frame = 0
@@ -286,6 +360,8 @@ export function linkScroll(
     if (!changed && !deliberate) return
     aligning = true
     guard()
+    // A moved caret's own scroll, by the browser or the view, comes with it.
+    for (const pane of [first, second]) placedAt.set(pane, pane.scrollTop)
     placed = null
     schedule()
   }

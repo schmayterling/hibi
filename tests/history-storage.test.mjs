@@ -699,10 +699,11 @@ test('a copy unreadable during a rebuild stops it, and stays for the next launch
   for (const code of ['EMFILE', 'EACCES']) {
     const second = await runtime(t, root)
     let failed = false
-    second.state.failRead = (path) =>
-      !failed && path.endsWith(`${one.id}.md`)
-        ? ((failed = true), code)
-        : undefined
+    second.state.failRead = (path) => {
+      if (failed || !path.endsWith(`${one.id}.md`)) return undefined
+      failed = true
+      return code
+    }
     await assert.rejects(second.api.listVersions(file), { code })
     assert.equal(
       await fs.readFile(join(folder, 'index.json'), 'utf8'),

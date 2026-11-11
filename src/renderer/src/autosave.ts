@@ -13,7 +13,14 @@ export { autosaveDelays }
 const key = 'hibi:autosave'
 const preferences = stored<Preferences>(
   key,
-  () => window.hibi.getAutosavePreferences(localStorage.getItem(key)),
+  () => {
+    // A failed read must not stop the app from starting; off writes nothing.
+    try {
+      return window.hibi.getAutosavePreferences(localStorage.getItem(key))
+    } catch {
+      return { enabled: false, delay: 2000 }
+    }
+  },
   JSON.stringify,
   (value) => window.hibi.setAutosavePreferences(value),
 )

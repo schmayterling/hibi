@@ -341,12 +341,18 @@ app.setName('hibi')
 if (process.platform === 'darwin')
   systemPreferences.setUserDefault('ApplePressAndHoldEnabled', 'boolean', false)
 app.enableSandbox()
-// Chromium's bounce-tracking database (DIPS) guards web browsing, not an
-// editor. Quit waits for its background sqlite writes, which a busy disk can
-// stall indefinitely. Keep any features already disabled on the command line.
+// Quit waits for Chromium to finish creating two web-only sqlite stores, and a
+// busy disk can stall that indefinitely: bounce-tracking mitigation (DIPS) and
+// sites' declared reliability reports (DeclarativePerformanceObserver; the
+// script PerformanceObserver API is separate). Chromium deletes a DIPS file an
+// older profile kept. Keep any features already disabled on the command line.
 app.commandLine.appendSwitch(
   'disable-features',
-  [app.commandLine.getSwitchValue('disable-features'), 'DIPS']
+  [
+    app.commandLine.getSwitchValue('disable-features'),
+    'DIPS',
+    'DeclarativePerformanceObserver',
+  ]
     .filter(Boolean)
     .join(','),
 )

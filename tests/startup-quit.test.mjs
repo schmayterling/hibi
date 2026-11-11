@@ -435,10 +435,10 @@ test('the could-not-start dialog quits on SIGTERM without leaving Electron behin
   assert.deepEqual(await survivors(fixture.profile), [])
 })
 
-test('quit never waits on Chromium bounce-tracking writes', {
+test('quit never waits on Chromium web-only database writes', {
   timeout: 30000,
 }, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-bounce-tracking-'))
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-web-databases-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -453,13 +453,31 @@ test('quit never waits on Chromium bounce-tracking writes', {
   const disabled = await app.evaluate(({ app }) =>
     app.commandLine.getSwitchValue('disable-features').split(','),
   )
-  assert.ok(disabled.includes('DIPS'), disabled.join())
+  for (const feature of ['DIPS', 'DeclarativePerformanceObserver'])
+    assert.ok(disabled.includes(feature), disabled.join())
   // Features the launcher disabled stay disabled.
   assert.ok(disabled.includes('Translate'), disabled.join())
+  // The script API is separate from Chromium's declared reports.
+  assert.equal(
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const observer = new PerformanceObserver((list) => {
+            observer.disconnect()
+            resolve(list.getEntriesByName('hibi:observed').length)
+          })
+          observer.observe({ entryTypes: ['mark'] })
+          performance.mark('hibi:observed')
+        }),
+    ),
+    1,
+  )
   open = false
   await app.close()
   assert.deepEqual(
-    (await readdir(profile)).filter((name) => name.startsWith('DIPS')),
+    (await readdir(profile)).filter((name) =>
+      /^(DIPS|declarative_performance_observer\.db)/.test(name),
+    ),
     [],
   )
 })

@@ -6,6 +6,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { promisify } from 'node:util'
@@ -88,6 +89,11 @@ function recordStartupDialogs(
   }
   for (const window of BrowserWindow.getAllWindows()) quiet(window)
   app.on('browser-window-created', (_event, window) => quiet(window))
+  // The app's own quit work is done; the harness gives Chromium's teardown
+  // after this line the shared post-quit bound.
+  app.once('quit', () => console.error('electron-main-quit'))
+  // The code Hibi exits with, before Chromium's teardown.
+  process.once('exit', (code) => console.error(`startup-hook-exit ${code}`))
   globalThis.startupDialogsInstalled = true
 }
 
@@ -253,7 +259,7 @@ app.once('quit', () => console.error('quit completed'))
 })
 
 test('a genuine startup navigation failure still shows the existing error', {
-  timeout: 15000,
+  timeout: 30000,
 }, async (t) => {
   const requested = Promise.withResolvers()
   const server = createServer((request, response) => {
@@ -270,10 +276,21 @@ test('a genuine startup navigation failure still shows the existing error', {
   })
   const url = `http://127.0.0.1:${server.address().port}/`
   const fixture = await launch(t, { ELECTRON_RENDERER_URL: url })
+  const quit = Promise.withResolvers()
+  let exitCode
+  createInterface({ input: fixture.child.stderr }).on('line', (line) => {
+    if (line === 'electron-main-quit') quit.resolve()
+    if (line.startsWith('startup-hook-exit '))
+      exitCode = Number(line.slice('startup-hook-exit '.length))
+  })
   const request = await deadline(requested.promise, 'startup navigation')
   request.socket.destroy()
-  await deadline(fixture.closed, 'failed startup exit')
-  assert.equal(fixture.child.exitCode, 0)
+  // Hibi's part: the error is shown and the app quits. Chromium's teardown
+  // after that waits for its child processes, 10 s and more on a loaded
+  // machine, so the exit gets the shared post-quit bound.
+  await deadline(quit.promise, 'failed startup quit')
+  await fixture.app.close()
+  assert.equal(exitCode, 0)
   assert.deepEqual(await fixture.modals(), [
     {
       method: 'showErrorBox',

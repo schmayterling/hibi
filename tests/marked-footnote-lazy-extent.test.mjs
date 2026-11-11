@@ -29,6 +29,9 @@ test('footnote definitions in quotes continue through lazy lines', () => {
     '> [^1]: *f*\ng\nh\n\nx[^1]',
     '> - [^1]: f\ng\n\nx[^1]',
     '> > [^1]: f\ng\n\nx[^1]',
+    // Text after an empty definition in a tight item stays tight.
+    '- [^1]:\n  b\n\nx[^1]',
+    '- [^1]:\n- b\n\nx[^1]',
   ])
     assert.equal(shape(exported(source)), shape(oracle(source)), source)
 })
@@ -61,7 +64,7 @@ test('footnote export agrees with word count on lazy definition lines', () => {
     '> [^1]: f\ng\n\nx[^1]',
     '> - b\n>   ===\n> [^2]: *g*\n[^3]: z\n\nx[^2] y[^3]',
     '[^1]:\n  x\n\ny[^1]',
-    '- b\n> - [^1]:\n    x[^1] y[^2]\n- [^1]:\n\nx[^1] y[^2] z[^A] w[^a]',
+    '- b\n> - [^1]:\n    x y\n- [^2]:\n\nx[^1] y[^2]',
   ])
     assert.equal(
       words(exported(source)),

@@ -12,6 +12,7 @@ import {
   textExtrasMarkdown,
 } from '../src/addons/text-extras/syntax.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
+import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 
 const hints = [
   // A `$$` line without another `$`, which a line follows.
@@ -235,4 +236,18 @@ test('a line where a block extension starts ends lazy quote lines and setext tex
   ])
   // Only a `$$` line that a line follows opens a block.
   assert.deepEqual(blocks('> a\n$$'), ['blockquote:> a\n$$'])
+})
+
+test('block start hints stop at starts registered after the first parse', () => {
+  const markdown = new Marked(blockMarkdown, markedGithubFootnote())
+  markdown.lexer('> a\n')
+  markdown.use(mathTokens, textExtrasMarkdown)
+  for (const count of [500, 4000]) {
+    blockStartCounters.calls = blockStartCounters.units = 0
+    markdown.lexer('> a\n> $$\n> x\n> $$\n> -# s\n'.repeat(count))
+    assert.ok(
+      blockStartCounters.units <= blockStartCounters.calls * 8,
+      `${blockStartCounters.units} units / ${blockStartCounters.calls} calls`,
+    )
+  }
 })

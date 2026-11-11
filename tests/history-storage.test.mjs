@@ -36,6 +36,8 @@ async function runtime(t, previous) {
     bytesRead: 0,
     yields: 0,
     indexReadErrors: [],
+    // Holds the next index read after it has read the text.
+    indexReadHold: null,
   }
   const mocks = {
     electron: { app: { getPath: () => root } },
@@ -46,7 +48,14 @@ async function runtime(t, previous) {
           String(path) === join(folder, 'index.json') &&
           state.indexReadErrors.shift()
         if (code) throw Object.assign(new Error(`${code}: injected`), { code })
-        return fs.readFile(path, ...args)
+        const read = await fs.readFile(path, ...args)
+        const hold =
+          String(path) === join(folder, 'index.json') && state.indexReadHold
+        if (hold) {
+          state.indexReadHold = null
+          await hold
+        }
+        return read
       },
       open: async (path, ...args) => {
         const handle = await fs.open(path, ...args)
@@ -713,6 +722,44 @@ test('a rebuild racing a save lists the new copy and sets the damage aside once'
     ),
   )
   assert.deepEqual(texts.sort(), ['before', 'during'])
+  assert.equal(
+    (await fs.readdir(folder)).filter((n) =>
+      n.startsWith('index.json.corrupt-'),
+    ).length,
+    1,
+  )
+})
+
+test('a reader that saw the damage after a rebuild finished keeps the rebuilt index', {
+  timeout: 20000,
+}, async (t) => {
+  const { api, file, folder, state } = await runtime(t)
+  await api.recordVersions(file, ['before'])
+  await fs.writeFile(join(folder, 'index.json'), '{not json')
+  let release
+  state.indexReadHold = new Promise((resolve) => {
+    release = resolve
+  })
+  // History read the damaged text and is held before acting on it.
+  const reading = api.listVersions(file)
+  while (state.indexReadHold) await new Promise((done) => setImmediate(done))
+  await api.recordVersions(file, ['asked for'])
+  release()
+  await reading
+  const listed = await api.listVersions(file)
+  const asked = await Promise.all(
+    listed.map(async ({ id, automatic }) => ({
+      text: await api.previewVersion(file, id),
+      automatic,
+    })),
+  )
+  assert.deepEqual(
+    asked.find(({ text }) => text === 'asked for'),
+    {
+      text: 'asked for',
+      automatic: undefined,
+    },
+  )
   assert.equal(
     (await fs.readdir(folder)).filter((n) =>
       n.startsWith('index.json.corrupt-'),

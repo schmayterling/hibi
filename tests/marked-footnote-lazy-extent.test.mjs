@@ -73,3 +73,24 @@ test('footnote export agrees with word count on lazy definition lines', () => {
       source,
     )
 })
+
+test('footnote lazy re-reads in quotes stay linear in the text they read', () => {
+  for (const count of [500, 4000]) {
+    const extension = markedGithubFootnote()
+    const definition = extension.extensions.find(
+      (item) => item.name === 'footnoteDef',
+    )
+    const read = definition.tokenizer
+    let scanned = 0
+    definition.tokenizer = function (source, tokens) {
+      scanned += source.length
+      return read.call(this, source, tokens)
+    }
+    const source = `${'> [^1]: f\ng\n'.repeat(count)}\nx[^1]\n`
+    new Marked(blockMarkdown, extension).parse(source)
+    assert.ok(
+      scanned <= source.length * 10,
+      `${scanned} read / ${source.length}`,
+    )
+  }
+})

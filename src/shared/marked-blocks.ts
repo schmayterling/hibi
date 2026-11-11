@@ -19,6 +19,7 @@ import { withFenceRules } from './marked-fences.ts'
 import {
   extendQuote,
   isLeafBlock,
+  lazyContinuation,
   leafListEnd,
   quoteReader,
   withLeafBlocks,
@@ -1623,6 +1624,8 @@ function readTasks(
 
 export class BlockTokenizer extends Tokenizer {
   override list(source: string, read = Tokenizer.prototype.list) {
+    const lazy = lazyContinuation(this.lexer, source)
+    if (lazy) return lazy as unknown as Tokens.List
     return withQuoteScan(this, () =>
       withLeafBlocks(this, () =>
         BlockTokenizer.prototype.readList.call(this, source, read),

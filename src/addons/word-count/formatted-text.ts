@@ -3,6 +3,7 @@ import type { Marked, Token, TokenizerExtension, Tokens } from 'marked'
 import { customBodyFeatures } from '../../shared/formatted-custom-body.ts'
 import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import {
+  footnoteLabel,
   footnoteReference,
   rememberFootnote,
 } from '../../shared/marked-footnote-reference.ts'
@@ -66,7 +67,7 @@ export function countParser(syntax: CountSyntax) {
   return parser
 }
 
-const footnoteKey = (label: string) => `\u0000footnote:${label.toLowerCase()}`
+const footnoteKey = (label: string) => `\u0000footnote:${footnoteLabel(label)}`
 
 /** Reuse the definition grammar, with per-document reference ownership instead of exporter state. */
 function countFootnotes(parser: Marked) {

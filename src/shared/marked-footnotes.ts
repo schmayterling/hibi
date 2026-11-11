@@ -15,6 +15,7 @@ import {
   quoteColumns,
 } from './marked-blocks.ts'
 import {
+  footnoteLabel,
   footnoteReference,
   rememberFootnote,
 } from './marked-footnote-reference.ts'
@@ -36,7 +37,15 @@ export function markedGithubFootnote(
     reference,
     inlineStart('[^', function (source, tokens) {
       const match = footnoteReference(this.lexer, source, tokens)
-      if (match) return readReference.call(this, match.raw, tokens)
+      if (!match) return
+      // The dependency matches lowercased labels; give it GFM's folded label.
+      const token = readReference.call(
+        this,
+        `[^${footnoteLabel(match.label)}]`,
+        tokens,
+      )
+      if (token) token.raw = match.raw
+      return token
     }),
   )
   const definition = extension.extensions!.find(
@@ -54,15 +63,26 @@ export function markedGithubFootnote(
     // The body's block read leaves the lexer at top level; a list item's
     // following lines must still read as tight text.
     const top = this.lexer.state.top
+    const [, open = '', label = ''] =
+      /^( {0,3}\[\^)([^\]\s]+)\]/.exec(source) ?? []
+    const folded = open
+      ? open + footnoteLabel(label) + source.slice(open.length + label.length)
+      : source
     let token: ReturnType<typeof readDefinition>
     try {
-      token = readDefinition.call(this, source, tokens)
+      token = readDefinition.call(this, folded, tokens)
     } finally {
       this.lexer.state.top = top
     }
     if (token) {
-      rememberFootnote(this.lexer, String(token.label))
-      const key = String(token.label).toLowerCase()
+      // Keep the written label and text; only the dependency's key is folded.
+      token.raw = source.slice(
+        0,
+        token.raw.length - folded.length + source.length,
+      )
+      token.label = label
+      rememberFootnote(this.lexer, label)
+      const key = footnoteLabel(label)
       if (!stored.has(key)) stored.set(key, token)
     }
     return token
@@ -172,7 +192,7 @@ export function markedGithubFootnote(
             ])
               visit(token[key])
             if (token.type !== 'footnoteDef') continue
-            const key = String(token.label).toLowerCase()
+            const key = footnoteLabel(String(token.label))
             if (!first.has(key)) first.set(key, token)
           }
         }

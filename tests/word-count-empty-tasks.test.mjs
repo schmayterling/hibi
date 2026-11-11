@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import test from 'node:test'
-import { parser } from '@lezer/markdown'
 import { countText } from '../src/addons/word-count/count.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
+import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
@@ -15,7 +15,23 @@ registerHooks({
       ? { format: 'module', source: '', shortCircuit: true }
       : next(url, context),
 })
-const { contribution } = await import('../src/renderer/src/formatted/tasks.ts')
+// The rich view's grammar: every formatted contribution with syntax.
+const contributions = await Promise.all(
+  [
+    'autolinks',
+    'entities',
+    'footnotes',
+    'html',
+    'media',
+    'rule',
+    'strikethrough',
+    'tables',
+    'tasks',
+  ].map(async (name) => {
+    const module = await import(`../src/renderer/src/formatted/${name}.ts`)
+    return module.contributions ?? [module.contribution]
+  }),
+).then((all) => all.flat())
 const { obsidianSyntax } = await import(
   '../src/addons/markdown/formatted-syntax.ts'
 )
@@ -24,8 +40,10 @@ const syntax = { ...defaultNoteSyntax, gfm: true }
 // The editor's document holds CRLF lines as LF lines.
 const markers = (source) => {
   let found = 0
-  parser
-    .configure([contribution.syntax, obsidianSyntax])
+  formattedMarkdownParser([
+    ...contributions.flatMap((item) => item.syntax ?? []),
+    obsidianSyntax,
+  ])
     .parse(source.replaceAll('\r\n', '\n'))
     .iterate({
       enter: (node) => {
@@ -68,6 +86,17 @@ const cases = [
   ['1. [x]\n\n2. [ ]', 2, 0],
   ['1. [x] a\n\n2. [ ] b', 2, 2],
   ['1. [x]\r\n2. [ ]\r\n', 2, 0],
+  // Bracketed text that is not a task marker stays text.
+  ['1. [ ]x', 0, 1],
+  ['1. [x]x', 0, 2],
+  ['2) [ ]x\n   lazy', 0, 2],
+  ['1. \\[x]', 0, 1],
+  ['1. `[x]`', 0, 1],
+  ['1. [[x]](u)', 0, 2],
+  // A reference definition makes the marker a link; it is still a checkbox.
+  ['[x]: /u\n\n1. [x]', 1, 0],
+  ['[x]: /u\n\n- [x]', 1, 0],
+  ['[x]: /u\n\n1. [x] a', 1, 1],
   ['1. [x] a\r\n2. [ ] b\r\n', 2, 2],
 ]
 
@@ -100,6 +129,24 @@ test('word count reads lazy text after an empty ordered task as that task text',
   assert.equal(markers('1. [x]\n   lazy'), 1)
   assert.deepEqual(count('1. [x]\n   lazy'), count('1. [x] lazy'))
   assert.deepEqual(count('1. [x]\r\n   lazy'), count('1. [x] lazy'))
+})
+
+test('word count keeps bracketed text that is not a task marker, as the rich view shows it', () => {
+  for (const [source, counts] of [
+    ['1. [ ]x', { words: 1, characters: 6 }],
+    ['1. [x]x', { words: 2, characters: 6 }],
+    ['2) [ ]x\n   lazy', { words: 2, characters: 11 }],
+    ['1. \\[x]', { words: 1, characters: 5 }],
+    ['1. `[x]`', { words: 1, characters: 5 }],
+    ['1. [[x]](u)', { words: 2, characters: 6 }],
+  ]) {
+    assert.equal(markers(source), 0, `rich view ${JSON.stringify(source)}`)
+    assert.deepEqual(
+      countText(richText(source, syntax).slice(1)),
+      counts,
+      JSON.stringify(source),
+    )
+  }
 })
 
 test('word count keeps empty task markers as words when task syntax is off', () => {

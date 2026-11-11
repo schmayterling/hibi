@@ -1,3 +1,4 @@
+const { ipcMain } = require('electron')
 const fs = require('node:fs/promises')
 const { basename } = require('node:path')
 const { syncBuiltinESMExports } = require('node:module')
@@ -8,6 +9,8 @@ const state = {
   release() {},
 }
 globalThis.autosavePreferenceFault = state
+// Without this the app takes this file and the checkout as files to open.
+require('./preload-argv.cjs')(process.argv, __filename)
 fs.open = async (path, ...args) => {
   const setting =
     basename(String(path)).startsWith('.autosave.json.') && args[0] === 'wx'
@@ -31,3 +34,17 @@ fs.open = async (path, ...args) => {
   return handle
 }
 syncBuiltinESMExports()
+// Stands in for a future main-process failure the synchronous read cannot catch.
+if (process.env.HIBI_TEST_AUTOSAVE_READ_ERROR) {
+  const on = ipcMain.on.bind(ipcMain)
+  ipcMain.on = (channel, listener) =>
+    on(
+      channel,
+      channel === 'settings:autosave'
+        ? (event, operation, value) => {
+            if (operation !== 'get') return listener(event, operation, value)
+            event.returnValue = { error: 'Error: setting read failed' }
+          }
+        : listener,
+    )
+}

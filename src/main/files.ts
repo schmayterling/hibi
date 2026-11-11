@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, type Stats } from 'node:fs'
 import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { SourceSnapshot } from '../shared/source-buffer'
@@ -139,6 +139,7 @@ export async function writeMarkdown(
   canCommit?: () => boolean,
   renameDelays?: readonly number[],
   onRefused?: () => void,
+  expected?: Stats | null,
 ): Promise<void> {
   if (typeof markdown === 'string') validateMarkdown(markdown)
   await writeText(
@@ -148,6 +149,7 @@ export async function writeMarkdown(
     canCommit,
     renameDelays,
     onRefused,
+    expected,
   )
   // A recovery copy goes after a save: the rename has to last a power cut first.
   await syncFolder(dirname(path))
@@ -194,12 +196,16 @@ export async function writeText(
   canCommit?: () => boolean,
   renameDelays?: readonly number[],
   onRefused?: () => void,
+  expected?: Stats | null,
 ): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
-  const existing = await stat(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error
-    return null
-  })
+  const existing =
+    expected === undefined
+      ? await stat(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error
+          return null
+        })
+      : expected
   let release: (() => void) | undefined
   try {
     const file = await open(temp, 'wx', existing?.mode ?? 0o600)
@@ -253,7 +259,7 @@ export async function writeText(
             { code: 'ECHANGED' },
           )
       }
-      if (renameDelays) await unchangedOutside()
+      if (renameDelays || expected !== undefined) await unchangedOutside()
       await retryRename(
         () => {
           checkCommit()
@@ -264,11 +270,12 @@ export async function writeText(
             throw error
           })
         },
-        renameDelays &&
-          (async () => {
-            onRefused?.()
-            await unchangedOutside()
-          }),
+        renameDelays || expected !== undefined
+          ? async () => {
+              onRefused?.()
+              await unchangedOutside()
+            }
+          : undefined,
         undefined,
         renameDelays,
       )

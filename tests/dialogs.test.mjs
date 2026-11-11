@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { after, before, electron, expectPageError } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 import { checkTooltips } from './tooltips.mjs'
 
 let app, folder, page
@@ -30,10 +31,7 @@ async function openHarness() {
     },
   })
   const html = join(bundle, 'index.html')
-  await writeFile(
-    html,
-    '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-  )
+  await writeFile(html, harnessPage({ css: 'harness.css' }))
   app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })

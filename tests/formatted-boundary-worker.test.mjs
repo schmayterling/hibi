@@ -6,6 +6,7 @@ import { extname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 
 // Its cases mount several 50 MiB notes, among them one fenced code block.
 test('a real worker formats a never-visited 50 mib far jump without main-thread scanning and declines unknown blocks', {
@@ -38,7 +39,7 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   })
   await writeFile(
     join(bundle, 'index.html'),
-    '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    harnessPage({ css: 'harness.css' }),
   )
   server = createServer(async (request, response) => {
     try {

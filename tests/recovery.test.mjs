@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForFormattedEditor } from './electron.mjs'
+import { harnessPage } from './harness-page.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('recovery preview preserves the live draft; real render failures offer recovery actions', {
@@ -70,10 +71,7 @@ test('recovery preview preserves the live draft; real render failures offer reco
     },
   })
   const html = join(bundle, 'index.html')
-  await writeFile(
-    html,
-    '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
-  )
+  await writeFile(html, harnessPage({ css: 'harness.css' }))
   const next = app.waitForEvent('window')
   await app.evaluate(({ BrowserWindow }, html) => {
     const window = new BrowserWindow({

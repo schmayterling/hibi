@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
 import './file-limit.mjs'
@@ -12,17 +13,6 @@ const execute = promisify(execFile)
 
 const pageErrors = []
 const expectedPageErrors = new Set()
-/**
- * Autosave is on unless turned off. A test that holds unsaved text for longer
- * than its delay and isn't about autosave turns it off, as a person would.
- */
-export async function autosaveOff(app, page) {
-  await page.evaluate(() =>
-    window.hibi.setAutosavePreferences({ enabled: false, delay: 2000 }),
-  )
-  await page.reload()
-  await waitForFormattedEditor(app, page)
-}
 /** Lets this test's renderer throw errors matching `pattern`, and fails it if none is thrown. */
 export function expectPageError(t, pattern) {
   const entry = { pattern, seen: false }
@@ -320,7 +310,11 @@ export const electronGpuArgs =
     ? ['--use-gl=angle', '--use-angle=swiftshader']
     : []
 export const electron = {
-  async launch({ diagnostics = true, ...options }) {
+  /**
+   * Autosave starts off, so an edited note stays unsaved however slow the run.
+   * A test about autosave, or about what it saves, launches with `autosave: true`.
+   */
+  async launch({ diagnostics = true, autosave = false, ...options }) {
     const application = await _electron.launch({
       ...options,
       env: {
@@ -330,7 +324,19 @@ export const electron = {
         ).href,
         ...(options.env ?? process.env),
       },
-      args: [...options.args, '--hibi-test', ...electronGpuArgs],
+      args: [
+        ...(autosave
+          ? []
+          : [
+              '-r',
+              fileURLToPath(
+                new URL('./fixtures/autosave-off.cjs', import.meta.url),
+              ),
+            ]),
+        ...options.args,
+        '--hibi-test',
+        ...electronGpuArgs,
+      ],
     })
     // Playwright disposes the process handle once the app has exited.
     const launched = application.process()

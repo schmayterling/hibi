@@ -144,6 +144,21 @@ test('migration failure starts off, preserves legacy choice, and retries when wr
   assert.deepEqual(await setting('get', legacy), { enabled: true, delay: 1000 })
   assert.deepEqual(await disk(), { enabled: true, delay: 1000 })
 })
+test('orphan temp cleanup keeps the saved setting file and its value', async (t) => {
+  const { setting, root, disk } = await runtime(t)
+  await fs.writeFile(
+    join(root, 'autosave.json'),
+    JSON.stringify({ enabled: false, delay: 5000 }),
+  )
+  await fs.writeFile(
+    join(root, '.autosave.json.00000000-0000-0000-0000-000000000001.tmp'),
+    'unfinished',
+  )
+  assert.deepEqual(await setting('get', null), { enabled: false, delay: 5000 })
+  assert.deepEqual(await fs.readdir(root), ['autosave.json'])
+  assert.deepEqual(await disk(), { enabled: false, delay: 5000 })
+})
+
 test("oversized legacy starts off and only this setting's orphan temps are removed", async (t) => {
   const { setting, root } = await runtime(t)
   await fs.writeFile(

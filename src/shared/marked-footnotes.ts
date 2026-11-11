@@ -12,6 +12,7 @@ import {
   BlockTokenizer,
   blockContainers,
   continuationTokens,
+  quoteColumns,
 } from './marked-blocks.ts'
 import {
   footnoteReference,
@@ -130,6 +131,19 @@ export function markedGithubFootnote(
     if (!['paragraph', 'text'].includes(last.type)) return leafBlock(token)
     // A quote's lazy line continues this definition's last paragraph.
     return lazyBlock(token, (more) => definition.tokenizer.call(this, more, []))
+  }
+  const readHere = definition.tokenizer
+  // In a quote, tabs keep the columns they have in the note, as for code.
+  definition.tokenizer = function (source, tokens) {
+    const tokenizer = this.lexer.options.tokenizer
+    const columns =
+      tokenizer &&
+      /^ {0,3}\[\^[^\]\s]+\]:/.test(source) &&
+      quoteColumns(tokenizer, source, 8)
+    if (!columns) return readHere.call(this, source, tokens)
+    const token = readHere.call(this, columns.text, tokens)
+    if (token) token.raw = columns.raw(token.raw.length)
+    return token
   }
   const hooks = extension.hooks!
   return {

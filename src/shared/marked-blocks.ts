@@ -1530,11 +1530,8 @@ export class BlockTokenizer extends Tokenizer {
       else lazyUnderlines.delete(this)
       try {
         const read = () => Reflect.apply(blockTokens, lexer, args)
-        if (ends.size) {
-          args[1] ??= []
-          return withTextMerges(this, text, args[1], read)
-        }
-        return read()
+        args[1] ??= []
+        return withTextMerges(this, text, args[1], read)
       } finally {
         if (previous) lazyUnderlines.set(this, previous)
         else lazyUnderlines.delete(this)

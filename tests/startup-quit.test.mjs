@@ -434,3 +434,32 @@ test('the could-not-start dialog quits on SIGTERM without leaving Electron behin
   await setTimeout(1000)
   assert.deepEqual(await survivors(fixture.profile), [])
 })
+
+test('quit never waits on Chromium bounce-tracking writes', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-bounce-tracking-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  let open = true
+  t.after(async () => {
+    if (open) await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.locator('.titlebar').waitFor()
+  // Shutdown waits for these sqlite writes; a busy disk held them past 15 s.
+  const disabled = await app.evaluate(({ app }) =>
+    app.commandLine.getSwitchValue('disable-features').split(','),
+  )
+  assert.ok(disabled.includes('DIPS'), disabled.join())
+  // Features the launcher disabled stay disabled.
+  assert.ok(disabled.includes('Translate'), disabled.join())
+  open = false
+  await app.close()
+  assert.deepEqual(
+    (await readdir(profile)).filter((name) => name.startsWith('DIPS')),
+    [],
+  )
+})

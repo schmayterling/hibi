@@ -1,5 +1,5 @@
+import type { EditorView } from '@codemirror/view'
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
-import { announcedScroll, announceScroll, watchScrolls } from './pane-scroll'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown caret alignment stays active even when linked scrolling is disabled. */
@@ -13,13 +13,26 @@ export function linkScroll(
   let leader = initial
   let frame = 0
   let refinements = 0
-  // With scrolling unlinked, a caret alignment still follows the layout
-  // settling under it, until either pane scrolls by other than a correction:
-  // the reader's, a script's or a reveal.
+  // With scrolling unlinked, a caret alignment follows the layout settling
+  // under it until a pane scrolls apart from it. Layout moves the aligned
+  // lines within their panes' content; a scroll, any scroll, moves only the
+  // panes.
   let aligning = false
-  const unwatch = syncScrolling
-    ? []
-    : [watchScrolls(first), watchScrolls(second)]
+  let ends: {
+    from: EditorView
+    position: number
+    to: EditorView
+    at: number
+  } | null = null
+  // A pane's scroll and its aligned line's place in the pane's scrolled
+  // content: where it is drawn, if it is, and where the view's height map
+  // has it.
+  type Place = { top: number; drawn: number | null; line: number }
+  let placed: {
+    caret: ReturnType<typeof caret>
+    leader: Place
+    target: Place
+  } | null = null
   const paneState = (pane: HTMLElement) => {
     const content = pane.querySelector('.cm-content')
     const view = content && sourceView(content)
@@ -38,6 +51,15 @@ export function linkScroll(
     }
   }
   let previousCaret = caret(initial)
+  const sameCaret = (
+    a: ReturnType<typeof caret>,
+    b: ReturnType<typeof caret>,
+  ) =>
+    a?.pane === b?.pane &&
+    a?.doc === b?.doc &&
+    a?.mirrorDoc === b?.mirrorDoc &&
+    a?.anchor === b?.anchor &&
+    a?.head === b?.head
   const sourcePane = second.closest('.source-pane')
   function sourceTop(target: HTMLElement): number | null {
     const fromContent = leader.querySelector('.cm-content')
@@ -50,6 +72,8 @@ export function linkScroll(
     // A table cell's editor, inside the view, has the formatted view's caret.
     let point = focusedEditor(from) ? from.coordsAtPos(position) : null
     if (!point || point.top < bounds.top || point.bottom > bounds.bottom) {
+      // Unlinked, only a caret in view has a line to align.
+      if (!syncScrolling) return null
       const content = from.contentDOM.getBoundingClientRect()
       const y = bounds.top + bounds.height / 2
       // posAtCoords gives a table's edges for a point in its cells, and the
@@ -75,6 +99,7 @@ export function linkScroll(
     }
     const at = editorPosition(to, sourcePosition(from, position))
     if (!point || at === null) return null
+    ends = { from, position, to, at }
     const block = to.lineBlockAt(at)
     if (!block.height) return null
     const destination = to.coordsAtPos(at)
@@ -82,6 +107,55 @@ export function linkScroll(
       ? (destination.top + destination.bottom) / 2
       : to.documentTop + block.top + to.defaultLineHeight / 2
     return target.scrollTop + y - (point.top + point.bottom) / 2
+  }
+  const lineY = (
+    pane: HTMLElement,
+    view: EditorView,
+    pos: number,
+  ): Place | null => {
+    if (pos > view.state.doc.length) return null
+    const offset = pane.scrollTop - pane.getBoundingClientRect().top
+    const point = view.coordsAtPos(pos)
+    return {
+      top: pane.scrollTop,
+      drawn: point && offset + (point.top + point.bottom) / 2,
+      line: offset + view.documentTop + view.lineBlockAt(pos).top,
+    }
+  }
+  const measure = () => {
+    if (!ends) return null
+    const target = leader === first ? second : first
+    const from = lineY(leader, ends.from, ends.position)
+    const to = lineY(target, ends.to, ends.at)
+    if (from === null || to === null) return null
+    return { caret: caret(leader), leader: from, target: to }
+  }
+  const record = () => {
+    if (!syncScrolling && aligning) placed = measure()
+  }
+  const disarm = () => {
+    aligning = false
+    placed = null
+    cancelAnimationFrame(frame)
+    frame = 0
+  }
+  // Within a fraction of a pixel: a scroll of half a pixel still counts.
+  const moved = (a: number, b: number) => Math.abs(a - b) > 0.25
+  /** Realigns after layout under the aligned lines; ends on a scroll. */
+  const check = () => {
+    const was = placed
+    if (!aligning || !was) return
+    const now = measure()
+    // A caret moved since, as a view scrolling to show it, aligns anew.
+    if (!now || !sameCaret(now.caret, was.caret)) return schedule()
+    const panes = ['leader', 'target'] as const
+    // Layout reaches the drawn line at once and the height map at the view's
+    // next measure, which can scroll to keep its place: either counts.
+    const shifted = (a: Place, b: Place) =>
+      moved(a.line, b.line) ||
+      (a.drawn !== null && b.drawn !== null && moved(a.drawn, b.drawn))
+    if (panes.some((pane) => shifted(now[pane], was[pane]))) schedule()
+    else if (panes.some((pane) => moved(now[pane].top, was[pane].top))) disarm()
   }
   const sync = () => {
     frame = 0
@@ -100,9 +174,8 @@ export function linkScroll(
       0,
       Math.min(top, target.scrollHeight - target.clientHeight),
     )
-    if (Math.abs(target.scrollTop - clamped) < 1) return
+    if (Math.abs(target.scrollTop - clamped) < 1) return record()
     target.scrollTop = clamped
-    announceScroll(target)
     if (markdown && refinements++ < 3) frame = requestAnimationFrame(sync)
   }
   const schedule = () => {
@@ -111,15 +184,8 @@ export function linkScroll(
     frame = requestAnimationFrame(sync)
   }
   const scroll = (event: Event) => {
+    if (!syncScrolling) return check()
     const origin = event.currentTarget as HTMLElement
-    if (!syncScrolling) {
-      if (aligning && !announcedScroll(origin)) {
-        aligning = false
-        cancelAnimationFrame(frame)
-        frame = 0
-      }
-      return
-    }
     // Virtualized source layout can emit several delayed scroll events. Only
     // direct input or focus changes may hand control to the other pane.
     if (origin !== leader) return
@@ -127,11 +193,7 @@ export function linkScroll(
   }
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
-    if (!syncScrolling) {
-      aligning = false
-      cancelAnimationFrame(frame)
-      frame = 0
-    }
+    if (!syncScrolling) disarm()
   }
   const selection = (event?: Event) => {
     const focused = document.activeElement
@@ -143,19 +205,14 @@ export function linkScroll(
       return
     }
     const next = caret(leader)
-    const changed =
-      next &&
-      (next.pane !== previousCaret?.pane ||
-        next.doc !== previousCaret?.doc ||
-        next.mirrorDoc !== previousCaret?.mirrorDoc ||
-        next.anchor !== previousCaret?.anchor ||
-        next.head !== previousCaret?.head)
+    const changed = next && !sameCaret(next, previousCaret)
     previousCaret = next
     // Virtualized scrolls can rewrite the native selection without moving the caret.
     const deliberate =
       event instanceof Event && ['pointerup', 'focusin'].includes(event.type)
     if (!changed && !deliberate) return
     aligning = true
+    placed = null
     schedule()
   }
   // CodeMirror panes report caret and text changes, and focus leaving, as
@@ -183,7 +240,8 @@ export function linkScroll(
       selection(event)
   }
   const settled = () => {
-    if (syncScrolling || aligning) schedule()
+    if (syncScrolling) schedule()
+    else check()
   }
   const observer = new ResizeObserver(settled)
   // Virtualized table rows can arrive without changing the content's height.
@@ -211,17 +269,14 @@ export function linkScroll(
     }
     first.addEventListener('hibi:source-layout', schedule)
   }
-  // Capturing, before the views' own listeners measure, and so announce, the
-  // position the scroll reached.
-  first.addEventListener('scroll', scroll, { passive: true, capture: true })
-  second.addEventListener('scroll', scroll, { passive: true, capture: true })
+  first.addEventListener('scroll', scroll, { passive: true })
+  second.addEventListener('scroll', scroll, { passive: true })
   // Widths settle during the view transition; new files are already at their final widths.
   first.addEventListener('transitionend', settled)
   sourcePane?.addEventListener('transitionend', settled)
   settled()
   return () => {
     cancelAnimationFrame(frame)
-    for (const stop of unwatch) stop()
     observer.disconnect()
     drawn.disconnect()
     for (const pane of [first, second]) {
@@ -240,8 +295,8 @@ export function linkScroll(
       )
     }
     first.removeEventListener('hibi:source-layout', schedule)
-    first.removeEventListener('scroll', scroll, true)
-    second.removeEventListener('scroll', scroll, true)
+    first.removeEventListener('scroll', scroll)
+    second.removeEventListener('scroll', scroll)
     first.removeEventListener('transitionend', settled)
     sourcePane?.removeEventListener('transitionend', settled)
   }

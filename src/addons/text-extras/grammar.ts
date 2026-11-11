@@ -1,5 +1,7 @@
 import { Marked, type MarkedExtension } from 'marked'
+import { inlineStart } from '../../shared/marked-inline-start.ts'
 import { blockStart } from '../_shared/block-start.ts'
+import { textExtrasDetection } from './flavor-info.ts'
 
 export function subscriptToken(source: string) {
   const match = /^~(?!~)([^\s~](?:[^~\n]*?[^\s~])?)~(?!~)/.exec(source)
@@ -15,12 +17,11 @@ export const textExtrasMarkdown: MarkedExtension = {
     {
       name: 'subscript',
       level: 'inline',
-      start: (source) => source.indexOf('~'),
-      tokenizer(source) {
+      ...inlineStart('~', function (source) {
         const token = subscriptToken(source)
         if (token)
           return { ...token, tokens: this.lexer.inlineTokens(token.text) }
-      },
+      }),
       renderer(token) {
         return `<sub>${this.parser.parseInline(token.tokens ?? [])}</sub>`
       },
@@ -49,3 +50,4 @@ export function detectTextExtras(source: string) {
   })
   return found
 }
+textExtrasDetection.read = detectTextExtras

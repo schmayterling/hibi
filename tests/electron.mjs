@@ -52,20 +52,28 @@ if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
   test.after(reportLeftover)
   // A file's own after hooks run later still, and can bring a throw of their own.
   process.on('exit', reportLeftover)
+  test.beforeEach(enterTest)
   test.afterEach(orphanPendingLaunches)
   test.after(closeOrphanedLaunches)
 }
 
 // A test that times out keeps running after node:test has moved on. An app it
-// was still launching then would keep the file from ever exiting. A file runs
-// its top-level tests one at a time, so a launch still pending when one ends is
-// that test's or its subtests', and nothing will close it. A subtest ending
-// says nothing: its parent may still be waiting on a launch.
+// was still launching then would keep the file from ever exiting. Each launch
+// belongs to the test running when it started, and a file runs one test at a
+// time, inside its parents. A launch still pending when its test ends is
+// closed when it settles; a subtest ending leaves its parent's launch alone.
+// (A parent that times out ends its unfinished subtests first.)
 const orphanable = new Set()
+const running = []
 let hooksRan = false
+function enterTest(t) {
+  running.push(t.fullName)
+}
 function orphanPendingLaunches(t) {
-  if (t.fullName !== t.name) return
-  for (const launch of orphanable) launch.orphaned = true
+  const index = running.lastIndexOf(t.fullName)
+  if (index >= 0) running.splice(index, 1)
+  for (const launch of orphanable)
+    if (launch.owner === t.fullName) launch.orphaned = true
 }
 async function closeOrphanedLaunches() {
   hooksRan = true
@@ -367,7 +375,7 @@ export const electron = {
    * A test about autosave, or about what it saves, launches with `autosave: true`.
    */
   launch(options) {
-    const launch = {}
+    const launch = { owner: running.at(-1) }
     const launching = electron.launchApp(options, launch)
     if (hookLaunch.getStore()) return launching
     orphanable.add(launch)

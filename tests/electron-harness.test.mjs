@@ -72,6 +72,26 @@ test('a launch a timed-out test left behind closes while a later test runs', {
   assert.deepEqual(left, [])
 })
 
+test('a launch a timed-out test in a describe block left behind closes while a later test runs', {
+  timeout: 120000,
+}, async (t) => {
+  const { code, output, left } = await run(t, 'describe')
+  assert.equal(code, 1, output)
+  assert.match(output, /test timed out after 200ms/)
+  assert.match(output, /the late app closed while a later test ran/)
+  assert.deepEqual(left, [])
+})
+
+test('a launch a subtest left behind closes when its timed-out parent ends', {
+  timeout: 120000,
+}, async (t) => {
+  const { code, output, left } = await run(t, 'nested')
+  assert.equal(code, 1, output)
+  assert.match(output, /test timed out after 200ms/)
+  assert.match(output, /the late app closed while a later test ran/)
+  assert.deepEqual(left, [])
+})
+
 test('a launch its test still awaits stays open when a subtest ends', {
   timeout: 120000,
 }, async (t) => {

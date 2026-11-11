@@ -389,70 +389,109 @@ export async function runCI({ dev = false } = {}) {
       throw new Error(`ci: timeout ${asked} s is not 1 to 86400 seconds`)
     return seconds
   }
-  // Found before any is stopped: a stopped parent's children move to init, and
-  // Playwright starts Electron in a process group of its own.
-  const descendants = (pid) => {
-    const children = new Map()
-    for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid='], {
+  // A file owns every process below its runner and every member of each
+  // process group one of them was seen in: a group's leader can exit and
+  // leave its members to init, and Playwright starts Electron in a group of
+  // its own. Seen once a second while files run, and again while stopping.
+  const table = () =>
+    execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,stat='], {
       encoding: 'utf8',
     })
       .trim()
-      .split('\n')) {
-      const [child, parent] = line.trim().split(/\s+/).map(Number)
-      children.set(parent, [...(children.get(parent) ?? []), child])
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      // An exited process its parent hasn't collected can't be stopped again.
+      .filter(([, , , stat]) => !stat?.startsWith('Z'))
+      .map(([pid, ppid, pgid]) => ({
+        pid: Number(pid),
+        ppid: Number(ppid),
+        pgid: Number(pgid),
+      }))
+  const own = (run, rows) => {
+    const children = new Map()
+    for (const row of rows)
+      children.set(row.ppid, [...(children.get(row.ppid) ?? []), row])
+    const ours = rows.find((row) => row.pid === process.pid)?.pgid
+    const found = new Map()
+    const add = (row) => {
+      if (found.has(row.pid) || row.pid === process.pid || row.pgid === ours)
+        return
+      found.set(row.pid, row)
+      run.groups.add(row.pgid)
+      for (const child of children.get(row.pid) ?? []) add(child)
     }
-    const found = []
-    for (const next = [pid]; next.length; ) {
-      const current = next.pop()
-      found.push(current)
-      next.push(...(children.get(current) ?? []))
+    const runner = rows.find((row) => row.pid === run.pid)
+    if (runner) add(runner)
+    for (let size = -1; size !== found.size; ) {
+      size = found.size
+      for (const row of rows) if (run.groups.has(row.pgid)) add(row)
     }
-    return found
+    return [...found.values()]
   }
-  const alive = (pid) => {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch {
-      return false
+  const runs = new Set()
+  let sampler
+  const watch = (run) => {
+    runs.add(run)
+    sampler ??= setInterval(() => {
+      try {
+        const rows = table()
+        for (const each of runs) own(each, rows)
+      } catch {
+        /* Seen again next second. */
+      }
+    }, 1000)
+  }
+  const unwatch = (run) => {
+    runs.delete(run)
+    if (!runs.size) {
+      clearInterval(sampler)
+      sampler = undefined
     }
   }
-  // Stops a run and everything it started; resolves to what outlived it.
-  const stopRun = async (pid) => {
+  const pause = (ms) => new Promise((done) => setTimeout(done, ms))
+  // Freezes everything a file owns until a look finds nothing new, so nothing
+  // can start a process unseen, then kills it all, group members included;
+  // resolves to what outlived it.
+  const stopRun = async (run) => {
     if (process.platform === 'win32') {
       // 128: it had already exited.
       const { status } = spawnSync('taskkill', [
         '/pid',
-        String(pid),
+        String(run.pid),
         '/T',
         '/F',
       ])
-      return [0, 128].includes(status) ? [] : [pid]
+      return [0, 128].includes(status) ? [] : [run.pid]
     }
-    let pids = [pid]
-    try {
-      pids = descendants(pid)
-    } catch {
-      /* ps failed: the group below still goes. */
-    }
-    for (const each of pids)
+    const signal = (pid, name) => {
       try {
-        process.kill(each, 'SIGKILL')
+        process.kill(pid, name)
       } catch {
         /* Already gone. */
       }
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch {
-      /* Already gone. */
     }
-    // A killed process lingers until its parent collects it.
-    for (let wait = 0; wait < 50 && pids.some(alive); wait++)
-      await new Promise((done) => setTimeout(done, 100))
-    return pids.filter(alive)
+    for (let round = 0; round < 50; round++) {
+      let members
+      try {
+        members = own(run, table())
+      } catch (error) {
+        return [`unknown (${error.message})`]
+      }
+      if (!members.length) return []
+      const fresh = members.filter((member) => !run.frozen.has(member.pid))
+      for (const member of members) {
+        signal(member.pid, fresh.length ? 'SIGSTOP' : 'SIGKILL')
+        run.frozen.add(member.pid)
+      }
+      await pause(100)
+    }
+    return own(run, table()).map((member) => member.pid)
   }
   const running = new Set()
+  let cancelled = false
+  // An interrupted check takes its tests with it: no file starts after this.
   const interrupt = async (signal) => {
+    cancelled = true
     await Promise.all([...running].map((stop) => stop()))
     process.kill(process.pid, signal)
   }
@@ -464,11 +503,13 @@ export async function runCI({ dev = false } = {}) {
     const problems = []
     let result
     let seconds
+    let started = false
     let overdue = false
     let outlived = []
     try {
-      seconds = limit(test)
+      // Before anything that can fail: another file's report must not stand in.
       rmSync(report, { force: true })
+      seconds = limit(test)
       result = await new Promise((settle) => {
         const child = spawn(
           process.execPath,
@@ -482,13 +523,20 @@ export async function runCI({ dev = false } = {}) {
             `--test-reporter-destination=${report}`,
             test,
           ],
-          // A group of its own, so stopping it stops what it started.
+          // A group of its own, so stopping it stops what it started. Its own
+          // limit gives this check the first word.
           {
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: process.env,
+            env: {
+              ...process.env,
+              CI_FILE_LIMIT_MS: String((seconds + 60) * 1000),
+            },
             detached: process.platform !== 'win32',
           },
         )
+        child.once('spawn', () => {
+          started = true
+        })
         // Files run side by side, so each prints its output whole when it ends.
         let output = ''
         child.stdout?.on('data', (chunk) => {
@@ -497,9 +545,14 @@ export async function runCI({ dev = false } = {}) {
         child.stderr?.on('data', (chunk) => {
           output += chunk
         })
+        const run = { pid: child.pid, groups: new Set(), frozen: new Set() }
+        if (child.pid && process.platform !== 'win32') {
+          run.groups.add(child.pid)
+          watch(run)
+        }
         let stopping
         const stop = () => {
-          stopping ??= stopRun(child.pid)
+          stopping ??= child.pid ? stopRun(run) : Promise.resolve([])
           return stopping
         }
         running.add(stop)
@@ -514,8 +567,11 @@ export async function runCI({ dev = false } = {}) {
           if (ended) return
           ended = true
           clearTimeout(timer)
+          // A runner that died leaves what it started behind it.
+          const clean = !outcome.error && [0, 1].includes(outcome.status)
+          if (stopping || !clean) outlived = await stop()
           running.delete(stop)
-          if (stopping) outlived = await stopping
+          unwatch(run)
           process.stdout.write(output)
           settle(outcome)
         }
@@ -584,7 +640,7 @@ export async function runCI({ dev = false } = {}) {
       failed.unshift(...listed)
       ran = done?.ran ?? 0
       // A stopped file's report is cut short: its reds so far are all it has.
-      if (!overdue)
+      if (started && !overdue)
         problems.push(
           !done && 'its report did not finish',
           body.length > listed.length &&
@@ -622,7 +678,7 @@ export async function runCI({ dev = false } = {}) {
       Array.from(
         { length: Math.min(concurrency, tests.length) },
         async (_, slot) => {
-          while (next < tests.length) {
+          while (!cancelled && next < tests.length) {
             const index = next++
             results[index] = await runFile(
               batch,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
@@ -721,11 +721,11 @@ syncBuiltinESMExports()
   const cases = {
     spawn: [
       ['app'],
-      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}could not start: spawn \/nonexistent\/ci-fault ENOENT; its report did not finish$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}could not start: spawn \/nonexistent\/ci-fault ENOENT$/,
     ],
     throw: [
       ['app'],
-      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}could not start: EPERM, operation not permitted; its report did not finish$/,
+      /^ci: 1 failing tests\n {2}unit {2}tests\/unit\.test\.mjs {2}could not start: EPERM, operation not permitted$/,
     ],
     null: [
       ['app', 'unit'],
@@ -909,21 +909,49 @@ test('a file that runs past its time is stopped and named, and every other file 
     '.gitignore': 'out/\n.cache/\n',
     'tests/file-limit.mjs': '',
     'tests/electron.mjs': "export const later = () => import('playwright')",
+    // Starts a process that outlives it in its group, as Electron's launcher
+    // does, then leaves.
+    'tests/leader.cjs': `const { spawn } = require('node:child_process')
+const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+require('node:fs').writeFileSync(\`\${process.env.HELD}/helper\`, String(helper.pid))
+setTimeout(() => process.exit(0), 1500)
+`,
+    // Starts processes in groups of their own while it's being stopped.
+    'tests/breeder.cjs': `const { spawn } = require('node:child_process')
+const { appendFileSync } = require('node:fs')
+let bred = 0
+setTimeout(() => {
+  const timer = setInterval(() => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    appendFileSync(\`\${process.env.HELD}/bred\`, \`\${child.pid}\\n\`)
+    if (++bred === 250) clearInterval(timer)
+  }, 3)
+}, 1200)
+`,
     // node:test can't time out a synchronous loop. This one gives up after a
-    // minute, so a broken check fails instead of hanging, and first starts a
-    // process in a group of its own, as Playwright does with Electron.
+    // minute, so a broken check fails instead of hanging. First it starts
+    // processes in groups of their own, as Playwright does with Electron.
     [spin]: `// ci: timeout 2 s (spins)\n${testFile(
       'spin',
-      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(process.env.HELD, String(held.pid))\n  for (const end = Date.now() + 60000; Date.now() < end; );",
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/held`, String(held.pid))\n  spawn(process.execPath, ['tests/leader.cjs'], { detached: true, stdio: 'ignore' })\n  spawn(process.execPath, ['tests/breeder.cjs'], { detached: true, stdio: 'ignore' })\n  for (const end = Date.now() + 60000; Date.now() < end; );",
     )}`,
+    // Its runner dies under it, and leaves what it started behind.
+    'tests/orphan.test.mjs': testFile(
+      'orphan',
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/orphan`, String(held.pid))\n  await new Promise((done) => setTimeout(done, 1500))\n  process.kill(process.ppid, 'SIGKILL')\n  await new Promise((done) => setTimeout(done, 60000))",
+    ),
     // Runs beside the spin, and on after it's stopped.
     'tests/mate.test.mjs': testFile(
       'mate',
       "await new Promise((done) => setTimeout(done, 8000))\n  appendFileSync(process.env.RAN, 'mate-done ')",
     ),
     // Slow, but within the time it asks for.
-    'tests/slow.test.mjs': `// ci: timeout 4 s (sleeps)\n${testFile('slow', 'await new Promise((done) => setTimeout(done, 1500))')}`,
-    'tests/app.test.mjs': testFile('app', '', "import './electron.mjs'"),
+    'tests/slow.test.mjs': `// ci: timeout 4 s (sleeps)\n${testFile('slow', 'appendFileSync(process.env.RAN, `limit:${process.env.CI_FILE_LIMIT_MS} `)\n  await new Promise((done) => setTimeout(done, 1500))')}`,
+    'tests/app.test.mjs': testFile(
+      'app',
+      "throw new Error('app-red')",
+      "import './electron.mjs'",
+    ),
     // A red beside a stopped file stays a red.
     'tests/red.test.mjs': testFile('red', "throw new Error('red')"),
     // Only the comments a file opens with set its time.
@@ -931,7 +959,8 @@ test('a file that runs past its time is stopped and named, and every other file 
       'quoted',
       'const text = `\n// ci: timeout 1 s\n`\n  await new Promise((done) => setTimeout(done, 1500 + text.length))',
     ),
-    'tests/zero.test.mjs': `// ci: timeout 0 s (no time)\n${testFile('zero', '')}`,
+    // Runs next in the app group's one slot: the red before it must not repeat.
+    'tests/zero.test.mjs': `// ci: timeout 0 s (no time)\n${testFile('zero', '', "import './electron.mjs'")}`,
   }
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(repo, file)), { recursive: true })
@@ -947,14 +976,16 @@ test('a file that runs past its time is stopped and named, and every other file 
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
   const started = Date.now()
   const held = join(root, 'held')
-  let heldPid
-  // A broken check would leave it running.
+  mkdirSync(held)
+  let heldPids = []
+  // A broken check would leave them running.
   t.after(() => {
-    try {
-      process.kill(heldPid, 'SIGKILL')
-    } catch {
-      /* Stopped, as it should be. */
-    }
+    for (const pid of heldPids)
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        /* Stopped, as it should be. */
+      }
   })
   const { status, stdout } = spawnSync(
     process.execPath,
@@ -981,7 +1012,9 @@ test('a file that runs past its time is stopped and named, and every other file 
       },
     },
   )
-  heldPid = existsSync(held) ? Number(readFileSync(held, 'utf8')) : undefined
+  heldPids = readdirSync(held).flatMap((name) =>
+    readFileSync(join(held, name), 'utf8').trim().split('\n').map(Number),
+  )
   assert.equal(status, 1)
   // Stopped, not waited out: the spin alone would take a minute.
   assert.ok(Date.now() - started < 45000, `took ${Date.now() - started} ms`)
@@ -990,8 +1023,11 @@ test('a file that runs past its time is stopped and named, and every other file 
   // Each file ran once: stopping one stops nothing else.
   assert.deepEqual(runs.sort(), [
     'app',
+    // The file's own limit leaves this check the first word.
+    'limit:64000',
     'mate',
     'mate-done',
+    'orphan',
     'quoted',
     'red',
     'slow',
@@ -1001,19 +1037,82 @@ test('a file that runs past its time is stopped and named, and every other file 
   assert.equal(
     reds,
     [
-      'ci: 3 failing tests',
+      'ci: 5 failing tests',
+      '  node  tests/orphan.test.mjs  exited SIGKILL with no failing test reported: killed by SIGKILL; its report did not finish',
       '  node  tests/red.test.mjs:4  red: red',
       `  node  ${spin}  did not finish within 2 s: stopped with everything it started`,
-      '  node  tests/zero.test.mjs  could not start: ci: timeout 0 s is not 1 to 86400 seconds',
+      '  app  tests/app.test.mjs:4  app: app-red',
+      '  app  tests/zero.test.mjs  could not start: ci: timeout 0 s is not 1 to 86400 seconds',
     ].join('\n'),
   )
-  // Stopping a file stops what it started, in its group or out of it.
+  // Stopping a file stops what it started, in its group or out of it, and
+  // so does its runner dying.
   if (process.platform !== 'win32') {
     assert.equal(spawnSync('pgrep', ['-f', spin]).status, 1)
-    assert.throws(
-      () => process.kill(heldPid, 0),
-      { code: 'ESRCH' },
-      String(heldPid),
-    )
+    assert.ok(heldPids.length > 3, String(heldPids.length))
+    for (const pid of heldPids)
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, String(pid))
   }
+})
+
+test('an interrupted check stops its files and starts no more', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-interrupt-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const ran = join(root, 'ran')
+  const stub = join(root, 'npm.cjs')
+  writeFileSync(stub, '')
+  // Twice as many as run at once, so some wait their turn.
+  const waves = testWorkers().node
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+  }
+  for (let index = 0; index < waves * 2; index++)
+    files[`tests/wait-${index}.test.mjs`] =
+      `import 'node:child_process'\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('wait', async () => {\n  appendFileSync(process.env.RAN, 'started ')\n  await new Promise((done) => setTimeout(done, ${index < waves ? 30000 : 0}))\n})\n`
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  writeFileSync(ran, '')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const check = spawn(process.execPath, [resolve('scripts/ci.mjs')], {
+    cwd: repo,
+    stdio: 'ignore',
+    env: {
+      ...env,
+      RAN: ran,
+      CI_BASE: '',
+      CI_CLEAN: '',
+      CI_FULL: 'true',
+      CI_SHARD: '0/1',
+      CI_WORKERS: '1',
+      GITHUB_ACTIONS: '',
+      GITHUB_OUTPUT: '',
+      GITHUB_STEP_SUMMARY: '',
+      npm_execpath: stub,
+    },
+  })
+  t.after(() => check.kill('SIGKILL'))
+  const started = () => readFileSync(ran, 'utf8').split(' ').filter(Boolean)
+  for (let wait = 0; started().length < waves && wait < 300; wait++)
+    await new Promise((done) => setTimeout(done, 100))
+  assert.equal(started().length, waves)
+  const closed = new Promise((done) =>
+    check.once('close', (status, signal) => done({ status, signal })),
+  )
+  check.kill('SIGINT')
+  assert.deepEqual(await closed, { status: null, signal: 'SIGINT' })
+  // The files waiting their turn never ran, then or after: one started late
+  // would outlive the check.
+  await new Promise((done) => setTimeout(done, 2000))
+  assert.equal(started().length, waves)
 })

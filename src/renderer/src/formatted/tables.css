@@ -64,7 +64,6 @@
   min-height: 0;
   white-space: pre-wrap;
   word-break: normal;
-  caret-color: var(--caret);
 }
 .hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor .cm-line {
   padding: 0;

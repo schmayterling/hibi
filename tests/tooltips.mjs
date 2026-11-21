@@ -40,11 +40,11 @@ export async function checkTooltips(page) {
     await page.screenshot({ path: process.env.HIBI_TOOLTIP_SCREENSHOT })
   await target.click()
   await hidden()
-  await page.waitForTimeout(450)
+  await page.clock.runFor(450)
   assert.equal(await tip.count(), 0)
   await other.focus()
   await target.focus()
-  await page.waitForTimeout(450)
+  await page.clock.runFor(450)
   assert.equal(await tip.count(), 0)
 
   await other.focus()
@@ -84,7 +84,7 @@ export async function checkTooltips(page) {
   await target.evaluate((node) => {
     node.hidden = true
   })
-  await page.waitForTimeout(450)
+  await page.clock.runFor(450)
   assert.equal(await tip.count(), 0)
   await page.evaluate(() => {
     const anchor = document.querySelector('[data-tooltip="shared help"]')

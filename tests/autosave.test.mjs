@@ -157,8 +157,9 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   await page.getByLabel(/^save after$/i, { exact: true }).selectOption('1000')
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await waitForDocumentEditor(app, page)
+  const advance = await attemptClock(page)
   await replaceRichText(page, rich, 'new draft')
-  await page.waitForTimeout(1200)
+  await advance(1200)
   assert.equal(await app.evaluate(() => globalThis.dialogsShown), 0)
   assert.equal(await pill.innerText(), 'Autosave · save first')
   await replaceRichText(page, rich, '')
@@ -265,7 +266,8 @@ test('autosave preserves later edits, pauses on external changes, and never prom
     true,
   )
   await replaceRichText(page, rich, 'another local edit')
-  await page.waitForTimeout(1200)
+  await rested()
+  await page.evaluate(() => Promise.all(window.autosaveRuns))
   assert.equal(await readFile(file, 'utf8'), 'external edit')
   await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
@@ -346,6 +348,8 @@ test('autosave waits while an input method composes, then saves the committed te
   await page.getByRole('checkbox', { name: /^autosave$/i }).check()
   await page.getByLabel(/^save after$/i).selectOption('1000')
   await page.getByRole('button', { name: /^back to app$/i }).click()
+  // Installed before the wrapper below, so that the wrapper wraps the page clock.
+  await page.clock.install()
   // Each autosave attempt is the async callback of a 1 s timer; keep them so
   // the test can wait for one to finish.
   await page.evaluate(() => {
@@ -430,7 +434,8 @@ test('autosave waits while an input method composes, then saves the committed te
   await compose('か')
   await cdp.send('Input.insertText', { text: '火' })
   await shows('xにy火')
-  await page.waitForTimeout(1200)
+  await page.clock.runFor(1200)
+  await page.evaluate(() => Promise.all(window.autosaveRuns))
   assert.equal(await readFile(file, 'utf8'), 'xにy')
 })
 
@@ -531,8 +536,10 @@ test('autosave turned off stays off across a launch', {
   await page.reload()
   await waitForFormattedEditor(app, page)
   await pill.getByText('Autosave off').waitFor()
+  await page.clock.install()
+  const advance = await attemptClock(page)
   await replaceRichText(page, rich, 'typed and left')
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 3000)))
+  await advance(3000)
   assert.equal(await readFile(file, 'utf8'), 'original')
   assert.equal(
     await page.evaluate(async () => (await window.hibi.getDocument()).dirty),

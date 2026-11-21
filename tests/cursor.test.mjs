@@ -128,6 +128,11 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     document.dispatchEvent(new Event('selectionchange'))
   })
   await page.locator('.editor-cursor').waitFor()
+  // The drawn cursor replaces the native caret, so only one shows.
+  assert.equal(
+    await rich.evaluate((element) => getComputedStyle(element).caretColor),
+    'rgba(0, 0, 0, 0)',
+  )
   const emptyGeometry = await page.evaluate(() => {
     const caret = document
       .querySelector('.editor-cursor')

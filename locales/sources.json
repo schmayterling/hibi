@@ -50,6 +50,9 @@
   "5b4ca976c25a": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "18634ed77c31": [
+    "src/addons/text-extras/index.ts"
+  ],
   "4e6867fe4fb3": [
     "src/renderer/src/markdown-syntax.ts"
   ],
@@ -7349,6 +7352,9 @@
   "02f843261112": [
     "src/addons/text-extras/index.ts"
   ],
+  "ee1ebbfbf4d4": [
+    "src/addons/text-extras/index.ts"
+  ],
   "a8283ade3185": [
     "src/main/index.ts",
     "src/renderer/src/FormattingToolbar.tsx"
@@ -8157,7 +8163,7 @@
   "9bf22c3ffed2": [
     "src/addons/word-count/index.ts"
   ],
-  "9ef0d5bdb2df": [
+  "a17134d5421b": [
     "src/addons/text-extras/flavor-info.ts"
   ],
   "3ca172ad5570": [

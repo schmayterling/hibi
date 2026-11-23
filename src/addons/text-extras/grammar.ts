@@ -35,6 +35,10 @@ export function underlineToken(token: Token) {
     token.type === 'strong' && token.raw.startsWith('__') && !bold.has(token)
   )
 }
+/** Whether a token is the `<u>` tag that opens underlined text. */
+export function underlineTag(token: Token) {
+  return token.type === 'html' && /^<u>$/i.test(token.raw)
+}
 export const textExtrasMarkdown: MarkedExtension = {
   extensions: [
     {
@@ -82,13 +86,14 @@ export const textExtrasMarkdown: MarkedExtension = {
 }
 export const detector = new Marked(textExtrasMarkdown)
 export function detectTextExtras(source: string) {
-  if (!/~|-#|__/.test(source)) return false
+  if (!/~|-#|__|<u>/i.test(source)) return false
   let found = false
   detector.walkTokens(detector.lexer(source), (token) => {
     found ||=
       token.type === 'subscript' ||
       token.type === 'subtext' ||
-      underlineToken(token)
+      underlineToken(token) ||
+      underlineTag(token)
   })
   return found
 }

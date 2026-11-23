@@ -9,7 +9,7 @@ import type {
  * Text extras for the formatted view's syntax tree, accepting what the rich
  * view's tokenizers in `syntax.ts` accept: `~subscript~` (one tilde on each
  * side, no tilde inside, non-space at both ends, on one line), `-# small
- * text` lines and `__underline__`.
+ * text` lines, `__underline__` and `<u>underline</u>`.
  */
 
 /** Characters the subscript scan reads, for complexity tests. */
@@ -275,6 +275,42 @@ export const underlineSyntax: MarkdownConfig = {
           left && (!right || before === 1),
           right && (!left || after === 1),
         )
+      },
+    },
+  ],
+}
+
+const tagDelimiter = { resolve: 'TagUnderline', mark: 'TagUnderlineMark' }
+
+/** Where each inline section's last `</u>` starts, so its `<u>` tags search for it once. */
+const lastUnderlineClose = new WeakMap<InlineContext, number>()
+
+export const underlineTagSyntax: MarkdownConfig = {
+  defineNodes: [{ name: 'TagUnderline' }, { name: 'TagUnderlineMark' }],
+  parseInline: [
+    {
+      name: 'TagUnderline',
+      // Before raw HTML, which would show a paired `<u>` and `</u>` as tags.
+      before: 'HTMLTag',
+      parse(cx, next, pos) {
+        if (next !== 60) return -1
+        const closes = cx.char(pos + 1) === 47
+        const letter = pos + (closes ? 2 : 1)
+        const named = cx.char(letter) === 117 || cx.char(letter) === 85
+        if (!named || cx.char(letter + 1) !== 62) return -1
+        const end = letter + 2
+        if (closes) {
+          if (cx.findOpeningDelimiter(tagDelimiter) === null) return -1
+          return cx.addDelimiter(tagDelimiter, pos, end, false, true)
+        }
+        let last = lastUnderlineClose.get(cx)
+        if (last === undefined) {
+          last = cx.offset + cx.text.toLowerCase().lastIndexOf('</u>')
+          lastUnderlineClose.set(cx, last)
+        }
+        // A tag with nothing to close it stays raw HTML.
+        if (last < end) return -1
+        return cx.addDelimiter(tagDelimiter, pos, end, true, false)
       },
     },
   ],

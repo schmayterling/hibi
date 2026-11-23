@@ -17,7 +17,9 @@ export default defineAddon({
   start(context) {
     context.editor.registerFlavor(flavor)
     context.styles.register('text-extras', css)
-    stopFormatted = (['subscript', 'subtext', 'underline'] as const).map((id) =>
+    stopFormatted = (
+      ['subscript', 'subtext', 'underline', 'underline-tag'] as const
+    ).map((id) =>
       formattedRegistry.register({
         id: `text-extras.${id}`,
         load: () =>
@@ -49,6 +51,16 @@ export default defineAddon({
         return false
       },
       slash: { markdown: '____', cursor: 2 },
+    })
+    context.editor.registerSyntax({
+      id: 'underline-tag',
+      label: 'Underline tag',
+      group: 'Text extras',
+      description: '<u>underline</u>',
+      level: 'inline',
+      // Exports keep the tags as HTML whether the formatted view underlines or not.
+      matches: () => false,
+      slash: { markdown: '<u></u>', cursor: 3 },
     })
   },
   stop() {

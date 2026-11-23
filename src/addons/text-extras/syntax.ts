@@ -9,6 +9,7 @@ export {
   subscriptToken,
   subtextStart,
   subtextToken,
+  underlineTag,
   underlineToken,
 } from './grammar.ts'
 

@@ -10,8 +10,10 @@ import {
   subscriptWork,
   subtextSyntax,
   underlineSyntax,
+  underlineTagSyntax,
 } from '../src/addons/text-extras/formatted-syntax.ts'
 import {
+  detectTextExtras,
   textExtrasMarkdown,
   underlineToken,
 } from '../src/addons/text-extras/syntax.ts'
@@ -28,6 +30,7 @@ const lezer = parser.configure([
   subscriptSyntax,
   subtextSyntax,
   underlineSyntax,
+  underlineTagSyntax,
 ])
 const marked = new Marked({ gfm: true }, textExtrasMarkdown)
 
@@ -577,4 +580,54 @@ test('underlines mark their text, with their underscores as syntax', () => {
     ['mark', 4, 5, { class: 'hibi-lp-underline' }],
     ['syntax', 5, 7],
   ])
+})
+
+const tagUnderlines = [
+  ['<u>under</u>', ['<u>under</u>']],
+  ['**bold <u>under</u> bold**', ['<u>under</u>']],
+  ['<u>under *em* under</u>', ['<u>under *em* under</u>']],
+  ['<u>one</u> <u>two</u>', ['<u>one</u>', '<u>two</u>']],
+  ['<U>upper</U>', ['<U>upper</U>']],
+  // A tag without its pair, and tags in code or escaped, stay as written.
+  ['<u>open only', []],
+  ['close only</u>', []],
+  ['`<u>code</u>`', []],
+  ['\\<u>escaped</u>', []],
+  ['<u>two\n\nparagraphs</u>', []],
+]
+
+test('<u>text</u> is underline in the formatted view', () => {
+  for (const [source, expected] of tagUnderlines) {
+    const formatted = []
+    lezer.parse(source).iterate({
+      enter(node) {
+        if (node.name === 'TagUnderline')
+          formatted.push(source.slice(node.from, node.to))
+      },
+    })
+    assert.deepEqual(formatted, expected, source)
+  }
+})
+
+test('underline tags mark their text, with the tags as syntax, and export as written', () => {
+  const tag = contributions['underline-tag']
+  assert.deepEqual(
+    [tag.feature, tag.flavor],
+    ['text-extras.underline-tag', 'text-extras.text-extras'],
+  )
+  assert.deepEqual(drawn(tag, 'a <u>b</u>'), [
+    ['syntax', 2, 5],
+    ['mark', 5, 6, { class: 'hibi-lp-underline' }],
+    ['syntax', 6, 10],
+  ])
+  assert.equal(
+    marked.parseInline('<u>under **bold**</u>'),
+    '<u>under <strong>bold</strong></u>',
+  )
+})
+
+test('a note with either underline syntax is detected as using text extras', () => {
+  assert.equal(detectTextExtras('plain <u>under</u>'), true)
+  assert.equal(detectTextExtras('plain __under__'), true)
+  assert.equal(detectTextExtras('plain **bold** text'), false)
 })

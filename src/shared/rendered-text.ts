@@ -84,6 +84,7 @@ const markNames = new Set([
   'Highlight',
   'Subscript',
   'Underline',
+  'TagUnderline',
   'Link',
   'WikiLink',
   'Autolink',

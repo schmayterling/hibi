@@ -130,6 +130,10 @@ before(
     await mkdir(join(folder, 'notes'))
     await mkdir(join(folder, 'profile'))
     await writeFile(join(folder, 'notes', 'parity.md'), parityNote)
+    await writeFile(
+      join(folder, 'notes', 'underline.md'),
+      'Plain __underlined words__, <u>tagged words</u> and **bold words** here.\n',
+    )
     let many = '# Subscripts\n\n'
     for (let index = 0; index < 5000; index++) {
       many += `L${index} a~${index}~ b~2~ c~3~ d~4~\n\n`
@@ -622,4 +626,61 @@ test('20,000 subscripts: only those near the viewport render and typing redraws 
   console.log(JSON.stringify({ opened, typed, scrolled }))
   assert.ok(scrolled.subscripts < 1000, JSON.stringify(scrolled))
   assert.ok(scrolled.renders < 1000, JSON.stringify(scrolled))
+})
+
+test('__text__ and <u>text</u> are underlined, and each syntax setting turns its own off', {
+  timeout: 90000,
+}, async (t) => {
+  t.after(async () => {
+    await page.evaluate(() =>
+      localStorage.removeItem('hibi:markdown-syntax-disabled'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  })
+  const underlined = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .hibi-lp-underline')].map(
+        (element) => ({
+          text: element.textContent,
+          line: getComputedStyle(element).textDecorationLine,
+          bold: !!element.closest('.hibi-lp-strong'),
+        }),
+      ),
+    )
+  const disable = async (features) => {
+    await page.evaluate(
+      (features) =>
+        localStorage.setItem(
+          'hibi:markdown-syntax-disabled',
+          JSON.stringify(features),
+        ),
+      features,
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  }
+  await open('underline.md')
+  await page.locator('.rich-pane .hibi-lp-underline').first().waitFor()
+  assert.deepEqual(await underlined(), [
+    { text: 'underlined words', line: 'underline', bold: false },
+    { text: 'tagged words', line: 'underline', bold: false },
+  ])
+  await page
+    .locator('.rich-pane .hibi-lp-strong', { hasText: 'bold words' })
+    .waitFor()
+  // Without underscore underline, `__text__` is bold as in other Markdown apps.
+  await disable(['text-extras.underline'])
+  await page
+    .locator('.rich-pane .hibi-lp-strong', { hasText: 'underlined words' })
+    .waitFor()
+  assert.deepEqual(await underlined(), [
+    { text: 'tagged words', line: 'underline', bold: false },
+  ])
+  // Without tag underline, the tags show as HTML.
+  await disable(['text-extras.underline-tag'])
+  await page.locator('.rich-pane .hibi-lp-html', { hasText: '<u>' }).waitFor()
+  assert.deepEqual(await underlined(), [
+    { text: 'underlined words', line: 'underline', bold: false },
+  ])
 })

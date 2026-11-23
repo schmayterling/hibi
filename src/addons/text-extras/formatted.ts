@@ -8,7 +8,12 @@ import {
 } from '../../renderer/src/formatted-contributions.ts'
 import { formattedMarkerRanges } from '../../shared/formatted-text-rules.ts'
 import { entityNodes, markDecoded } from '../_shared/formatted-entities.ts'
-import { subscriptSyntax, subtextSyntax } from './formatted-syntax.ts'
+import {
+  subscriptSyntax,
+  subtextSyntax,
+  underlineSyntax,
+  underlineTagSyntax,
+} from './formatted-syntax.ts'
 
 const flavor = 'text-extras.text-extras'
 
@@ -48,6 +53,55 @@ const subscript: FormattedContribution = {
       '.hibi-lp-subscript': { verticalAlign: 'sub', fontSize: 'smaller' },
     }),
   ],
+}
+
+/** Underlined text between its markers, which are syntax. */
+const underlineView = (
+  name: string,
+): NonNullable<FormattedContribution['views']> => [
+  {
+    nodes: [name],
+    decorate(node, out, context) {
+      const [open, close] = formattedMarkerRanges(node.node, (a, b) =>
+        context.state.sliceDoc(a, b),
+      )
+      if (!open || !close) return undefined
+      out.syntax(open.from, open.to)
+      markDecoded(
+        out,
+        context,
+        open.to,
+        close.from,
+        { class: 'hibi-lp-underline' },
+        entityNodes(node.node, context.visible, name),
+      )
+      out.syntax(close.from, close.to)
+      return undefined
+    },
+  },
+]
+const underlineTheme = EditorView.baseTheme({
+  '.hibi-lp-underline': { textDecoration: 'underline' },
+})
+
+/** `__text__` reads as the rich view's `<u>`; its underscores are syntax. */
+const underline: FormattedContribution = {
+  id: 'text-extras.underline',
+  feature: 'text-extras.underline',
+  flavor,
+  syntax: underlineSyntax,
+  views: underlineView('Underline'),
+  extension: [formattedFormatting.of('Underline'), underlineTheme],
+}
+
+/** `<u>text</u>` is underlined instead of showing its tags. */
+const underlineTag: FormattedContribution = {
+  id: 'text-extras.underline-tag',
+  feature: 'text-extras.underline-tag',
+  flavor,
+  syntax: underlineTagSyntax,
+  views: underlineView('TagUnderline'),
+  extension: [formattedFormatting.of('TagUnderline'), underlineTheme],
 }
 
 /** Backspace treats small text as a paragraph, keeping its marker when lifting it. */
@@ -129,4 +183,9 @@ const subtext: FormattedContribution = {
   ],
 }
 
-export const contributions = { subscript, subtext }
+export const contributions = {
+  subscript,
+  subtext,
+  underline,
+  'underline-tag': underlineTag,
+}

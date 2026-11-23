@@ -260,8 +260,8 @@ test('revealed markers are ordinary editable source', {
       await page.keyboard.insertText('__')
       assert.equal((await state(rich)).doc, 'lead __word__ tail')
       assert.equal(
-        await rich.locator('.hibi-lp-strong').textContent(),
-        '__word__',
+        await rich.locator('.hibi-lp-underline').textContent(),
+        'word',
       )
       await select(rich, 6)
       await page.keyboard.insertText('_')

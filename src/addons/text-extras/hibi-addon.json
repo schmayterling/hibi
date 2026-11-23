@@ -1,10 +1,10 @@
 {
   "id": "text-extras",
   "name": "Text extras",
-  "description": "Add subscript and Discord-style small text.",
+  "description": "Add subscript, underline and Discord-style small text.",
   "apiVersion": 3,
   "kind": "extension",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "authors": [
     {
       "discordId": "1262793452236570667",

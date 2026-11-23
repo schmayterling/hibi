@@ -50,6 +50,9 @@
   "5b4ca976c25a": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "18634ed77c31": [
+    "src/addons/text-extras/index.ts"
+  ],
   "4e6867fe4fb3": [
     "src/renderer/src/markdown-syntax.ts"
   ],
@@ -186,7 +189,7 @@
   "49ddf7c4d218": [
     "src/addons/frontmatter/Properties.tsx"
   ],
-  "2b813bc62d17": [
+  "2f5696f460a2": [
     "src/addons/text-extras/hibi-addon.json"
   ],
   "62d8dc44bd26": [
@@ -7346,6 +7349,12 @@
     "src/addons/diagnostics/Settings.tsx",
     "src/addons/ui-preview/index.tsx"
   ],
+  "02f843261112": [
+    "src/addons/text-extras/index.ts"
+  ],
+  "ee1ebbfbf4d4": [
+    "src/addons/text-extras/index.ts"
+  ],
   "a8283ade3185": [
     "src/main/index.ts",
     "src/renderer/src/FormattingToolbar.tsx"
@@ -7807,6 +7816,9 @@
   "bc7b631a689b": [
     "src/addons/graph/Canvas.tsx"
   ],
+  "8962e21e6e33": [
+    "src/addons/text-extras/index.ts"
+  ],
   "89b0f77ce276": [
     "src/renderer/src/markdown-syntax.ts"
   ],
@@ -8151,7 +8163,7 @@
   "9bf22c3ffed2": [
     "src/addons/word-count/index.ts"
   ],
-  "da55d16fc16f": [
+  "a17134d5421b": [
     "src/addons/text-extras/flavor-info.ts"
   ],
   "3ca172ad5570": [

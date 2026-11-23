@@ -21,6 +21,8 @@ export const textFeatures = new Set([
   'markdown.obsidian',
   'text-extras.subscript',
   'text-extras.subtext',
+  'text-extras.underline',
+  'text-extras.underline-tag',
   'math.inline',
   'math.block',
   'math.editing',
@@ -85,7 +87,9 @@ export function formattedMarkerRanges(
   if (
     name === 'EmphasisMark' ||
     name === 'StrikethroughMark' ||
-    name === 'HighlightMark'
+    name === 'HighlightMark' ||
+    name === 'UnderlineMark' ||
+    name === 'TagUnderlineMark'
   )
     return [{ from, to }]
   if (name === 'Escape') return [{ from, to: from + 1 }]
@@ -94,11 +98,12 @@ export function formattedMarkerRanges(
   if (
     name === 'Emphasis' ||
     name === 'StrongEmphasis' ||
-    name === 'Strikethrough'
+    name === 'Strikethrough' ||
+    name === 'Underline' ||
+    name === 'TagUnderline'
   ) {
-    const marks = node.getChildren(
-      name === 'Strikethrough' ? 'StrikethroughMark' : 'EmphasisMark',
-    )
+    const emphasis = name === 'Emphasis' || name === 'StrongEmphasis'
+    const marks = node.getChildren(emphasis ? 'EmphasisMark' : `${name}Mark`)
     return marks.length === 2
       ? marks.map((mark) => ({ from: mark.from, to: mark.to }))
       : []

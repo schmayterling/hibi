@@ -54,6 +54,9 @@ async function openHarness() {
   page = await next
   page.setDefaultTimeout(5000)
   await page.waitForFunction(() => Boolean(window.dialogTest))
+  // Tests prove a delayed tooltip or toast dismissal never comes by
+  // fast-forwarding past its timer, which a real-time wait can't do reliably.
+  await page.clock.install()
 }
 // Hooks have no deadline by default; bound the harness build, launch and close.
 before(openHarness, { timeout: 45000 })
@@ -327,17 +330,16 @@ test('shared dialogs validate input, trap focus, queue, and clean up by addon ow
     return bar && new DOMMatrix(getComputedStyle(bar).transform).a < 0.9
   })
   await toast.hover()
-  const progress = () =>
+  const countdown = () =>
     toast
       .locator('.toast-progress')
-      .evaluate((bar) => new DOMMatrix(getComputedStyle(bar).transform).a)
-  const paused = await progress()
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1300)))
+      .evaluate((bar) => bar.getAnimations().map((motion) => motion.playState))
+  await page.clock.runFor(1300)
   assert.equal(await toast.isVisible(), true)
-  assert.ok(Math.abs((await progress()) - paused) < 0.01)
+  assert.deepEqual(await countdown(), ['paused'])
   await toast.getByRole('button').focus()
   await page.mouse.move(4, 4)
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1300)))
+  await page.clock.runFor(1300)
   assert.equal(await toast.isVisible(), true)
   await prompt.focus()
   await toast.waitFor({ state: 'hidden' })

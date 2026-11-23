@@ -5,9 +5,11 @@ import { detector, textExtrasMarkdown as grammar } from './grammar.ts'
 
 export {
   detectTextExtras,
+  keepBold,
   subscriptToken,
   subtextStart,
   subtextToken,
+  underlineToken,
 } from './grammar.ts'
 
 export const textExtrasMarkdown: MarkedExtension = {

@@ -3,7 +3,7 @@ import { defineAddon, type MarkdownFlavor } from '../api'
 import { flavorInfo } from './flavor-info'
 import manifest from './manifest'
 import css from './styles.css?inline'
-import { textExtrasMarkdown } from './syntax'
+import { keepBold, textExtrasMarkdown, underlineToken } from './syntax'
 
 const flavor: MarkdownFlavor = {
   ...flavorInfo,
@@ -17,7 +17,7 @@ export default defineAddon({
   start(context) {
     context.editor.registerFlavor(flavor)
     context.styles.register('text-extras', css)
-    stopFormatted = (['subscript', 'subtext'] as const).map((id) =>
+    stopFormatted = (['subscript', 'subtext', 'underline'] as const).map((id) =>
       formattedRegistry.register({
         id: `text-extras.${id}`,
         load: () =>
@@ -37,6 +37,19 @@ export default defineAddon({
             ? { markdown: '~~', cursor: 1 }
             : { markdown: '-# ' },
       })
+    context.editor.registerSyntax({
+      id: 'underline',
+      label: 'Underline',
+      group: 'Text extras',
+      description: '__underline__',
+      level: 'inline',
+      // While underline is off, `__text__` is bold again instead of text as written.
+      matches(token) {
+        if (underlineToken(token)) keepBold(token)
+        return false
+      },
+      slash: { markdown: '____', cursor: 2 },
+    })
   },
   stop() {
     for (const stop of stopFormatted) stop()

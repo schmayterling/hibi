@@ -9,8 +9,12 @@ import {
   subscriptSyntax,
   subscriptWork,
   subtextSyntax,
+  underlineSyntax,
 } from '../src/addons/text-extras/formatted-syntax.ts'
-import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
+import {
+  textExtrasMarkdown,
+  underlineToken,
+} from '../src/addons/text-extras/syntax.ts'
 import { contribution as entities } from '../src/renderer/src/formatted/entities.ts'
 import { renderInline } from '../src/renderer/src/formatted/table-cells.ts'
 import { blockBreak } from '../src/renderer/src/formatted-commands.ts'
@@ -19,7 +23,12 @@ import {
   formattedTree,
 } from '../src/renderer/src/formatted-contributions.ts'
 
-const lezer = parser.configure([GFM, subscriptSyntax, subtextSyntax])
+const lezer = parser.configure([
+  GFM,
+  subscriptSyntax,
+  subtextSyntax,
+  underlineSyntax,
+])
 const marked = new Marked({ gfm: true }, textExtrasMarkdown)
 
 /** Subscripts, small-text lines and code spans in document order, as the formatted view's tree has them. */
@@ -511,4 +520,61 @@ test('backspace joins small text as paragraphs and keeps its marker when lifting
       assert.equal(state.doc.toString(), source, 'undo: ' + input)
     }
   }
+})
+
+const underlines = [
+  ['__under__', ['__under__']],
+  ['**bold** _em_ and __under__', ['__under__']],
+  ['**bold __under__ bold**', ['__under__']],
+  ['__under *em* under__', ['__under *em* under__']],
+  ['__one__ __two__', ['__one__', '__two__']],
+  ['__two\nlines__', ['__two\nlines__']],
+  ['# heading __under__', ['__under__']],
+  // Runs of three or more underscores keep their Markdown meaning.
+  ['___bold italic___', []],
+  ['___bold __under__ italic___', ['__under__']],
+  // Underscores inside words, code and escapes are text.
+  ['snake__case__name', []],
+  ['`__code__`', []],
+  ['\\__escaped__', []],
+  ['__ spaced __', []],
+  ['__two\n\nparagraphs__', []],
+]
+
+test('__text__ is underline in the formatted view and the rich view alike', () => {
+  for (const [source, expected] of underlines) {
+    const formatted = []
+    lezer.parse(source).iterate({
+      enter(node) {
+        if (node.name === 'Underline')
+          formatted.push(source.slice(node.from, node.to))
+      },
+    })
+    const rich = []
+    marked.walkTokens(marked.lexer(source), (token) => {
+      if (underlineToken(token)) rich.push(token.raw)
+    })
+    assert.deepEqual(formatted, expected, `formatted: ${source}`)
+    assert.deepEqual(rich, expected, `rich: ${source}`)
+  }
+})
+
+test('underline exports as <u>, and bold and italic keep their own marks', () => {
+  assert.equal(
+    marked.parseInline('__under__ **bold** _em_ ___both___'),
+    '<u>under</u> <strong>bold</strong> <em>em</em> <em><strong>both</strong></em>',
+  )
+})
+
+test('underlines mark their text, with their underscores as syntax', () => {
+  const { underline } = contributions
+  assert.deepEqual(
+    [underline.feature, underline.flavor],
+    ['text-extras.underline', 'text-extras.text-extras'],
+  )
+  assert.deepEqual(drawn(underline, 'a __b__'), [
+    ['syntax', 2, 4],
+    ['mark', 4, 5, { class: 'hibi-lp-underline' }],
+    ['syntax', 5, 7],
+  ])
 })

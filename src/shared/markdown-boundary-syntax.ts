@@ -15,6 +15,7 @@ import {
 import {
   subscriptSyntax,
   subtextSyntax,
+  underlineSyntax,
 } from '../addons/text-extras/formatted-syntax.ts'
 import {
   formattedInlineParser,
@@ -36,6 +37,7 @@ const catalog = {
   'math-block@1': blockMathSyntax,
   'subtext@1': subtextSyntax,
   'subscript@1': subscriptSyntax,
+  'underline@1': underlineSyntax,
   'obsidian@1': obsidianSyntax,
 } satisfies Record<string, MarkdownConfig>
 

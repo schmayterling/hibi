@@ -8,7 +8,7 @@ export const flavorInfo: MarkdownFlavor = {
   name: 'Text extras',
   kind: 'syntax',
   preservation: { level: 'semantic', version: '1', fallback: 'source' },
-  description: '~subscript~ and -# small text.',
+  description: '~subscript~, __underline__ and -# small text.',
   // The editor loads the detector before reading content.
   detect: (source) => textExtrasDetection.read(source),
 }

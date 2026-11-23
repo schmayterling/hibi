@@ -22,4 +22,4 @@ export const builtInFlavors: ReadonlyMap<
 
 /** Syntax features the workspace metadata parser models. */
 export const builtInFeatures =
-  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext)|mermaid\.(?:blocks|preview))$/
+  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext|underline)|mermaid\.(?:blocks|preview))$/

@@ -8,7 +8,11 @@ import {
 } from '../../renderer/src/formatted-contributions.ts'
 import { formattedMarkerRanges } from '../../shared/formatted-text-rules.ts'
 import { entityNodes, markDecoded } from '../_shared/formatted-entities.ts'
-import { subscriptSyntax, subtextSyntax } from './formatted-syntax.ts'
+import {
+  subscriptSyntax,
+  subtextSyntax,
+  underlineSyntax,
+} from './formatted-syntax.ts'
 
 const flavor = 'text-extras.text-extras'
 
@@ -46,6 +50,41 @@ const subscript: FormattedContribution = {
     formattedFormatting.of('Subscript'),
     EditorView.baseTheme({
       '.hibi-lp-subscript': { verticalAlign: 'sub', fontSize: 'smaller' },
+    }),
+  ],
+}
+
+/** `__text__` reads as the rich view's `<u>`; its underscores are syntax. */
+const underline: FormattedContribution = {
+  id: 'text-extras.underline',
+  feature: 'text-extras.underline',
+  flavor,
+  syntax: underlineSyntax,
+  views: [
+    {
+      nodes: ['Underline'],
+      decorate(node, out, context) {
+        const [open, close] = formattedMarkerRanges(node.node, (a, b) =>
+          context.state.sliceDoc(a, b),
+        )
+        if (open) out.syntax(open.from, open.to)
+        markDecoded(
+          out,
+          context,
+          node.from + 2,
+          node.to - 2,
+          { class: 'hibi-lp-underline' },
+          entityNodes(node.node, context.visible, 'Underline'),
+        )
+        if (close) out.syntax(close.from, close.to)
+        return undefined
+      },
+    },
+  ],
+  extension: [
+    formattedFormatting.of('Underline'),
+    EditorView.baseTheme({
+      '.hibi-lp-underline': { textDecoration: 'underline' },
     }),
   ],
 }
@@ -129,4 +168,4 @@ const subtext: FormattedContribution = {
   ],
 }
 
-export const contributions = { subscript, subtext }
+export const contributions = { subscript, subtext, underline }

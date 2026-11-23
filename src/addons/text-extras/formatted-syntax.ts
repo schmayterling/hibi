@@ -8,8 +8,8 @@ import type {
 /*
  * Text extras for the formatted view's syntax tree, accepting what the rich
  * view's tokenizers in `syntax.ts` accept: `~subscript~` (one tilde on each
- * side, no tilde inside, non-space at both ends, on one line) and `-# small
- * text` lines.
+ * side, no tilde inside, non-space at both ends, on one line), `-# small
+ * text` lines and `__underline__`.
  */
 
 /** Characters the subscript scan reads, for complexity tests. */
@@ -243,6 +243,37 @@ export const subscriptSyntax: MarkdownConfig = {
             ...cx.parser.parseInline(cx.slice(from + 1, end - 1), from + 1),
             cx.elt('SubscriptMark', end - 1, end),
           ]),
+        )
+      },
+    },
+  ],
+}
+
+const underlineDelimiter = { resolve: 'Underline', mark: 'UnderlineMark' }
+
+export const underlineSyntax: MarkdownConfig = {
+  defineNodes: [{ name: 'Underline' }, { name: 'UnderlineMark' }],
+  parseInline: [
+    {
+      name: 'Underline',
+      // Before strong emphasis, which a run of two underscores would open.
+      before: 'Emphasis',
+      parse(cx, next, pos) {
+        // Longer runs stay emphasis, as the rich view reads them.
+        if (next !== 95 || cx.char(pos + 1) !== 95 || cx.char(pos + 2) === 95)
+          return -1
+        const at = pos - cx.offset
+        const before = kind(pointBefore(cx.text, at))
+        const after = kind(cx.text.codePointAt(at + 2))
+        // CommonMark's flanking rules for underscore emphasis.
+        const left = after !== 0 && (after === 2 || before < 2)
+        const right = before !== 0 && (before === 2 || after < 2)
+        return cx.addDelimiter(
+          underlineDelimiter,
+          pos,
+          pos + 2,
+          left && (!right || before === 1),
+          right && (!left || after === 1),
         )
       },
     },

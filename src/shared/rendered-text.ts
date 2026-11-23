@@ -83,6 +83,7 @@ const markNames = new Set([
   'Strikethrough',
   'Highlight',
   'Subscript',
+  'Underline',
   'Link',
   'WikiLink',
   'Autolink',

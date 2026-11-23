@@ -271,6 +271,8 @@ const cellSpelling = (source) =>
     )
     .join('\n')
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// The frozen rich view read double underscores as bold.
+const disabledFeatures = ['text-extras.underline']
 /**
  * What the removed rich view did with each case, recorded before its
  * removal: the source it seeded cells with, its snapshot after each phase,
@@ -415,6 +417,7 @@ async function snapshot(page) {
       ...defaultNoteSyntax,
       textExtras: true,
       alerts: true,
+      disabledFeatures,
     }).slice(1),
   )
   try {
@@ -461,6 +464,13 @@ test('toolbar actions preserve native formatting, caret and history', {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   await waitForFormattedEditor(app, page)
+  await page.evaluate((disabled) => {
+    localStorage.setItem(
+      'hibi:markdown-syntax-disabled',
+      JSON.stringify(disabled),
+    )
+  }, disabledFeatures)
+  await waitForFormattedEditor(app, page, { reload: true })
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,

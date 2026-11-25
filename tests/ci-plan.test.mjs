@@ -967,9 +967,17 @@ test('the report counts tests by the file that ran them, on every supported node
   }
 })
 
+// Windows learns what a file started from a look every 2 s while the file
+// runs, and misses a process started and orphaned between two looks (see
+// scripts/ci.mjs). A test file there that leaves a process behind holds on
+// through a look first. Elsewhere it ends at once.
+const throughALook =
+  process.platform === 'win32'
+    ? '\n  await new Promise((done) => setTimeout(done, 5000))'
+    : ''
+
 test('a file that runs past its time is stopped and named, and every other file still runs', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-watchdog-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const stub = join(root, 'npm.cjs')
@@ -1018,7 +1026,9 @@ setTimeout(() => {
     // Its runner dies under it, and leaves what it started behind.
     'tests/orphan.test.mjs': testFile(
       'orphan',
-      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/orphan`, String(held.pid))\n  await new Promise((done) => setTimeout(done, 1500))\n  process.kill(process.ppid, 'SIGKILL')\n  await new Promise((done) => setTimeout(done, 60000))",
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const held = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  writeFileSync(`${process.env.HELD}/orphan`, String(held.pid))\n  await new Promise((done) => setTimeout(done, 1500))" +
+        throughALook +
+        "\n  process.kill(process.ppid, 'SIGKILL')\n  await new Promise((done) => setTimeout(done, 60000))",
     ),
     // Runs beside the spin, and on after it's stopped.
     'tests/mate.test.mjs': testFile(
@@ -1035,7 +1045,8 @@ setTimeout(() => {
     // Passes, but leaves a process running.
     'tests/leak.test.mjs': testFile(
       'leak',
-      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  left.unref()\n  writeFileSync(`${process.env.HELD}/leak`, String(left.pid))",
+      "const { spawn } = await import('node:child_process')\n  const { writeFileSync } = await import('node:fs')\n  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n  left.unref()\n  writeFileSync(`${process.env.HELD}/leak`, String(left.pid))" +
+        throughALook,
     ),
     // A red beside a stopped file stays a red.
     'tests/red.test.mjs': testFile('red', "throw new Error('red')"),
@@ -1065,14 +1076,27 @@ setTimeout(() => {
   let heldPids = []
   // Registered first, so it runs first: before what's noted is stopped below.
   const owned = owns(t)
-  // A broken check would leave them running.
-  t.after(() => {
+  // A broken check would leave them running, and so does Windows with one its
+  // looks missed. A folder a running process works in can't be removed there,
+  // and a kill there only starts the process's end, so they're gone first.
+  t.after(async () => {
     for (const pid of heldPids)
       try {
         process.kill(pid, 'SIGKILL')
       } catch {
         /* Stopped, as it should be. */
       }
+    const running = (pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    for (let wait = 0; wait < 100 && heldPids.some(running); wait++)
+      await new Promise((done) => setTimeout(done, 50))
+    rmSync(root, { recursive: true, force: true })
   })
   const { status, stdout } = spawnSync(
     process.execPath,
@@ -1124,15 +1148,28 @@ setTimeout(() => {
   ])
   const reds = stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd()
   const quote = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // Windows ends a killed process with exit code 1, and a process started
+  // without detached ends with its parent: there the orphan's runner takes its
+  // test along, and only what the test started detached is left.
+  const orphan =
+    process.platform === 'win32'
+      ? {
+          exit: 'exited 1 with no failing test reported: its report did not finish',
+          left: 'left node(?:\\.exe)? \\d+ running',
+        }
+      : {
+          exit: 'exited SIGKILL with no failing test reported: killed by SIGKILL; its report did not finish',
+          left: 'left node(?:\\.exe)? \\d+, node(?:\\.exe)? \\d+ running',
+        }
   assert.match(
     reds,
     new RegExp(
       `^${[
         'ci: 7 failing tests',
         '  node  tests/leak.test.mjs  did not stop what it started: left node(?:\\.exe)? \\d+ running',
-        '  node  tests/orphan.test.mjs  exited SIGKILL with no failing test reported: killed by SIGKILL; its report did not finish',
+        `  node  tests/orphan.test.mjs  ${orphan.exit}`,
         // What a runner that died left behind is named, then stopped.
-        '  node  tests/orphan.test.mjs  did not stop what it started: left node(?:\\.exe)? \\d+, node(?:\\.exe)? \\d+ running',
+        `  node  tests/orphan.test.mjs  did not stop what it started: ${orphan.left}`,
         quote('  node  tests/red.test.mjs:4  red: red'),
         quote(
           `  node  ${spin}  did not finish within 2 s: stopped with everything it started`,
@@ -1456,7 +1493,9 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
     // Passes, leaving a process whose first argument is empty and whose tag is
     // its only setting.
     'tests/blank.test.mjs': live(
-      "test('blank', () => {\n  const blank = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { argv0: '', detached: true, stdio: 'ignore', env: { HIBI_CI_FILE: process.env.HIBI_CI_FILE } })\n  blank.unref()\n  writeFileSync(`${process.env.HELD}/blank`, String(blank.pid))\n  appendFileSync(process.env.RAN, 'blank ')\n})\n",
+      "test('blank', async () => {\n  const blank = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { argv0: '', detached: true, stdio: 'ignore', env: { HIBI_CI_FILE: process.env.HIBI_CI_FILE } })\n  blank.unref()\n  writeFileSync(`${process.env.HELD}/blank`, String(blank.pid))\n  appendFileSync(process.env.RAN, 'blank ')" +
+        throughALook +
+        '\n})\n',
     ),
     // Passes, leaving a process with no tag in its runner's process group.
     'tests/bare.test.mjs': live(
@@ -1533,9 +1572,13 @@ test('what a file owns is found exactly, through a check it runs itself', (t) =>
       ? ['bare', 'blank', 'nested']
       : ['bare', 'blank', 'decoys', 'nested'],
   )
+  // On Windows a process started without detached ends with its parent, so
+  // there the bare file leaves nothing behind.
   assert.match(
     stdout.slice(stdout.lastIndexOf('\nci: ') + 1).trimEnd(),
-    /^ci: 3 failing tests\n {2}node {2}tests\/bare\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/blank\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/nested\.test\.mjs {2}did not finish within 8 s: stopped with everything it started$/,
+    process.platform === 'win32'
+      ? /^ci: 2 failing tests\n {2}node {2}tests\/blank\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/nested\.test\.mjs {2}did not finish within 8 s: stopped with everything it started$/
+      : /^ci: 3 failing tests\n {2}node {2}tests\/bare\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/blank\.test\.mjs {2}did not stop what it started: left node(?:\.exe)? \d+ running\n {2}node {2}tests\/nested\.test\.mjs {2}did not finish within 8 s: stopped with everything it started$/,
   )
   // Only look-alikes: left alone.
   if (process.platform !== 'win32')

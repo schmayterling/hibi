@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
+import { relative } from 'node:path'
 import { createInterface } from 'node:readline'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -7,6 +8,7 @@ import { promisify } from 'node:util'
 import { _electron } from 'playwright'
 import './file-limit.mjs'
 import { hookLaunch } from './electron-hooks.mjs'
+import { windowsNative } from './windows-native.mjs'
 
 export { after, before } from './electron-hooks.mjs'
 
@@ -92,8 +94,79 @@ async function closeOrphanedLaunches() {
   )
 }
 
+// Windows has no ps or lsof: the tree comes from Win32_Process, and which of
+// its processes hold a profile file from the Restart Manager.
+async function snapshotWindowsProcesses(pid, profile) {
+  const look = windowsNative(
+    'Get-CimInstance Win32_Process | ForEach-Object { "process`t$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.Name)`t$($_.CommandLine)" }; if ($env:HIBI_PROFILE) { [HibiTestWindows]::Holders($env:HIBI_PROFILE) }',
+    { HIBI_PROFILE: profile ?? '' },
+  )
+  let timer
+  const text = await Promise.race([
+    look.output,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        look.child.kill()
+        reject(new Error('powershell.exe took over 30 s'))
+      }, 30000)
+    }),
+  ]).finally(() => clearTimeout(timer))
+  const processes = new Map()
+  const holders = []
+  for (const line of text.split(/\r?\n/)) {
+    const [kind, ...fields] = line.split('\t')
+    if (kind === 'process') {
+      const [id, parent, name, ...command] = fields
+      processes.set(Number(id), {
+        parent: Number(parent),
+        name,
+        command: command.join('\t'),
+      })
+    } else if (fields.length === 1)
+      holders.push({ pid: Number(kind), path: fields[0] })
+  }
+  const ids = new Set([pid])
+  for (let size = 0; size !== ids.size; ) {
+    size = ids.size
+    for (const [id, row] of processes) if (ids.has(row.parent)) ids.add(id)
+  }
+  const tree = [...ids].filter((id) => processes.has(id)).slice(0, 20)
+  console.error(
+    `electron-shutdown-processes (pid ppid name command):\n${
+      tree
+        .map((id) => {
+          const { parent, name, command } = processes.get(id)
+          return `${id} ${parent} ${name} ${command}`.slice(0, 200)
+        })
+        .join('\n') || 'process tree already exited'
+    }`,
+  )
+  if (profile)
+    console.error(
+      `electron-shutdown-profile-files:\n${
+        [
+          ...new Set(
+            holders
+              .filter((holder) => ids.has(holder.pid))
+              .map(
+                ({ pid, path }) =>
+                  `${processes.get(pid)?.name} ${pid} ${relative(profile, path).replaceAll('\\', '/')}`,
+              ),
+          ),
+        ]
+          .slice(0, 25)
+          .join('\n') || 'none open'
+      }`,
+    )
+}
+
 export async function snapshotElectronProcesses(pid, profile) {
-  if (process.platform === 'win32') return
+  if (process.platform === 'win32')
+    return snapshotWindowsProcesses(pid, profile).catch((error) => {
+      console.error(
+        `electron-shutdown-snapshot unavailable: ${String(error.message).slice(0, 240)}`,
+      )
+    })
   const options = {
     encoding: 'utf8',
     timeout: 2000,

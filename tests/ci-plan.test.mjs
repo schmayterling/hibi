@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
+import { windowsNative } from './windows-native.mjs'
 
 // A check a test runs carries that test's own tag after its inherited ones, so
 // whatever it leaves running is found when the test ends, stopped, and fails
@@ -1152,6 +1154,65 @@ setTimeout(() => {
   }
 })
 
+// Starts scripts/ci.mjs in repo, to be interrupted as a terminal's Ctrl+C
+// would. Windows can't send a process a signal, so there the check runs in a
+// console of its own and gets a real Ctrl+C.
+const startCheck = async (t, repo, extra) => {
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  if (process.platform !== 'win32') {
+    const check = spawn(process.execPath, [resolve('scripts/ci.mjs')], {
+      cwd: repo,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...env, ...extra },
+    })
+    t.after(() => check.kill('SIGKILL'))
+    let stdout = ''
+    check.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    return {
+      interrupt: async () => check.kill('SIGINT'),
+      closed: new Promise((done) =>
+        check.once('close', (status, signal) => done({ status, signal })),
+      ),
+      output: () => stdout,
+    }
+  }
+  const out = join(dirname(repo), 'check-output.txt')
+  const run = windowsNative(
+    '[HibiTestWindows]::Run($env:HIBI_COMMAND, $env:HIBI_OUT, $env:HIBI_DIR)',
+    {
+      ...extra,
+      NODE_TEST_CONTEXT: undefined,
+      HIBI_COMMAND: `"${process.execPath}" "${resolve('scripts/ci.mjs')}"`,
+      HIBI_OUT: out,
+      HIBI_DIR: repo,
+    },
+  )
+  const [line] = await once(run.child.stdout, 'data')
+  const pid = Number(String(line).trim().split(/\r?\n/)[0])
+  t.after(() => {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'])
+    run.child.kill()
+  })
+  return {
+    interrupt: () =>
+      windowsNative('[HibiTestWindows]::CtrlC([uint32]$env:HIBI_PID)', {
+        HIBI_PID: String(pid),
+      }).output,
+    closed: run.output.then((text) => ({
+      status: Number(text.trim().split(/\r?\n/).at(-1)),
+      signal: null,
+    })),
+    output: () => readFileSync(out, 'utf8'),
+  }
+}
+// The check re-raises the signal on itself, which Windows carries out as a
+// termination with exit code 1.
+const interrupted =
+  process.platform === 'win32'
+    ? { status: 1, signal: null }
+    : { status: null, signal: 'SIGINT' }
 test('an interrupted check stops its files, starts no more, and names its reds so far', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-interrupt-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -1183,41 +1244,27 @@ test('an interrupted check stops its files, starts no more, and names its reds s
   git('add', '.')
   git('commit', '-qm', 'first')
   writeFileSync(ran, '')
-  const { NODE_TEST_CONTEXT: _, ...env } = process.env
-  const check = spawn(process.execPath, [resolve('scripts/ci.mjs')], {
-    cwd: repo,
-    stdio: ['ignore', 'pipe', 'ignore'],
-    env: {
-      ...env,
-      ...owns(t),
-      RAN: ran,
-      CI_BASE: '',
-      CI_CLEAN: '',
-      CI_FULL: 'true',
-      CI_SHARD: '0/1',
-      CI_WORKERS: '1',
-      GITHUB_ACTIONS: '',
-      GITHUB_OUTPUT: '',
-      GITHUB_STEP_SUMMARY: '',
-      npm_execpath: stub,
-    },
-  })
-  t.after(() => check.kill('SIGKILL'))
-  let stdout = ''
-  check.stdout.on('data', (chunk) => {
-    stdout += chunk
+  const check = await startCheck(t, repo, {
+    ...owns(t),
+    RAN: ran,
+    CI_BASE: '',
+    CI_CLEAN: '',
+    CI_FULL: 'true',
+    CI_SHARD: '0/1',
+    CI_WORKERS: '1',
+    GITHUB_ACTIONS: '',
+    GITHUB_OUTPUT: '',
+    GITHUB_STEP_SUMMARY: '',
+    npm_execpath: stub,
   })
   const started = () => readFileSync(ran, 'utf8').split(' ').filter(Boolean)
   for (let wait = 0; started().length < waves && wait < 300; wait++)
     await new Promise((done) => setTimeout(done, 100))
   assert.equal(started().length, waves)
-  const closed = new Promise((done) =>
-    check.once('close', (status, signal) => done({ status, signal })),
-  )
-  check.kill('SIGINT')
-  assert.deepEqual(await closed, { status: null, signal: 'SIGINT' })
+  await check.interrupt()
+  assert.deepEqual(await check.closed, interrupted)
   assert.match(
-    stdout,
+    check.output(),
     /\nci: \d+ failing tests\n {2}unit {2}tests\/a-red\.test\.mjs:\d+ {2}red: red before the interrupt\n/,
   )
   // The files waiting their turn never ran, then or after: one started late

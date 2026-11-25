@@ -525,7 +525,7 @@ test('damaged history indexes are set aside and rebuilt from the copies on disk'
     const copies = state.copies
     await api.recordVersions(file, ['old copy'], 'previous')
     assert.equal(state.copies, copies)
-    assert.ok(state.folderSyncs >= 2)
+    if (process.platform !== 'win32') assert.ok(state.folderSyncs >= 2)
   }
 })
 

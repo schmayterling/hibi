@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
 
 // A check a test runs carries that test's own tag after its inherited ones, so
@@ -752,7 +753,7 @@ syncBuiltinESMExports()
     rmSync(record, { force: true })
     const { status, stdout } = spawnSync(
       process.execPath,
-      ['--import', faults, resolve('scripts/ci.mjs')],
+      ['--import', pathToFileURL(faults).href, resolve('scripts/ci.mjs')],
       {
         cwd: repo,
         encoding: 'utf8',
@@ -1525,6 +1526,15 @@ let rewrite = {}
 try {
   rewrite = JSON.parse(fs.readFileSync(process.env.ROOT + '/rewrite.json', 'utf8'))
 } catch {}
+// Win32_Process names the executable. ps does too on macOS, but on Linux it
+// names the main thread, which Node calls MainThread.
+const image = (pid, name) => {
+  try {
+    return fs.readlinkSync('/proc/' + pid + '/exe').split('/').at(-1)
+  } catch {
+    return name.join(' ').split('/').at(-1)
+  }
+}
 const seconds = (elapsed) => elapsed.split(/[-:]/).map(Number).reduce((sum, part, index, parts) => sum + part * [86400, 3600, 60, 1].slice(-parts.length)[index], 0)
 const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,comm='], { encoding: 'utf8' }).trim().split('\\n').map((line) => line.trim().split(/\\s+/))
 fs.appendFileSync(process.env.ROOT + '/listed', JSON.stringify({ start, pids: rows.map(([pid]) => pid) }) + '\\n')
@@ -1540,7 +1550,7 @@ for (const [pid, parent, elapsed, ...name] of rows) {
     named = late.parent
     created = seen.start + late.after
   }
-  console.log([pid, named, created, name.join(' ').split('/').at(-1)].join('\\t'))
+  console.log([pid, named, created, image(pid, name)].join('\\t'))
 }
 for (const row of rewrite.rows ?? []) console.log(row.join('\\t'))
 // A slow look: what it read is as old as when it started.

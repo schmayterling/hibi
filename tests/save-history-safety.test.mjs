@@ -533,9 +533,15 @@ for (const mode of ['manual', 'quit']) {
         ? ({ BrowserWindow }) =>
             !BrowserWindow.getAllWindows().length ||
             globalThis.historyPrompts.some((p) => p.type === 'error')
-        : ({ BrowserWindow }) =>
+        : async ({ BrowserWindow }) =>
             globalThis.historyPrompts.some((p) => p.type === 'error') ||
-            !BrowserWindow.getAllWindows()[0].isDocumentEdited(),
+            // isDocumentEdited answers only on macOS; the document's own flag
+            // answers everywhere.
+            !(
+              await BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+                'window.hibi.getDocument()',
+              )
+            ).dirty,
     )
     assert.equal(await readFile(file, 'utf8'), 'new text')
     if (mode === 'quit')

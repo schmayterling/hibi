@@ -1,0 +1,66 @@
+name: win-probe-10
+on:
+  push:
+    branches: [may/win-probe-10]
+permissions:
+  contents: read
+jobs:
+  interrupt:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
+      - name: interrupted check through bash and npm, five times
+        if: always()
+        run: |
+          failed=0
+          for run in 1 2 3 4 5; do
+            if npm exec -- node --test --test-reporter=tap --test-name-pattern='an interrupted check' tests/ci-plan.test.mjs > out.txt 2>&1; then code=0; else code=$?; failed=$((failed+1)); fi
+            grep -aE '^(ok|not ok) |duration_ms|error:|PROBE' out.txt || true
+            echo "run $run exit $code"
+          done
+          echo "FAILED_RUNS=$failed"
+      - name: interrupted check under load, five times
+        if: always()
+        run: |
+          for copy in 1 2; do (node --test tests/ci-plan.test.mjs > load-$copy.txt 2>&1 &); done
+          sleep 20
+          failed=0
+          for run in 1 2 3 4 5; do
+            if npm exec -- node --test --test-reporter=tap --test-name-pattern='an interrupted check' tests/ci-plan.test.mjs > out.txt 2>&1; then code=0; else code=$?; failed=$((failed+1)); fi
+            grep -aE '^(ok|not ok) |duration_ms|error:|PROBE' out.txt || true
+            echo "run $run exit $code"
+          done
+          echo "FAILED_RUNS=$failed"
+  eperm:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
+      - name: timeout test, twenty-four times
+        run: |
+          failed=0
+          for run in $(seq 1 24); do
+            if node --test --test-reporter=tap --test-name-pattern='runs past its time' tests/ci-plan.test.mjs > out.txt 2>&1; then code=0; else code=$?; failed=$((failed+1)); fi
+            grep -aE '^(ok|not ok) |duration_ms|error:|PROBE' out.txt | grep -v 'alive at teardown' || true
+            echo "run $run exit $code"
+          done
+          echo "FAILED_RUNS=$failed"

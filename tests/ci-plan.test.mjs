@@ -1096,7 +1096,20 @@ setTimeout(() => {
     }
     for (let wait = 0; wait < 100 && heldPids.some(running); wait++)
       await new Promise((done) => setTimeout(done, 50))
-    rmSync(root, { recursive: true, force: true })
+    try {
+      rmSync(root, { recursive: true, force: true })
+    } catch (error) {
+      console.error(`PROBE rm failed ${error.code}; held still running: ${heldPids.filter(running).join(',') || 'none'}`)
+      const dump = await windowsNative(
+        `Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -and ([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() -ge ${started}) } | ForEach-Object { "process $($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)" }; Get-ChildItem -Recurse -Force $env:HIBI_ROOT | ForEach-Object { "left $($_.FullName)" }; [HibiTestWindows]::Holders($env:HIBI_ROOT).Split([char]10) | ForEach-Object { "holder $_" }`,
+        { HIBI_ROOT: root },
+      ).output.catch((failure) => `dump failed: ${failure.message}`)
+      for (const row of dump.trim().split(/\r?\n/)) {
+        const pid = Number(row.split(' ')[1])
+        console.error(`PROBE ${heldPids.includes(pid) ? 'held ' : ''}${row}`)
+      }
+      throw error
+    }
   })
   const { status, stdout } = spawnSync(
     process.execPath,
@@ -1298,8 +1311,12 @@ test('an interrupted check stops its files, starts no more, and names its reds s
   for (let wait = 0; started().length < waves && wait < 300; wait++)
     await new Promise((done) => setTimeout(done, 100))
   assert.equal(started().length, waves)
+  const asked = Date.now()
   await check.interrupt()
-  assert.deepEqual(await check.closed, interrupted)
+  console.error(`PROBE interrupt sent in ${Date.now() - asked} ms, ${started().length} started`)
+  const closed = await check.closed
+  console.error(`PROBE closed ${JSON.stringify(closed)} ${Date.now() - asked} ms after asking, ${started().length} started`)
+  assert.deepEqual(closed, interrupted)
   assert.match(
     check.output(),
     /\nci: \d+ failing tests\n {2}unit {2}tests\/a-red\.test\.mjs:\d+ {2}red: red before the interrupt\n/,

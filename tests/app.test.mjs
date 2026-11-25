@@ -147,6 +147,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'storeUndoHistory',
         'readUndoHistory',
         'onUndoHistoryFlush',
+        'getAutosavePreferences',
+        'setAutosavePreferences',
         'getKeepUndoHistory',
         'setKeepUndoHistory',
         'clearUndoHistory',

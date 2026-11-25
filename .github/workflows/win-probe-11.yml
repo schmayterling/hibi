@@ -1,0 +1,47 @@
+name: win-probe-11
+on:
+  push:
+    branches: [may/win-probe-11]
+permissions:
+  contents: read
+jobs:
+  interrupt:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
+      - name: interrupted check through bash and npm, five times
+        if: always()
+        run: |
+          failed=0
+          for run in 1 2 3 4 5; do
+            if npm exec -- node --test --test-reporter=tap --test-name-pattern='an interrupted check' tests/ci-plan.test.mjs > out.txt 2>&1; then code=0; else code=$?; failed=$((failed+1)); fi
+            grep -aE '^(ok|not ok) |duration_ms|error:' out.txt || true
+            echo "run $run exit $code"
+          done
+          echo "FAILED_RUNS=$failed"
+          exit $failed
+      - name: interrupted check through pwsh, five times
+        if: always()
+        shell: pwsh
+        run: |
+          $failed = 0
+          for ($run = 1; $run -le 5; $run++) {
+            node --test --test-reporter=tap --test-name-pattern='an interrupted check' tests/ci-plan.test.mjs | Select-String -Pattern '^(ok|not ok) |^  duration_ms|^  error:' -Context 0,0
+            if ($LASTEXITCODE) { $failed++ }
+            "run $run exit $LASTEXITCODE"
+          }
+          "FAILED_RUNS=$failed"
+          exit $failed
+      - name: all of ci-plan through bash and npm
+        if: always()
+        run: npm exec -- node --test tests/ci-plan.test.mjs

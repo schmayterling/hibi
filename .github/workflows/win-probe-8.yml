@@ -1,0 +1,31 @@
+name: win-probe-8
+on:
+  push:
+    branches: [may/win-probe-8]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
+      - run: node probe/breeder-race.mjs
+      - name: timeout test, twelve times
+        if: always()
+        shell: pwsh
+        run: |
+          $failed = 0
+          for ($run = 1; $run -le 12; $run++) {
+            node --test --test-reporter=tap --test-name-pattern='runs past its time' tests/ci-plan.test.mjs | Select-String -Pattern '^(ok|not ok) |^  duration_ms|^  error:|PROBE (rm|new)' -Context 0,0
+            if ($LASTEXITCODE) { $failed++ }
+            "run $run exit $LASTEXITCODE"
+          }
+          "FAILED_RUNS=$failed"
+          exit $failed

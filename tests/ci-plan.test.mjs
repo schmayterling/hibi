@@ -1096,7 +1096,26 @@ setTimeout(() => {
     }
     for (let wait = 0; wait < 100 && heldPids.some(running); wait++)
       await new Promise((done) => setTimeout(done, 50))
-    rmSync(root, { recursive: true, force: true })
+    try {
+      rmSync(root, { recursive: true, force: true })
+    } catch (error) {
+      console.error(`PROBE rm failed ${error.code}, held still running: ${heldPids.filter(running).join(',') || 'none'}`)
+      const rows = execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -and ([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() -ge ${started}) } | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)" }`,
+        ],
+        { encoding: 'utf8' },
+      )
+      for (const row of rows.trim().split(/\r?\n/)) {
+        const pid = Number(row.split(' ')[0])
+        console.error(`PROBE new since start: ${heldPids.includes(pid) ? 'held' : 'UNHELD'} ${row}`)
+      }
+      throw error
+    }
   })
   const { status, stdout } = spawnSync(
     process.execPath,

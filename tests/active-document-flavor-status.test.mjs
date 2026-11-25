@@ -6,6 +6,7 @@ import { Lexer } from 'marked'
 import { mathFlavor } from '../src/addons/math/syntax.ts'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import * as shell from '../src/renderer/src/document-shell.ts'
+import '../src/renderer/src/markdown-detectors.ts'
 import { projectMarkdown } from '../src/renderer/src/markdown-projection.ts'
 import { builtInFlavors } from '../src/shared/built-in-grammar.ts'
 import { needsOwnedSource } from '../src/shared/preservation.ts'
@@ -131,6 +132,8 @@ function fixture(t, origin, source = mixed) {
     './editor-focus': { focusEditor },
     './editor-focus-restore': { focusEditor },
     './flavors': { flavorMatches: (flavor, body) => flavor.detect(body) },
+    // Already run by this file's own import, as the editor's first import runs it.
+    './markdown-detectors.ts': {},
     './markdown-projection': {
       projectMarkdown(source, adapters) {
         reads.project.push(source.length)

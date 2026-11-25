@@ -202,11 +202,17 @@ test('preview scrolling can be unlinked while typing and clicks keep panes align
   await page.getByRole('button', { name: /^side-by-side$/i }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, markdown)
+  const end = await page
+    .locator('.rich-pane')
+    .evaluate((pane) => pane.scrollTop)
   await source.press(
     process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
   )
+  // The source keeps its first line a scroll margin inside its top padding,
+  // so the preview aligns that line rather than reaching zero.
   await page.waitForFunction(
-    () => document.querySelector('.rich-pane').scrollTop < 10,
+    (before) => document.querySelector('.rich-pane').scrollTop < before / 2,
+    end,
   )
   await scroll('.source-pane .cm-scroller', 0.5)
   await page.waitForFunction(

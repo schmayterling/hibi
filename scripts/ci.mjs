@@ -253,6 +253,11 @@ export function shardTests(selected, all, index, total) {
 }
 
 export async function runCI({ dev = false } = {}) {
+  const probePending = new Map()
+  process.on('exit', () => {
+    if (probePending.size)
+      process.stderr.write(`PROBE pending at exit: ${[...probePending].map(([pid, command]) => `${pid}:${command}`).join(',')}\n`)
+  })
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
   // Each answers for different tests, so neither can stand in for the other.
@@ -416,6 +421,8 @@ export async function runCI({ dev = false } = {}) {
         const child = spawn(command, args, {
           stdio: ['ignore', 'pipe', 'ignore'],
         })
+        probePending.set(child.pid, command)
+        child.once('close', () => probePending.delete(child.pid))
         let output = ''
         child.stdout.on('data', (chunk) => {
           output += chunk

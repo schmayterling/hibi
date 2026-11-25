@@ -1,12 +1,11 @@
 // Run by electron-harness.test.mjs; whether this file exits is what that test
 // checks. That test also removes the profile, once every app here has closed.
-import { execFileSync } from 'node:child_process'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test, { describe } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { after, before, electron } from '../electron.mjs'
+import { after, before, electron, processCommandLines } from '../electron.mjs'
 
 const temp = await mkdtemp(join(tmpdir(), process.env.LAUNCH_TIMEOUT_PREFIX))
 const launch = () =>
@@ -15,7 +14,7 @@ const launch = () =>
   })
 const scenario = process.env.LAUNCH_TIMEOUT_CASE
 const running = () =>
-  execFileSync('ps', ['-axo', 'command='], { encoding: 'utf8' }).includes(temp)
+  processCommandLines().some(({ command }) => command.includes(temp))
 if (scenario === 'hook') {
   // A file's shared app, still launching when node runs the after hooks.
   let app

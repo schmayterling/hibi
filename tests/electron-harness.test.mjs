@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { electron, snapshotElectronProcesses } from './electron.mjs'
+import {
+  electron,
+  processCommandLines,
+  snapshotElectronProcesses,
+} from './electron.mjs'
 
 const fixture = 'tests/fixtures/launch-timeout.test.js'
 
@@ -30,31 +34,10 @@ const run = async (t, scenario, args = []) => {
     stream.on('data', (chunk) => {
       output = (output + chunk).slice(-16384)
     })
-  // What still runs with the fixture's profile: its process groups, or on
-  // Windows, which has none, its process ids.
-  const apps = () => {
-    if (process.platform !== 'win32')
-      return execFileSync('ps', ['-axo', 'pgid=,command='], {
-        encoding: 'utf8',
-      })
-        .split('\n')
-        .filter((line) => line.includes(prefix))
-        .map((line) => Number(line.trim().split(/\s+/)[0]))
-    const rows = execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }',
-      ],
-      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
-    )
-    return rows
-      .split(/\r?\n/)
-      .filter((line) => line.includes(prefix))
-      .map((line) => Number(line.split('\t')[0]))
-  }
+  const apps = () =>
+    processCommandLines()
+      .filter(({ command }) => command.includes(prefix))
+      .map(({ id }) => id)
   const stop = (app) => {
     if (process.platform === 'win32')
       spawnSync('taskkill', ['/PID', String(app), '/T', '/F'])

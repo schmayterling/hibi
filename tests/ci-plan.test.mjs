@@ -20,8 +20,15 @@ import { windowsNative } from './windows-native.mjs'
 
 // Windows can keep a folder that processes worked in busy for a moment after
 // the last of them has ended, so its removal retries until the folder is free.
-const removeFolder = (folder) =>
-  rmSync(folder, { recursive: true, force: true, maxRetries: 10 })
+const removeFolder = (folder) => {
+  try {
+    rmSync(folder, { recursive: true, force: true })
+  } catch (error) {
+    const started = Date.now()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 10 })
+    console.error(`PROBE ${error.code} on ${folder}, removed by retrying in ${Date.now() - started} ms`)
+  }
+}
 
 // A check a test runs carries that test's own tag after its inherited ones, so
 // whatever it leaves running is found when the test ends, stopped, and fails

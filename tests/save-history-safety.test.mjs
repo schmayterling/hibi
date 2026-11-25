@@ -132,7 +132,9 @@ async function note(
   }
   const kill = async () => {
     const child = app.process()
-    const gone = once(child, 'exit')
+    // On Windows the profile stays locked until Chromium's descendants exit
+    // too, and the stdio they share with the app closes only then.
+    const gone = once(child, 'close')
     app = null
     stopElectronTree(child)
     await gone

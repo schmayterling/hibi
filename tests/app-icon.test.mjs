@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import test from 'node:test'
 import { readAppIcon } from '../src/shared/app-icon.ts'
 import { electron } from './electron.mjs'
@@ -64,22 +64,27 @@ test('the app icon persists, shows before the first window, imports a custom ima
   const calls = () => app.evaluate(() => globalThis.iconCalls.splice(0))
   /** What Hibi passes to the Dock (macOS) or each window (elsewhere) for a bundled icon. */
   const bundled = (dark) =>
-    app.evaluate(({ app, nativeImage }, dark) => {
-      const platform =
-        process.platform === 'darwin'
-          ? 'mac'
-          : process.platform === 'win32'
-            ? 'win'
-            : 'linux'
-      const path = `${app.getAppPath()}/build/icon-${platform}${dark ? '-dark' : ''}.png`
-      return process.platform === 'darwin'
-        ? nativeImage
-            .createFromPath(path)
-            .resize({ width: 256, height: 256 })
-            .toPNG()
-            .toString('base64')
-        : path
-    }, dark)
+    app.evaluate(
+      ({ app, nativeImage }, { dark, sep }) => {
+        const platform =
+          process.platform === 'darwin'
+            ? 'mac'
+            : process.platform === 'win32'
+              ? 'win'
+              : 'linux'
+        const name = `icon-${platform}${dark ? '-dark' : ''}.png`
+        // Joined as the app joins it, with the platform's own separator.
+        const path = [app.getAppPath(), 'build', name].join(sep)
+        return process.platform === 'darwin'
+          ? nativeImage
+              .createFromPath(path)
+              .resize({ width: 256, height: 256 })
+              .toPNG()
+              .toString('base64')
+          : path
+      },
+      { dark, sep },
+    )
   const stored = () =>
     app.evaluate(({ app, nativeImage }) => {
       const image = nativeImage.createFromPath(

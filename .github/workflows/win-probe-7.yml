@@ -23,7 +23,7 @@ jobs:
         run: |
           $failed = 0
           for ($run = 1; $run -le 5; $run++) {
-            node --test --test-reporter=tap --test-name-pattern='runs past its time|found exactly' tests/ci-plan.test.mjs | Select-String -Pattern '^(ok|not ok) |^  duration_ms|^  error:' -Context 0,0
+            node --test --test-reporter=tap --test-name-pattern='runs past its time|found exactly' tests/ci-plan.test.mjs | Select-String -Pattern '^(ok|not ok) |^  duration_ms|^  error:|PROBE' -Context 0,0
             if ($LASTEXITCODE) { $failed++ }
             "run $run exit $LASTEXITCODE"
           }

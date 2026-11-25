@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
 
 // A check a test runs carries that test's own tag after its inherited ones, so
@@ -752,7 +753,7 @@ syncBuiltinESMExports()
     rmSync(record, { force: true })
     const { status, stdout } = spawnSync(
       process.execPath,
-      ['--import', faults, resolve('scripts/ci.mjs')],
+      ['--import', pathToFileURL(faults).href, resolve('scripts/ci.mjs')],
       {
         cwd: repo,
         encoding: 'utf8',

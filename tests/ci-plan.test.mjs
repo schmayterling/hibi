@@ -978,7 +978,6 @@ const throughALook =
 
 test('a file that runs past its time is stopped and named, and every other file still runs', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-watchdog-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const stub = join(root, 'npm.cjs')
@@ -1077,14 +1076,27 @@ setTimeout(() => {
   let heldPids = []
   // Registered first, so it runs first: before what's noted is stopped below.
   const owned = owns(t)
-  // A broken check would leave them running.
-  t.after(() => {
+  // A broken check would leave them running, and so does Windows with one its
+  // looks missed. A folder a running process works in can't be removed there,
+  // and a kill there only starts the process's end, so they're gone first.
+  t.after(async () => {
     for (const pid of heldPids)
       try {
         process.kill(pid, 'SIGKILL')
       } catch {
         /* Stopped, as it should be. */
       }
+    const running = (pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    for (let wait = 0; wait < 100 && heldPids.some(running); wait++)
+      await new Promise((done) => setTimeout(done, 50))
+    rmSync(root, { recursive: true, force: true })
   })
   const { status, stdout } = spawnSync(
     process.execPath,

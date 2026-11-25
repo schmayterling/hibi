@@ -14,7 +14,9 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
+  APP_STATE_TIMEOUT,
   electron,
   openInDocumentEditor,
   stopElectronTree,
@@ -25,8 +27,15 @@ import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
 
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 // Closing the last window also exits Hibi outside macOS. Only normal exit counts.
+// The exit can end a check before node has seen it, so a failed check waits
+// for the exit it is judged by.
 const waitWhileRunning = (app, child, check) =>
-  waitForAsync(app, check).catch((error) => {
+  waitForAsync(app, check).catch(async (error) => {
+    if (child.exitCode === null && child.signalCode === null)
+      await Promise.race([
+        once(child, 'exit'),
+        delay(APP_STATE_TIMEOUT, undefined, { ref: false }),
+      ])
     if (child.exitCode !== 0) throw error
   })
 // Test apps start with autosave off; recovered notes and autosave UI cases turn it on.

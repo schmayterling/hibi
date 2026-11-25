@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -336,6 +336,35 @@ export function waitForElectronShutdown(
     closePromise,
     !waitForTransport && platform !== 'win32',
   )
+}
+
+/**
+ * Every process's command line, with what stops it: its process group, or on
+ * Windows, which has no groups, its process id.
+ */
+export function processCommandLines() {
+  if (process.platform !== 'win32')
+    return execFileSync('ps', ['-axo', 'pgid=,command='], { encoding: 'utf8' })
+      .split('\n')
+      .flatMap((line) => {
+        const match = line.match(/^\s*(\d+)\s+(.*)$/)
+        return match ? [{ id: Number(match[1]), command: match[2] }] : []
+      })
+  const rows = execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }',
+    ],
+    { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+  )
+  return rows.split(/\r?\n/).flatMap((line) => {
+    const tab = line.indexOf('\t')
+    if (tab < 1) return []
+    return [{ id: Number(line.slice(0, tab)), command: line.slice(tab + 1) }]
+  })
 }
 
 export function stopElectronTree(child) {

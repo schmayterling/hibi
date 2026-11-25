@@ -96,7 +96,9 @@ async function note(
       await app.close()
     }
     await chmod(join(profile, 'history', sha(file)), 0o700).catch(() => {})
-    await rm(profile, { recursive: true, force: true })
+    // After a kill, Windows can end the app's network service only after the
+    // app itself, and its files stay locked until then.
+    await rm(profile, { recursive: true, force: true, maxRetries: 10 })
   })
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
@@ -132,9 +134,7 @@ async function note(
   }
   const kill = async () => {
     const child = app.process()
-    // On Windows the profile stays locked until Chromium's descendants exit
-    // too, and the stdio they share with the app closes only then.
-    const gone = once(child, 'close')
+    const gone = once(child, 'exit')
     app = null
     stopElectronTree(child)
     await gone

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -30,17 +30,42 @@ const run = async (t, scenario, args = []) => {
     stream.on('data', (chunk) => {
       output = (output + chunk).slice(-16384)
     })
-  const apps = () =>
-    execFileSync('ps', ['-axo', 'pgid=,command='], { encoding: 'utf8' })
-      .split('\n')
+  // What still runs with the fixture's profile: its process groups, or on
+  // Windows, which has none, its process ids.
+  const apps = () => {
+    if (process.platform !== 'win32')
+      return execFileSync('ps', ['-axo', 'pgid=,command='], {
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .filter((line) => line.includes(prefix))
+        .map((line) => Number(line.trim().split(/\s+/)[0]))
+    const rows = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }',
+      ],
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    )
+    return rows
+      .split(/\r?\n/)
       .filter((line) => line.includes(prefix))
-      .map((line) => Number(line.trim().split(/\s+/)[0]))
+      .map((line) => Number(line.split('\t')[0]))
+  }
+  const stop = (app) => {
+    if (process.platform === 'win32')
+      spawnSync('taskkill', ['/PID', String(app), '/T', '/F'])
+    else
+      try {
+        process.kill(-app, 'SIGKILL')
+      } catch {}
+  }
   t.after(async () => {
     child.kill('SIGKILL')
-    for (const group of new Set(apps()))
-      try {
-        process.kill(-group, 'SIGKILL')
-      } catch {}
+    for (const app of new Set(apps())) stop(app)
     // The fixture's profile, removed only once its apps are gone.
     for (const name of await readdir(tmpdir()))
       if (name.startsWith(prefix))

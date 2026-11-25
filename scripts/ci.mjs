@@ -8,9 +8,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, readlink } from 'node:fs/promises'
 import { availableParallelism, totalmem } from 'node:os'
-import { join, posix, relative, resolve } from 'node:path'
+import { basename, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const git = (root, ...args) =>
@@ -565,14 +565,20 @@ export async function runCI({ dev = false } = {}) {
                 const group = Number(
                   stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2],
                 )
-                if (group === runner || environment.split('\0').some(ownedBy))
-                  found.push({
-                    pid: Number(entry),
-                    name: stat.slice(
-                      stat.indexOf('(') + 1,
-                      stat.lastIndexOf(')'),
-                    ),
-                  })
+                if (group === runner || environment.split('\0').some(ownedBy)) {
+                  const thread = stat.slice(
+                    stat.indexOf('(') + 1,
+                    stat.lastIndexOf(')'),
+                  )
+                  // Named by its executable, as macOS and Windows name it:
+                  // stat holds the main thread's name, which Node sets to
+                  // MainThread. A zombie has no executable left to read.
+                  const name = await readlink(`/proc/${entry}/exe`).then(
+                    basename,
+                    () => thread,
+                  )
+                  found.push({ pid: Number(entry), name })
+                }
               } catch {
                 /* Gone, or not ours to read. */
               }

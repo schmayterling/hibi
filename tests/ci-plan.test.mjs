@@ -1080,6 +1080,12 @@ setTimeout(() => {
   // looks missed. A folder a running process works in can't be removed there,
   // and a kill there only starts the process's end, so they're gone first.
   t.after(async () => {
+    for (const name of readdirSync(held))
+      for (const pid of readFileSync(join(held, name), 'utf8').trim().split('\n').map(Number))
+        try {
+          process.kill(pid, 0)
+          console.error(`PROBE alive at teardown: ${name} ${pid}`)
+        } catch {}
     for (const pid of heldPids)
       try {
         process.kill(pid, 'SIGKILL')

@@ -77,6 +77,9 @@ public static class HibiTestWindows
                 si.StartupInfo.hStdError = handle;
                 si.lpAttributeList = list;
                 PROCESS_INFORMATION pi;
+                // Ignoring Ctrl+C passes from parent to child, and under Git Bash this
+                // process ignores it. A terminal starts its programs with Ctrl+C on.
+                SetConsoleCtrlHandler(IntPtr.Zero, false);
                 if (!CreateProcess(null, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true, CREATE_NEW_CONSOLE | EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, dir, ref si, out pi))
                     throw new InvalidOperationException("CreateProcess failed: " + Marshal.GetLastWin32Error());
                 CloseHandle(pi.hThread);

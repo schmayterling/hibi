@@ -13,7 +13,7 @@ test('editor initializes copied flavor detectors before its first status effect'
 import assert from 'node:assert/strict'
 import {createRequire} from 'node:module'
 import {readFileSync} from 'node:fs'
-import {resolve} from 'node:path'
+import {basename,resolve} from 'node:path'
 import {build} from 'esbuild'
 import math from './src/addons/math/flavor-info.ts'
 import extras from './src/addons/text-extras/flavor-info.ts'
@@ -38,7 +38,7 @@ const result = await build({
   // Keep metadata identity shared with copies made before editor evaluation.
   bundle.onResolve({filter:/flavor-info\.ts$/},args=>({path:resolve(args.resolveDir,args.path),external:true}))
   bundle.onResolve({filter:/.*/},args=>{
-   if(!args.importer.endsWith('/ActiveDocumentEditor.tsx') || args.path==='./markdown-detectors.ts' || args.path==='react/jsx-runtime')return
+   if(basename(args.importer)!=='ActiveDocumentEditor.tsx' || args.path==='./markdown-detectors.ts' || args.path==='react/jsx-runtime')return
    assert.ok(Object.hasOwn(stubs,args.path),'unexpected editor dependency '+args.path)
    return {path:args.path,namespace:'editor-shell'}
   })

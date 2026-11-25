@@ -1,0 +1,35 @@
+name: win-probe-13
+on:
+  push:
+    branches: [may/win-probe-13]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: defender status
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, OnAccessProtectionEnabled | Format-List
+          (Get-MpPreference).ExclusionPath
+      - run: npm ci --ignore-scripts
+      - name: all of ci-plan through bash and npm, ten times
+        run: |
+          failed=0
+          for run in $(seq 1 10); do
+            if npm exec -- node --test tests/ci-plan.test.mjs > out.txt 2>&1; then code=0; else code=$?; failed=$((failed+1)); fi
+            grep -aE '^✖ |PROBE|ℹ (pass|fail) ' out.txt | grep -v 'alive at teardown' | cut -c1-400 || true
+            echo "run $run exit $code"
+          done
+          echo "FAILED_RUNS=$failed"

@@ -1059,7 +1059,7 @@ function createWindow(): void {
     title: 'Hibi',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
-      ? { trafficLightPosition: { x: 12, y: 11 } }
+      ? { trafficLightPosition: { x: 12, y: 11 }, titleBarOverlay: true }
       : {
           titleBarOverlay: windowControlsHidden() ? false : titleBarColors(),
           autoHideMenuBar: true,

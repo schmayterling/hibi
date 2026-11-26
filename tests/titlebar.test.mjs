@@ -7,6 +7,57 @@ import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
+test('macOS sidebar controls clear the native window buttons at different zoom levels', {
+  skip: process.platform !== 'darwin',
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-titlebar-zoom-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const sidebar = page.locator('.sidebar-toolbar')
+  const toggle = sidebar.getByRole('button', {
+    name: /toggle workspace sidebar/i,
+  })
+  await toggle.waitFor()
+  const scale = await page.evaluate(() => devicePixelRatio)
+
+  for (const zoom of [1, 1.2, 0.8]) {
+    await app.evaluate(({ BrowserWindow }, factor) => {
+      BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor)
+    }, zoom)
+    await page.waitForFunction(
+      (ratio) => Math.abs(devicePixelRatio - ratio) < 0.01,
+      scale * zoom,
+    )
+    for (const open of [false, true]) {
+      assert.equal(await toggle.getAttribute('aria-expanded'), String(open))
+      const { left, nativeInset } = await sidebar
+        .getByRole('button')
+        .first()
+        .evaluate((button) => ({
+          left: button.getBoundingClientRect().left,
+          nativeInset: navigator.windowControlsOverlay?.getTitlebarAreaRect().x,
+        }))
+      assert.ok(
+        nativeInset > 0 && left >= nativeInset,
+        `zoom ${zoom}, sidebar ${open ? 'open' : 'closed'}: first action starts at ${left}, native controls reserve ${nativeInset}`,
+      )
+      await toggle.click()
+    }
+  }
+  await toggle.click()
+  await page.getByRole('separator', { name: /^resize sidebar$/i }).press('Home')
+  await sidebar.getByRole('button', { name: /^sidebar views$/i }).click()
+  await page.getByRole('menu', { name: /^sidebar views$/i }).waitFor()
+})
+
 test('titlebar keeps actions minimal, blocks scrolled content, and persists toast settings', async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-titlebar-'))
   const app = await electron.launch({

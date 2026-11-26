@@ -260,7 +260,8 @@ button:disabled {
   border-top-left-radius: var(--window-corner-radius);
 }
 .sidebar-toolbar {
-  --window-controls-width: 80px;
+  /* macOS window buttons keep their native size when the page is zoomed. */
+  --window-controls-width: max(80px, env(titlebar-area-x, 0px));
   --sidebar-action-size: 28px;
   display: flex;
   align-items: center;
@@ -273,7 +274,7 @@ button:disabled {
   transition: width var(--motion-pane) var(--ease-out);
 }
 .sidebar-toolbar[data-open="true"] {
-  width: var(--sidebar-width);
+  width: max(var(--sidebar-width), calc(var(--window-controls-width) + 68px));
 }
 .right-sidebar-toolbar {
   display: flex;

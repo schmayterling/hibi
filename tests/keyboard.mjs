@@ -3,12 +3,36 @@ import { waitForAsync } from './electron.mjs'
 /** The formatted view is a CodeMirror editor, so its text is replaced like source. */
 export const replaceRichText = replaceSourceText
 
+const probeState = (target) =>
+  target
+    .evaluate((element) => {
+      const view = element.cmTile?.root?.view
+      const active = document.activeElement
+      return {
+        hasFocus: document.hasFocus(),
+        active: `${active?.tagName}.${active?.className}`.slice(0, 60),
+        activeIsTarget: active === element,
+        viewHasFocus: view?.hasFocus,
+        selection: view && [view.state.selection.main.from, view.state.selection.main.to],
+        domSelection: String(getSelection()).slice(0, 40),
+        doc: view?.state.doc.toString().slice(0, 40),
+      }
+    })
+    .catch((error) => ({ error: String(error).slice(0, 80) }))
 export async function replaceSourceText(page, target, text) {
   // CodeMirror owns selection; DOM-only fill can lose its range on focus/measure.
   await target.press('ControlOrMeta+a')
+  const afterSelect = await probeState(target)
   // An empty insertText can be a no-op as the first edit in a fresh source view.
   if (text) await page.keyboard.insertText(text)
   else await target.press('Delete')
+  const afterInsert = await probeState(target)
+  for (let wait = 0; wait < 40; wait++) {
+    const now = await probeState(target)
+    if (now.doc === text.slice(0, 40)) return
+    await new Promise((done) => setTimeout(done, 50))
+  }
+  console.error(`PROBE replace did not land: ${JSON.stringify({ text: text.slice(0, 40), afterSelect, afterInsert, later: await probeState(target) })}`)
 }
 
 // CDP keyboard events bypass Electron's native shortcut processing.

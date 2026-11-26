@@ -18,6 +18,11 @@ import { pathToFileURL } from 'node:url'
 import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
 import { windowsNative } from './windows-native.mjs'
 
+// Windows can keep a folder that processes worked in busy for a moment after
+// the last of them has ended, so its removal retries until the folder is free.
+const removeFolder = (folder) =>
+  rmSync(folder, { recursive: true, force: true, maxRetries: 10 })
+
 // A check a test runs carries that test's own tag after its inherited ones, so
 // whatever it leaves running is found when the test ends, stopped, and fails
 // the test: the rule this check keeps for every file, kept by its own tests.
@@ -85,7 +90,7 @@ const owns = (t) => {
 
 test('incremental checks select dependencies and fall back safely for cold, clean, config, and missing builds', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-plan-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const files = {
     'src/shared/one.ts': 'export const one = 1',
     'src/shared/two.ts': 'export const two = 2',
@@ -200,7 +205,7 @@ test('incremental checks select dependencies and fall back safely for cold, clea
 
 test('docs-only checks rebuild bundled help and retain documentation tests without unrelated desktop work', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-docs-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const files = {
     'tests/electron.mjs': "import { _electron } from 'playwright'",
     'tests/desktop.test.mjs': "import './electron.mjs'",
@@ -259,7 +264,7 @@ test('docs-only checks rebuild bundled help and retain documentation tests witho
 
 test('a test file change selects that test alone even though the harness starts processes', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-harness-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const files = {
     'src/shared/one.ts': 'export const one = 1',
     'tests/electron.mjs':
@@ -302,7 +307,7 @@ test('a test file change selects that test alone even though the harness starts 
 
 test('check:ci never runs tests/dev, check:dev does, and neither takes the other for green', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-dev-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const write = (file, text) => {
@@ -406,7 +411,7 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
 
 test('a test in a subfolder runs in the check its folder belongs to', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-nested-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const nested = 'tests/group/one.test.mjs'
   const nestedDev = 'tests/dev/group/two.test.mjs'
   for (const file of [nested, nestedDev]) {
@@ -423,7 +428,7 @@ test('a test in a subfolder runs in the check its folder belongs to', (t) => {
 
 test('a pull request rebuilds an app the cache kept from another revision, and sees both ends of a move', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-stale-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const write = (file, text) => {
     mkdirSync(dirname(join(repo, file)), { recursive: true })
@@ -531,7 +536,7 @@ test('test workers follow the machine and tests that share a machine resource ru
     assert.throws(() => testWorkers({ override }), /Invalid CI_WORKERS/)
 
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-alone-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const files = {
     'tests/electron.mjs': "import { _electron } from 'playwright'",
     'tests/plain.test.mjs': "import './electron.mjs'",
@@ -578,7 +583,7 @@ test('test workers follow the machine and tests that share a machine resource ru
 
 test('a red in any group leaves the others to run, fails the check, and names every red', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-red-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const stub = join(root, 'npm.cjs')
@@ -678,7 +683,7 @@ test('a red in any group leaves the others to run, fails the check, and names ev
 
 test('a group that fails to start or report in full is a red of its own, and the rest still run', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-faults-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const stub = join(root, 'npm.cjs')
@@ -902,7 +907,7 @@ syncBuiltinESMExports()
 
 test('the report counts tests by the file that ran them, on every supported node', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-report-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const files = {
     // Tests a helper declares belong to the file that imports it.
     'helper.mjs':
@@ -1096,7 +1101,7 @@ setTimeout(() => {
     }
     for (let wait = 0; wait < 100 && heldPids.some(running); wait++)
       await new Promise((done) => setTimeout(done, 50))
-    rmSync(root, { recursive: true, force: true })
+    removeFolder(root)
   })
   const { status, stdout } = spawnSync(
     process.execPath,
@@ -1252,7 +1257,7 @@ const interrupted =
     : { status: null, signal: 'SIGINT' }
 test('an interrupted check stops its files, starts no more, and names its reds so far', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-interrupt-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const stub = join(root, 'npm.cjs')
@@ -1384,7 +1389,7 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
     'only macOS looks for processes with python3',
 }, (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-hung-ps-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const bin = join(root, 'bin')
   const stub = join(root, 'npm.cjs')
@@ -1473,7 +1478,7 @@ test('a cleanup that cannot be checked is a red, and the check still ends', {
 
 test('what a file owns is found exactly, through a check it runs itself', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-owned-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeFolder(root))
   const repo = join(root, 'repo')
   const ran = join(root, 'ran')
   const held = join(root, 'held')
@@ -1686,7 +1691,7 @@ const onWindows = async (
       } catch {
         /* Stopped, as it should be. */
       }
-    rmSync(root, { recursive: true, force: true })
+    removeFolder(root)
   })
   writeFileSync(stub, '')
   writeFileSync(notes, '')

@@ -123,6 +123,11 @@ async function note(
     async (text) => (await window.hibi.getDocument()).markdown === text,
     recovered ? 'recovered text' : 'original',
   )
+  // Once ready, the note's view takes focus with the caret at its end, so an
+  // edit started before then loses its selection to it.
+  await waitForAsync(page, () =>
+    document.activeElement?.matches('.rich-pane .cm-content'),
+  )
   const editor = page.getByRole('textbox', { name: /document editor/i }).last()
   const edit = async (text) => {
     await replaceRichText(page, editor, text)

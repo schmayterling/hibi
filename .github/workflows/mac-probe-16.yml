@@ -1,0 +1,31 @@
+name: mac-probe-16
+on:
+  push:
+    branches: [may/mac-probe-16]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: node .github/actions/ci/install.mjs
+        env:
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - run: npm run build:app
+      - name: save-history-safety, eight times
+        run: |
+          failed=0
+          for run in $(seq 1 8); do
+            if node --test --test-reporter=tap tests/save-history-safety.test.mjs > out.txt 2>&1; then code=0; else code=$?; failed=$((failed+1)); fi
+            grep -aE '^not ok |PROBE|^# (pass|fail)' out.txt | cut -c1-900 || true
+            echo "run $run exit $code"
+          done
+          echo "FAILED_RUNS=$failed"
